@@ -8,6 +8,7 @@
 
 #include "qbb-net-device.h"
 #include "switch-mmu.h"
+#include "glb-routing.h"
 
 namespace ns3 {
 
@@ -55,11 +56,14 @@ class SwitchNode : public Node {
     uint32_t DoLbLetflow(Ptr<Packet> p, CustomHeader &ch, const std::vector<int> &nexthops);
     // ConWeave (lb_mode = 9)
     uint32_t DoLbConWeave(Ptr<const Packet> p, const CustomHeader &ch,
-                           const std::vector<int> &nexthops);  // dummy
-
+                          const std::vector<int> &nexthops);  // dummy
+    uint32_t DoLbGlb(Ptr<Packet> p, CustomHeader &ch, const std::vector<int> &nexthops); // GLB 选路逻辑
+    bool IsPortPaused(uint32_t port);
+   
    public:
     // Ptr<BroadcomNode> m_broadcom;
     Ptr<SwitchMmu> m_mmu;
+    Ptr<GlbRouting> m_glbRouting; // GLB 路由实例
     bool m_isToR;                                 // true if ToR switch
     std::unordered_set<uint32_t> m_isToR_hostIP;  // host's IP connected to this ToR
 

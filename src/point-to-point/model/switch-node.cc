@@ -41,6 +41,15 @@ SwitchNode::SwitchNode() {
     m_isToR = false;
     m_drill_candidate = 2;
     m_mmu = CreateObject<SwitchMmu>();
+    m_glbRouting = CreateObject<GlbRouting>(); // 实例化 GLB Routing
+    // 绑定回调供 GLB Routing 发送控制报文
+    m_glbRouting->SetSwitchSendCallback(MakeCallback(&SwitchNode::DoSwitchSend, this));
+    // ====== 新增：将 MMU 指针绑定给 GLB ======
+    m_glbRouting->SetMmu(m_mmu);
+    // ====== 新增：绑定获取 TxBytes 的回调 ======
+    m_glbRouting->SetGetTxBytesCallback(MakeCallback(&SwitchNode::GetTxBytesOutDev, this));
+    // ====== 新增绑定 ======
+    m_glbRouting->SetGetPortPausedCallback(MakeCallback(&SwitchNode::IsPortPaused, this));
     // Conga's Callback for switch functions
     m_mmu->m_congaRouting.SetSwitchSendCallback(MakeCallback(&SwitchNode::DoSwitchSend, this));
     m_mmu->m_congaRouting.SetSwitchSendToDevCallback(
@@ -151,6 +160,24 @@ uint32_t SwitchNode::DoLbConWeave(Ptr<const Packet> p, const CustomHeader &ch,
                                   const std::vector<int> &nexthops) {
     return DoLbFlowECMP(p, ch, nexthops);  // flow ECMP (dummy)
 }
+
+/*------------------GLB-------------------*/
+uint32_t SwitchNode::DoLbGlb(Ptr<Packet> p, CustomHeader &ch, const std::vector<int> &nexthops) {
+    if (m_isToR && nexthops.size() == 1) {
+        if (m_isToR_hostIP.find(ch.sip) != m_isToR_hostIP.end() &&
+            m_isToR_hostIP.find(ch.dip) != m_isToR_hostIP.end()) {
+            return nexthops[0];  // pod 内流量，直接返回
+        }
+    }
+
+    uint32_t outPort = m_glbRouting->RouteInput(p, ch, nexthops);
+    if (outPort == 0xFFFFFFFF) {
+        // 控制包，内部消耗，返回特殊标识使其在 SendToDevContinue 或底层被丢弃
+        return 0xFFFFFFFF;
+    }
+    return outPort;
+}
+
 /*----------------------------------*/
 
 void SwitchNode::CheckAndSendPfc(uint32_t inDev, uint32_t qIndex) {
@@ -213,36 +240,50 @@ void SwitchNode::SendToDev(Ptr<Packet> p, CustomHeader &ch) {
         return;
     }
 
-    // Others
+    // Others, GLB also 交由 GetOutDev 处理
     SendToDevContinue(p, ch);
 }
 
 void SwitchNode::SendToDevContinue(Ptr<Packet> p, CustomHeader &ch) {
     int idx = GetOutDev(p, ch);
+    
+    // 如果是 GCN/LSN 控制包，在数据面终结，不进行物理转发
+    if (idx == (int)0xFFFFFFFF) {
+        return; 
+    }
+    
     if (idx >= 0) {
-        NS_ASSERT_MSG(m_devices[idx]->IsLinkUp(),
-                      "The routing table look up should return link that is up");
-
-        // determine the qIndex
+        NS_ASSERT_MSG(m_devices[idx]->IsLinkUp(), "The routing table look up should return link that is up");
+        
+        // 恢复原有的 qIndex 优先级判断逻辑
         uint32_t qIndex;
         if (ch.l3Prot == 0xFF || ch.l3Prot == 0xFE ||
             (m_ackHighPrio &&
              (ch.l3Prot == 0xFD ||
-              ch.l3Prot == 0xFC))) {  // QCN or PFC or ACK/NACK, go highest priority
-            qIndex = 0;               // high priority
+              ch.l3Prot == 0xFC))) {  // QCN or PFC or ACK/NACK 以及的 GCN/LSN (0xFD)
+            qIndex = 0;               // 最高优先级队列
         } else {
-            qIndex = (ch.l3Prot == 0x06 ? 1 : ch.udp.pg);  // if TCP, put to queue 1. Otherwise, it
-                                                           // would be 3 (refer to trafficgen)
+            qIndex = (ch.l3Prot == 0x06 ? 1 : ch.udp.pg);  // 其他协议走普通队列
         }
 
-        DoSwitchSend(p, ch, idx, qIndex);  // m_devices[idx]->SwitchSend(qIndex, p, ch);
+        DoSwitchSend(p, ch, idx, qIndex);  
         return;
     }
+    
     std::cout << "WARNING - Drop occurs in SendToDevContinue()" << std::endl;
-    return;  // Drop otherwise
+    return;
 }
 
 int SwitchNode::GetOutDev(Ptr<Packet> p, CustomHeader &ch) {
+    // ======== 提前拦截 GLB 广播控制包，避免走入底层单播 ========
+    if (Settings::lb_mode == 10) {
+        GcnTag gcnTag;
+        LsnTag lsnTag;
+        if (p->PeekPacketTag(gcnTag) || p->PeekPacketTag(lsnTag)) {
+            m_glbRouting->RouteInput(p, ch, std::vector<int>()); // 内部解析并刷新状态
+            return 0xFFFFFFFF; // 明确丢弃，控制面终结
+        }
+    }
     // look up entries
     auto entry = m_rtTable.find(ch.dip);
 
@@ -259,8 +300,8 @@ int SwitchNode::GetOutDev(Ptr<Packet> p, CustomHeader &ch) {
     bool control_pkt =
         (ch.l3Prot == 0xFF || ch.l3Prot == 0xFE || ch.l3Prot == 0xFD || ch.l3Prot == 0xFC);
 
-    if (Settings::lb_mode == 0 || control_pkt) {  // control packet (ACK, NACK, PFC, QCN)
-        return DoLbFlowECMP(p, ch, nexthops);     // ECMP routing path decision (4-tuple)
+    if (Settings::lb_mode == 0 || control_pkt) {  
+        return DoLbFlowECMP(p, ch, nexthops);     
     }
 
     switch (Settings::lb_mode) {
@@ -272,6 +313,8 @@ int SwitchNode::GetOutDev(Ptr<Packet> p, CustomHeader &ch) {
             return DoLbLetflow(p, ch, nexthops);
         case 9:
             return DoLbConWeave(p, ch, nexthops); /** DUMMY: Do ECMP */
+        case 10:
+            return DoLbGlb(p, ch, nexthops);
         default:
             std::cout << "Unknown lb_mode(" << Settings::lb_mode << ")" << std::endl;
             assert(false);
@@ -425,6 +468,25 @@ void SwitchNode::ClearTable() { m_rtTable.clear(); }
 uint64_t SwitchNode::GetTxBytesOutDev(uint32_t outdev) {
     assert(outdev < pCnt);
     return m_txBytes[outdev];
+}
+
+bool SwitchNode::IsPortPaused(uint32_t port) {
+    // 端口 0 通常未被实际用于数据转发，物理有效端口从 1 开始
+    if (port == 0 || port >= GetNDevices()) return false;
+    
+    // 获取对应的底层物理网卡设备
+    Ptr<QbbNetDevice> qbbDev = DynamicCast<QbbNetDevice>(GetDevice(port));
+    
+    if (qbbDev) {
+        // 遍历所有可能的业务队列 (跳过 q=0，因为 0 队列是控制面专用的免丢包高优队列)
+        for (uint32_t q = 1; q < QbbNetDevice::qCnt; ++q) {
+            if (qbbDev->IsPaused(q)) {
+                // 只要有任何一个数据队列被下游发送的 PFC 暂停了，就认为该链路不可走
+                return true; 
+            }
+        }
+    }
+    return false;
 }
 
 } /* namespace ns3 */

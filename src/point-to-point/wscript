@@ -28,6 +28,7 @@ def build(bld):
         'model/conweave-routing.cc',
         'model/conweave-voq.cc',
 		'helper/selective-packet-queue.cc',
+        'model/glb-routing.cc',
         ]
 
     module_test = bld.create_ns3_module_test_library('point-to-point')
@@ -64,6 +65,7 @@ def build(bld):
         'model/conweave-routing.h',
         'model/conweave-voq.h',
 		'helper/selective-packet-queue.h',
+        'model/glb-routing.h',
         ]
 
     if (bld.env['ENABLE_EXAMPLES']):

@@ -197,6 +197,12 @@ public:
 	Ptr<RdmaEgressQueue> m_rdmaEQ;
 	void RdmaEnqueueHighPrioQ(Ptr<Packet> p);
 
+  // ====== 暴露端口 PFC 暂停状态 ======
+    bool IsPaused(uint32_t qIndex) const { 
+        if (qIndex < qCnt) return m_paused[qIndex]; 
+        return false; 
+    }
+
 	// callback for processing packet in RDMA
 	typedef Callback<int, Ptr<Packet>, CustomHeader&> RdmaReceiveCb;
 	RdmaReceiveCb m_rdmaReceiveCb;

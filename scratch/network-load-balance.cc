@@ -121,6 +121,9 @@ double rate_decrease_interval = 4;
 uint32_t fast_recovery_times = 1;
 std::string rate_ai, rate_hai, min_rate = "100Mb/s";
 std::string dctcp_rate_ai = "1000Mb/s";
+// ====== 新增全局变量 ======
+double ooo_interval = 15.0; 
+double ooo_window_ratio = 0.5;
 
 bool clamp_target_rate = false, l2_back_to_zero = false;
 double error_rate_per_link = 0.0;
@@ -715,6 +718,22 @@ uint64_t get_nic_rate(NodeContainer &n) {
     return avg_nic_rate / n_servers;
 }
 
+Ptr<SwitchNode> g_first_tor = nullptr;
+Ptr<SwitchNode> g_first_leaf = nullptr;
+Ptr<SwitchNode> g_first_spine = nullptr;
+
+void PrintGlbTablesDump() {
+    std::cout << "\n\n******************* PERIODIC GLB TABLES DUMP *******************\n";
+    std::cout << "Time: " << Simulator::Now().GetSeconds() << "s\n";
+    if (g_first_tor) g_first_tor->m_glbRouting->PrintRoutingTable();
+    if (g_first_leaf) g_first_leaf->m_glbRouting->PrintRoutingTable();
+    if (g_first_spine) g_first_spine->m_glbRouting->PrintRoutingTable();
+    std::cout << "****************************************************************\n\n";
+    
+    // 调度下一次打印，每 0.1 秒打印一次以便观察动态 quality 变化
+    Simulator::Schedule(MicroSeconds(1000), &PrintGlbTablesDump);
+}
+
 /************************************************************************/
 //                                                                      //
 //                                M A I N                               //
@@ -1082,6 +1101,13 @@ int main(int argc, char *argv[]) {
                 conf >> v;
                 random_seed = v;
                 std::cerr << "RANDOM_SEED\t\t\t" << random_seed << "\n";
+            // ====== 新增解析逻辑 ======
+            } else if (key.compare("OOO_INTERVAL") == 0) {
+                conf >> ooo_interval;
+                std::cerr << "OOO_INTERVAL\t\t\t" << ooo_interval << "\n";
+            } else if (key.compare("OOO_WINDOW_RATIO") == 0) {
+                conf >> ooo_window_ratio;
+                std::cerr << "OOO_WINDOW_RATIO\t\t" << ooo_window_ratio << "\n";
             }
 
             fflush(stdout);
@@ -1265,7 +1291,7 @@ int main(int argc, char *argv[]) {
         nbr2if[dnode][snode].bw = DynamicCast<QbbNetDevice>(d.Get(1))->GetDataRate().GetBitRate();
 
         // This is just to set up the connectivity between nodes. The IP addresses are useless
-        char ipstring[16];
+        char ipstring[32];
         Ipv4Address x;
         sprintf(ipstring, "10.%d.%d.0", i / 254 + 1, i % 254 + 1);
         ipv4.SetBase(ipstring, "255.255.255.0");
@@ -1366,6 +1392,7 @@ int main(int argc, char *argv[]) {
     std::map<std::string, uint32_t> topo2bdpMap;
     topo2bdpMap[std::string("leaf_spine_128_100G_OS2")] = 104000;  // RTT=8320
     topo2bdpMap[std::string("fat_k8_100G_OS2")] = 156000;      // RTT=12480 --> all 100G links
+    topo2bdpMap[std::string("fat_k4_100G_OS2")] = 156000;
 
     // topology_file
     bool found_topo2bdpMap = false;
@@ -1412,6 +1439,10 @@ int main(int argc, char *argv[]) {
             rdmaHw->SetAttribute("RateBound", BooleanValue(rate_bound));
             rdmaHw->SetAttribute("DctcpRateAI", DataRateValue(DataRate(dctcp_rate_ai)));
             rdmaHw->SetAttribute("IrnEnable", BooleanValue(enable_irn));
+            // ====== 注入动态参数 ======
+            rdmaHw->SetAttribute("OooToleranceInterval", DoubleValue(ooo_interval)); 
+            rdmaHw->SetAttribute("OooWindowBdpRatio", DoubleValue(ooo_window_ratio));
+            // ==========================
             // topo2bdpMap (e.g., longest BDP 25000: 8us * 25Gbps)
             rdmaHw->SetAttribute("IrnRtoHigh", TimeValue(MicroSeconds(320)));  // 1930
             rdmaHw->SetAttribute("IrnRtoLow", TimeValue(MicroSeconds(100)));   // 454
@@ -1497,7 +1528,7 @@ int main(int argc, char *argv[]) {
     }
 
     /* config load balancer's switches using ToR-to-ToR routing */
-    if (lb_mode == 3 || lb_mode == 6 || lb_mode == 9) {  // Conga, Letflow, Conweave
+    if (lb_mode == 3 || lb_mode == 6 || lb_mode == 9 || lb_mode == 10) {  // Conga, Letflow, Conweave
         NS_LOG_INFO("Configuring Load Balancer's Switches");
         for (auto &pair : link_pairs) {
             Ptr<Node> probably_host = n.Get(pair.first);
@@ -1649,6 +1680,72 @@ int main(int argc, char *argv[]) {
                         }
                     }
                 }
+            
+                // ====== 全层级通用路由表初始化 ======
+                if (lb_mode == 10) {
+                    auto table1 = i->second; // 获取该节点能到达的所有目的地映射
+                    for (auto j = table1.begin(); j != table1.end(); j++) {
+                        Ptr<Node> dst = j->first;  // 目的 Host
+                        uint32_t dstIP = Settings::hostId2IpMap[dst->GetId()];
+                        uint32_t swDstId = Settings::hostIp2SwitchId[dstIP]; // 目的 ToR 的 ID
+
+                        if (swSrcId == swDstId) continue; // 已经在同节点，无需建表
+
+                        vector<Ptr<Node>> nexts1 = j->second;
+                        for (auto next1 : nexts1) {
+                            uint32_t outPort1 = nbr2if[nodeSrc][next1].idx;
+                            uint32_t nhId = next1->GetId();
+                            
+                            // 获取从 nhId 到目的 host 的所有等价下一跳 (下下一跳候选集合)
+                            auto nexts2 = nextHop[next1][dst];
+                            
+                            // 如果 nexts2 为空，说明 next1 直接连着目的主机
+                            // 或者 next1 本身就是目的 ToR (swDstId)
+                            if (nexts2.empty() || next1->GetId() == swDstId) {
+                                uint32_t nnhId = swDstId; 
+                                uint32_t outPort2 = 0; 
+                                
+                                uint32_t pathId = (nhId << 16) | nnhId;
+                                auto& group = swSrc->m_glbRouting->m_dst2PathIds[swDstId];
+                                if (std::find(group.begin(), group.end(), pathId) == group.end()) {
+                                    group.push_back(pathId);
+                                }
+
+                                if (swSrc->m_glbRouting->m_pathTable.find(pathId) == swSrc->m_glbRouting->m_pathTable.end()) {
+                                    ns3::GlbPathEntry initEntry = {nhId, nnhId, (uint8_t)outPort1, (uint8_t)outPort2, 0, true};
+                                    swSrc->m_glbRouting->m_pathTable[pathId] = initEntry;
+                                }
+                            } else {
+                                // 遍历所有可能的等价下下一跳
+                                for (auto next2 : nexts2) {
+                                    uint32_t nnhId = next2->GetId();
+                                    uint32_t outPort2 = nbr2if[next1][next2].idx;
+
+                                    // 拼接 Path ID
+                                    uint32_t pathId = (nhId << 16) | nnhId;
+                                    
+                                    // 填入转发表 (Group 表)
+                                    auto& group = swSrc->m_glbRouting->m_dst2PathIds[swDstId];
+                                    if (std::find(group.begin(), group.end(), pathId) == group.end()) {
+                                        group.push_back(pathId);
+                                    }
+
+                                    // 初始化路径质量表 (Quality 表)
+                                    if (swSrc->m_glbRouting->m_pathTable.find(pathId) == swSrc->m_glbRouting->m_pathTable.end()) {
+                                        ns3::GlbPathEntry initEntry;
+                                        initEntry.nhId = nhId;
+                                        initEntry.nnhId = nnhId;
+                                        initEntry.outPort = (uint8_t)outPort1;
+                                        initEntry.neighborOutPort = (uint8_t)outPort2;
+                                        initEntry.quality = 0;
+                                        initEntry.linkAvail = true;
+                                        swSrc->m_glbRouting->m_pathTable[pathId] = initEntry;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
 
@@ -1698,6 +1795,70 @@ int main(int argc, char *argv[]) {
                         conweave_txExpiryTime, conweave_defaultVOQWaitingTime,
                         conweave_pathPauseTime, conweave_pathAwareRerouting);
                     sw->m_mmu->m_conweaveRouting.SetSwitchInfo(sw->m_isToR, sw->GetId());
+                }
+                if (lb_mode == 10) { 
+                    // 1. 判断本交换机的层级 Tier (1:ToR, 2:Leaf, 3:Spine)
+                    int my_tier = 3; // 默认最高层 Spine
+                    if (sw->m_isToR) {
+                        my_tier = 1; // ToR 交换机
+                    } else {
+                        // 检查是否直连了 ToR，如果直连了就是 Leaf
+                        bool connected_to_tor = false;
+                        for (uint32_t j = 1; j < sw->GetNDevices(); j++) {
+                            Ptr<QbbNetDevice> dev = DynamicCast<QbbNetDevice>(sw->GetDevice(j));
+                            Ptr<Node> neighbor = dev->GetChannel()->GetDevice(0)->GetNode() == sw ? 
+                                                 dev->GetChannel()->GetDevice(1)->GetNode() : dev->GetChannel()->GetDevice(0)->GetNode();
+                            if (idxNodeToR.find(neighbor->GetId()) != idxNodeToR.end()) {
+                                connected_to_tor = true; 
+                                break;
+                            }
+                        }
+                        if (connected_to_tor) my_tier = 2; // Leaf 交换机
+                    }
+
+                    // ====== 第一个交换机print ======
+                    if (my_tier == 1 && g_first_tor == nullptr) g_first_tor = sw;
+                    if (my_tier == 2 && g_first_leaf == nullptr) g_first_leaf = sw;
+                    if (my_tier == 3 && g_first_spine == nullptr) g_first_spine = sw;
+
+                    // 2. 遍历所有端口，识别邻居层级，划分上游组和下游组
+                    std::vector<uint32_t> uplinks, downlinks;
+                    for (uint32_t j = 1; j < sw->GetNDevices(); j++) {
+                        Ptr<QbbNetDevice> dev = DynamicCast<QbbNetDevice>(sw->GetDevice(j));
+                        Ptr<Node> neighbor = dev->GetChannel()->GetDevice(0)->GetNode() == sw ? 
+                                             dev->GetChannel()->GetDevice(1)->GetNode() : dev->GetChannel()->GetDevice(0)->GetNode();
+
+                        int neighbor_tier = 3;
+                        if (neighbor->GetNodeType() == 0) {
+                            neighbor_tier = 0; // Host (服务器)
+                        } else if (idxNodeToR.find(neighbor->GetId()) != idxNodeToR.end()) {
+                            neighbor_tier = 1; // 邻居是 ToR
+                        } else {
+                            // 探测这个邻居是不是 Leaf
+                            bool n_connected_to_tor = false;
+                            for (uint32_t k = 1; k < neighbor->GetNDevices(); k++) {
+                                Ptr<QbbNetDevice> ndev = DynamicCast<QbbNetDevice>(neighbor->GetDevice(k));
+                                Ptr<Node> nn = ndev->GetChannel()->GetDevice(0)->GetNode() == neighbor ? 
+                                               ndev->GetChannel()->GetDevice(1)->GetNode() : ndev->GetChannel()->GetDevice(0)->GetNode();
+                                if (idxNodeToR.find(nn->GetId()) != idxNodeToR.end()) { 
+                                    n_connected_to_tor = true; 
+                                    break; 
+                                }
+                            }
+                            neighbor_tier = n_connected_to_tor ? 2 : 3;
+                        }
+
+                        // 如果邻居层级比我高，则是上游端口；反之是下游端口
+                        if (neighbor_tier > my_tier) {
+                            uplinks.push_back(j);
+                        } else {
+                            downlinks.push_back(j);
+                        }
+                    }
+
+                    // 3. 将参数灌入 GLB 模块
+                    sw->m_glbRouting->SetSwitchInfo(sw->m_isToR, sw->GetId(), sw->GetNDevices() - 1);
+                    sw->m_glbRouting->SetPortGroups(uplinks, downlinks);
                 }
             }
         }
@@ -1790,6 +1951,9 @@ int main(int argc, char *argv[]) {
     Simulator::Schedule(Seconds(flowgen_start_time),
                         &stop_simulation_middle);  // check every 100us
     Simulator::Stop(Seconds(flowgen_stop_time + 10.0));
+    // 安排在发流开始后的 0.001 秒触发第一次查表打印
+    Simulator::Schedule(Seconds(flowgen_start_time) + MicroSeconds(1000), &PrintGlbTablesDump);
+
     Simulator::Run();
 
     /*-----------------------------------------------------------------------------*/

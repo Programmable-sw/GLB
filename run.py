@@ -46,6 +46,9 @@ LB_MODE {lb_mode}
 ENABLE_PFC {enabled_pfc}
 ENABLE_IRN {enabled_irn}
 
+OOO_INTERVAL {ooo_interval}
+OOO_WINDOW_RATIO {ooo_ratio}
+
 CONWEAVE_TX_EXPIRY_TIME {cwh_tx_expiry_time}
 CONWEAVE_REPLY_TIMEOUT_EXTRA {cwh_extra_reply_deadline}
 CONWEAVE_PATH_PAUSE_TIME {cwh_path_pause_time}
@@ -107,11 +110,13 @@ lb_modes = {
     "conga": 3,
     "letflow": 6,
     "conweave": 9,
+    "glb": 10,
 }
 
 topo2bdp = {
     "leaf_spine_128_100G_OS2": 104000,  # 2-tier -> all 100Gbps
     "fat_k8_100G_OS2": 156000,  # 3-tier -> all 100Gbps
+    "fat_k4_100G_OS2": 156000,
 }
 
 FLOWGEN_DEFAULT_TIME = 2.0  # see /traffic_gen/traffic_gen.py::base_t
@@ -149,6 +154,10 @@ def main():
                         type=int, default=0, help="enforce to use window scheme (default: 0)")
     parser.add_argument('--sw_monitoring_interval', dest='sw_monitoring_interval', action='store',
                         type=int, default=10000, help="interval of sampling statistics for queue status (default: 10000ns)")
+    # ====== 新增参数 ======
+    parser.add_argument('--ooo_ratio', dest='ooo_ratio', action='store', type=float, default=0.5, help="OOO Window BDP Ratio")
+    parser.add_argument('--ooo_interval', dest='ooo_interval', action='store', type=float, default=15.0, help="NACK generation interval (us)")
+    parser.add_argument('--id', dest='id', action='store', default='', help="Custom ID for output folder")
 
     # #### CONWEAVE PARAMETERS ####
     # parser.add_argument('--cwh_extra_reply_deadline', dest='cwh_extra_reply_deadline', action='store',
@@ -164,13 +173,21 @@ def main():
 
     args = parser.parse_args()
 
+    # # make running ID of this config
+    # # need to check directory exists or not
+    # isExist = True
+    # config_ID = 0
+    # while (isExist):
+    #     config_ID = str(random.randrange(MAX_RAND_RANGE))
+    #     isExist = os.path.exists(os.getcwd() + "/mix/output/" + config_ID)
+
     # make running ID of this config
-    # need to check directory exists or not
-    isExist = True
-    config_ID = 0
-    while (isExist):
-        config_ID = str(random.randrange(MAX_RAND_RANGE))
-        isExist = os.path.exists(os.getcwd() + "/mix/output/" + config_ID)
+    config_ID = args.id
+    if config_ID == '':
+        isExist = True
+        while (isExist):
+            config_ID = str(random.randrange(MAX_RAND_RANGE))
+            isExist = os.path.exists(os.getcwd() + "/mix/output/" + config_ID)
 
     # input parameters
     cc_mode = cc_modes[args.cc]
@@ -199,9 +216,9 @@ def main():
     if (args.cc == "timely" or args.cc == "hpcc") and args.lb == "conweave":
         raise Exception(
             "CONFIG ERROR : ConWeave currently does not support RTT-based protocols. Plz modify its logic accordingly.")
-    if enabled_irn == 1 and enabled_pfc == 1:
-        raise Exception(
-            "CONFIG ERROR : If IRN is turn-on, then you should turn off PFC (for better perforamnce).")
+    # if enabled_irn == 1 and enabled_pfc == 1:
+    #     raise Exception(
+    #         "CONFIG ERROR : If IRN is turn-on, then you should turn off PFC (for better perforamnce).")
     if enabled_irn == 0 and enabled_pfc == 0:
         raise Exception(
             "CONFIG ERROR : Either IRN or PFC should be true (at least one).")
@@ -365,6 +382,7 @@ def main():
                                         cwh_extra_reply_deadline=cwh_extra_reply_deadline, cwh_default_voq_waiting_time=cwh_default_voq_waiting_time,
                                         cwh_path_pause_time=cwh_path_pause_time, cwh_extra_voq_flush_time=cwh_extra_voq_flush_time,
                                         enabled_pfc=enabled_pfc, enabled_irn=enabled_irn,
+                                        ooo_interval=args.ooo_interval, ooo_ratio=args.ooo_ratio, # <== 加在这里
                                         cc_mode=cc_mode,
                                         ai=ai, hai=hai, dctcp_ai=dctcp_ai,
                                         has_win=has_win, var_win=var_win,

@@ -12,6 +12,7 @@
 
 #include <climits> /* for CHAR_BIT */
 #include <vector>
+#include <set> // <=== 新增
 
 #define BITMASK(b) (1 << ((b) % CHAR_BIT))
 #define BITSLOT(b) ((b) / CHAR_BIT)
@@ -120,11 +121,13 @@ class RdmaQueuePair : public Object {
         uint32_t m_bdp;          // m_irn_maxAck_
         uint32_t m_highest_ack;  // m_irn_maxAck_
         uint32_t m_max_seq;      // m_irn_maxSeq_
+        uint32_t m_highest_sack = 0;
         Time m_rtoLow;
         Time m_rtoHigh;
         IrnSackManager m_sack;
-        bool m_recovery;
-        uint32_t m_recovery_seq;
+        // bool m_recovery;
+        // uint32_t m_recovery_seq;
+        std::set<uint32_t> m_retransmit_queue; // <====== 新增：发送端空洞重传优先级队列
     } irn;
 
     struct {
@@ -202,6 +205,7 @@ class RdmaRxQueuePair : public Object {  // Rx side queue pair
     uint16_t m_ipid;
     uint32_t ReceiverNextExpectedSeq;
     Time m_nackTimer;
+    Time m_oooTimer;        // ====== 乱序超时判定定时 ======
     int32_t m_milestone_rx;
     uint32_t m_lastNACK;
     EventId QcnTimerEvent;  // if destroy this rxQp, remember to cancel this timer

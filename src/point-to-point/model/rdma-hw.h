@@ -31,7 +31,9 @@ class RdmaHw : public Object {
     DataRate m_minRate;  //< Min sending rate
     uint32_t m_mtu;
     uint32_t m_cc_mode;
-    double m_nack_interval;
+    double m_nack_interval;      // NACK 冷却时间
+    double m_ooo_interval;       // 乱序容忍时间
+    double m_ooo_window_ratio;   // 容忍度比例的声明
     uint32_t m_chunk;
     uint32_t m_ack_interval;
     bool m_backto0;
@@ -76,6 +78,8 @@ class RdmaHw : public Object {
                                  uint16_t pg, bool create);  // get a rxQp
     uint32_t GetNicIdxOfRxQp(Ptr<RdmaRxQueuePair> q);        // get the NIC index of the rxQp
     void DeleteRxQp(uint32_t dip, uint16_t dport, uint16_t sport, uint16_t pg);  // delete RxQP
+
+    void AsyncSendSACK(Ptr<RdmaRxQueuePair> rxQp, uint32_t expected_seq);
 
     int ReceiveUdp(Ptr<Packet> p, CustomHeader &ch);
     int ReceiveCnp(Ptr<Packet> p, CustomHeader &ch);

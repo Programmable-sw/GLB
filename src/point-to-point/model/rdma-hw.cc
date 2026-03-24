@@ -42,6 +42,14 @@ TypeId RdmaHw::GetTypeId(void) {
             .AddAttribute("NACKGenerationInterval", "The NACK/CNP Generation interval",
                           DoubleValue(4.0), MakeDoubleAccessor(&RdmaHw::m_nack_interval),
                           MakeDoubleChecker<double>())
+            // ====== 乱序容忍时间 ======
+            .AddAttribute("OooToleranceInterval", "The out-of-order tolerance interval",
+                          DoubleValue(15.0), MakeDoubleAccessor(&RdmaHw::m_ooo_interval),
+                          MakeDoubleChecker<double>())
+            // ====== 乱序容忍度 ======
+            .AddAttribute("OooWindowBdpRatio", "OOO Window BDP Ratio",
+                          DoubleValue(0.5), MakeDoubleAccessor(&RdmaHw::m_ooo_window_ratio),
+                          MakeDoubleChecker<double>())
             .AddAttribute("L2ChunkSize", "Layer 2 chunk size. Disable chunk mode if equals to 0.",
                           UintegerValue(4000), MakeUintegerAccessor(&RdmaHw::m_chunk),
                           MakeUintegerChecker<uint32_t>())
@@ -337,10 +345,31 @@ int RdmaHw::ReceiveUdp(Ptr<Packet> p, CustomHeader &ch) {
 
         if (m_irn) {
             if (x == 2) {
-                seqh.SetIrnNack(ch.udp.seq);
-                seqh.SetIrnNackSize(payload_size);
+                // 63-bit 位图 + 1-bit NACK 标志位
+                uint64_t bitmap = 0;
+                uint32_t expected = rxQp->ReceiverNextExpectedSeq;
+                
+                // 从最早空洞向后扫描 63 个包，留出最高位作为标志
+                for (int i = 0; i < 63; i++) {
+                    uint32_t check_seq = expected + (i + 1) * m_mtu;
+                    if (rxQp->m_irn_sack_.blockExists(check_seq, m_mtu)) {
+                        bitmap |= (1ULL << i); 
+                    }
+                }
+                
+                uint32_t lower_32 = (uint32_t)(bitmap & 0xFFFFFFFF);
+                uint32_t upper_31 = (uint32_t)(bitmap >> 32);
+                
+                // 将 upper_31 的最高位置 1，作为 NACK 标识
+                upper_31 |= 0x80000000;
+                
+                // 巧妙利用现有字段承载物理位图，无需修改底层 Header
+                seqh.SetIrnNack(lower_32);       
+                seqh.SetIrnNackSize(upper_31);          
+                // ====================================================
             } else {
-                seqh.SetIrnNack(0);  // NACK without ackSyndrome (ACK) in loss recovery mode
+                // x == 6 或 1 时是类 ACK 的 NACK，全置 0
+                seqh.SetIrnNack(0);  
                 seqh.SetIrnNackSize(0);
             }
         }
@@ -477,30 +506,59 @@ int RdmaHw::ReceiveAck(Ptr<Packet> p, CustomHeader &ch) {
             // handle NACK
             NS_ASSERT(ch.l3Prot == 0xFD);
 
-            // for bdp-fc calculation update m_irn_maxAck
             if (seq > qp->irn.m_highest_ack) qp->irn.m_highest_ack = seq;
 
-            if (ch.ack.irnNackSize != 0) {
-                // ch.ack.irnNack contains the seq triggered this NACK
-                qp->irn.m_sack.sack(ch.ack.irnNack, ch.ack.irnNackSize);
+            // 推进基础确认号 (una)
+            if (qp->snd_una < seq) {
+                qp->snd_una = seq;
             }
+            qp->irn.m_sack.discardUpTo(qp->snd_una);
+            if (qp->snd_nxt < qp->snd_una) { qp->snd_nxt = qp->snd_una; }
 
-            uint32_t sack_seq, sack_len;
-            if (qp->irn.m_sack.peekFrontBlock(&sack_seq, &sack_len)) {
-                if (qp->snd_una == sack_seq) {
-                    qp->snd_una += sack_len;
+            // ======  63-bit 位图重传 ======
+            // 1. 提取最高位作为 NACK 标志
+            bool is_genuine_nack = (ch.ack.irnNackSize & 0x80000000) != 0;
+            
+            // 2. 还原 63-bit 位图
+            uint64_t bitmap = (((uint64_t)(ch.ack.irnNackSize & 0x7FFFFFFF)) << 32) | (uint64_t)ch.ack.irnNack;
+            
+            if (bitmap != 0) {
+                // 找到位图中的最高位
+                int highest_bit = 0;
+                for (int i = 62; i >= 0; i--) {
+                    if ((bitmap >> i) & 1) {
+                        highest_bit = i + 1;
+                        break;
+                    }
+                }
+
+                // 3. 有效范围内重传入队
+                for (int i = 0; i < highest_bit; i++) {
+                    uint32_t target_seq = seq + (i + 1) * m_mtu;
+                    
+                    if (((bitmap >> i) & 1) == 0) {
+                        // 局部空洞
+                        if (target_seq < qp->snd_nxt) {
+                            qp->irn.m_retransmit_queue.insert(target_seq);
+                        }
+                    } else {
+                        // 发送端记分板删除
+                        qp->irn.m_sack.sack(target_seq, m_mtu);
+                        if (target_seq + m_mtu > qp->irn.m_highest_sack) {
+                            qp->irn.m_highest_sack = target_seq + m_mtu;
+                        }
+                    }
+                }
+            } 
+            
+            // 4. NACK 催促 expected 优先入队
+            if (is_genuine_nack) {
+                if (seq < qp->snd_nxt) {
+                    qp->irn.m_retransmit_queue.insert(seq);
                 }
             }
+            // ==============================================================
 
-            qp->irn.m_sack.discardUpTo(qp->snd_una);
-
-            if (qp->snd_nxt < qp->snd_una) {
-                qp->snd_nxt = qp->snd_una;
-            }
-            // if (qp->irn.m_sack.IsEmpty())  { //
-            if (qp->irn.m_recovery && qp->snd_una >= qp->irn.m_recovery_seq) {
-                qp->irn.m_recovery = false;
-            }
         } else {
             if (qp->snd_nxt < qp->snd_una) {
                 qp->snd_nxt = qp->snd_una;
@@ -527,21 +585,25 @@ int RdmaHw::ReceiveAck(Ptr<Packet> p, CustomHeader &ch) {
                                                qp->GetRto(m_mtu));
     }
 
-    if (m_irn) {
-        if (ch.ack.irnNackSize != 0) {
-            if (!qp->irn.m_recovery) {
-                qp->irn.m_recovery_seq = qp->snd_nxt;
-                RecoverQueue(qp);
-                qp->irn.m_recovery = true;
-            }
-        } else {
-            if (qp->irn.m_recovery) {
-                qp->irn.m_recovery = false;
-            }
-        }
+    // if (m_irn) {
+    //     if (ch.ack.irnNackSize != 0) {
+    //         if (!qp->irn.m_recovery) {
+    //             qp->irn.m_recovery_seq = qp->snd_nxt;
+    //             RecoverQueue(qp);
+    //             qp->irn.m_recovery = true;
+    //         }
+    //     } else {
+    //         if (qp->irn.m_recovery) {
+    //             qp->irn.m_recovery = false;
+    //         }
+    //     }
 
-    } else if (ch.l3Prot == 0xFD)  // NACK
+    // } else if (ch.l3Prot == 0xFD)  // NACK
+    //     RecoverQueue(qp);
+
+    if (!m_irn && ch.l3Prot == 0xFD) {
         RecoverQueue(qp);
+    }
 
     // handle cnp
     if (cnp) {
@@ -599,6 +661,7 @@ int RdmaHw::Receive(Ptr<Packet> p, CustomHeader &ch) {
  */
 int RdmaHw::ReceiverCheckSeq(uint32_t seq, Ptr<RdmaRxQueuePair> q, uint32_t size, bool &cnp) {
     uint32_t expected = q->ReceiverNextExpectedSeq;
+    // 【分支 1】：按序到达，或刚好填补当前空洞
     if (seq == expected || (seq < expected && seq + size >= expected)) {
         if (m_irn) {
             if (q->m_milestone_rx < seq + size) q->m_milestone_rx = seq + size;
@@ -613,13 +676,11 @@ int RdmaHw::ReceiverCheckSeq(uint32_t seq, Ptr<RdmaRxQueuePair> q, uint32_t size
             }
             size_t progress = q->m_irn_sack_.discardUpTo(q->ReceiverNextExpectedSeq);
             if (q->m_irn_sack_.IsEmpty()) {
-                return 6;  // This generates NACK, but actually functions as an ACK (indicates all
-                           // packet has been received)
+                q->m_oooTimer = Seconds(0);   // 空洞补齐：停止乱序计时器，返回 6
             } else {
-                // should we put nack timer here
-                return 2;  // Still in loss recovery mode of IRN
+                q->m_oooTimer = Simulator::Now() + MicroSeconds(m_ooo_interval);   // 存在下一个空洞：对下一个空洞重启乱序计时器
             }
-            return 0;  // should not reach here
+            return 6;
         }
 
         q->ReceiverNextExpectedSeq += size - (expected - seq);
@@ -632,21 +693,33 @@ int RdmaHw::ReceiverCheckSeq(uint32_t seq, Ptr<RdmaRxQueuePair> q, uint32_t size
         } else {
             return 5;
         }
+
+    // 【分支 2】：乱序到达 (seq > expected)
     } else if (seq > expected) {
         // Generate NACK
         if (m_irn) {
             if (q->m_milestone_rx < seq + size) q->m_milestone_rx = seq + size;
+            q->m_irn_sack_.sack(seq, size); 
 
-            // if seq is already nacked, check for nacktimer
-            if (q->m_irn_sack_.blockExists(seq, size) && Simulator::Now() < q->m_nackTimer) {
-                return 4;  // don't need to send nack yet
+            // 出现全新乱序，开始计时
+            if (q->m_oooTimer.IsZero()) {
+                q->m_oooTimer = Simulator::Now() + MicroSeconds(m_ooo_interval);
             }
-            q->m_nackTimer = Simulator::Now() + MicroSeconds(m_nack_interval);
-            q->m_irn_sack_.sack(seq, size);  // set SACK
-            NS_ASSERT(q->m_irn_sack_.discardUpTo(expected) ==
-                      0);  // SACK blocks must be larger than expected
-            cnp = true;    // XXX: out-of-order should accompany with CNP (?) TODO: Check on CX6
-            return 2;      // generate SACK
+
+            uint32_t ooo_window = m_irn_bdp * m_ooo_window_ratio;
+            bool is_ooo_timeout = (Simulator::Now() >= q->m_oooTimer);
+            bool is_ooo_exceed_window = (q->m_milestone_rx - expected > ooo_window);
+            if (is_ooo_timeout || is_ooo_exceed_window) {
+                // if seq is already nacked, check for nacktimer
+                if (Simulator::Now() < q->m_nackTimer) {
+                    return 4;  // don't need to send nack yet
+                } else {
+                    q->m_nackTimer = Simulator::Now() + MicroSeconds(m_nack_interval); // 更新 nack timer
+                    cnp = true; // 打上 cnp 标志触发降速
+                    return 2;   // 构造 NACK
+                }
+            }
+            return 4;
         }
         if (Simulator::Now() >= q->m_nackTimer || q->m_lastNACK != expected) {  // new NACK
             q->m_nackTimer = Simulator::Now() + MicroSeconds(m_nack_interval);
@@ -660,20 +733,22 @@ int RdmaHw::ReceiverCheckSeq(uint32_t seq, Ptr<RdmaRxQueuePair> q, uint32_t size
             // skip to send NACK
             return 4;
         }
+
+    // 【分支 3】：收到重复的旧包
     } else {
         // Duplicate.
         if (m_irn) {
-            // if (q->ReceiverNextExpectedSeq - 1 == q->m_milestone_rx) {
-            // 	return 6; // This generates NACK, but actually functions as an ACK (indicates all
-            // packet has been received)
-            // }
-            if (q->m_irn_sack_.IsEmpty()) {
-                return 6;  // This generates NACK, but actually functions as an ACK (indicates all
-                           // packet has been received)
-            } else {
-                // should we put nack timer here
-                return 2;  // Still in loss recovery mode of IRN
+            // 检查乱序超时
+            bool is_ooo_timeout = (!q->m_oooTimer.IsZero() && Simulator::Now() >= q->m_oooTimer);
+            if (is_ooo_timeout) {
+                if (Simulator::Now() < q->m_nackTimer) {
+                    return 4; // nack timer 未超时，静默
+                } else {
+                    q->m_nackTimer = Simulator::Now() + MicroSeconds(m_nack_interval); // 更新冷却
+                    return 2; // 构造 NACK
+                }
             }
+            return 6; // 重复包且空洞未超时，返回 6 推进 una 且清空 sack
         }
         // Duplicate.
         return 1;  // According to IB Spec C9-110
@@ -753,12 +828,42 @@ void RdmaHw::RedistributeQp() {
 }
 
 Ptr<Packet> RdmaHw::GetNxtPacket(Ptr<RdmaQueuePair> qp) {
-    uint32_t payload_size = qp->GetBytesLeft();
-    if (m_mtu < payload_size) {  // possibly last packet
-        payload_size = m_mtu;
+    uint32_t seq = 0;
+    bool is_retransmission = false;
+
+    // ====== 发送端优先级调度 ======
+    if (qp->irn.m_enabled && !qp->irn.m_retransmit_queue.empty()) {
+        // 清洗被后续 ACK 安全确认的空洞
+        while (!qp->irn.m_retransmit_queue.empty()) {
+            auto it = qp->irn.m_retransmit_queue.begin();
+            seq = *it;
+            qp->irn.m_retransmit_queue.erase(it);
+
+            if (seq < qp->snd_una || qp->irn.m_sack.blockExists(seq, m_mtu)) {
+                continue; // 已确认，丢弃
+            } else {
+                is_retransmission = true; // 找到真实空洞，优先重传
+                break; 
+            }
+        }
     }
-    uint32_t seq = (uint32_t)qp->snd_nxt;
-    bool proceed_snd_nxt = true;
+
+    // 2. 如果队列为空，则正常发送新包
+    if (!is_retransmission) {
+        seq = (uint32_t)qp->snd_nxt;
+        // 只有前线发新包，才推进 snd_nxt 指针
+        qp->snd_nxt += std::min((uint64_t)m_mtu, qp->m_size - seq); 
+    }
+
+    // 重传包和新包都使用动态计算长度（防止流末尾包长度不对）
+    uint32_t payload_size = std::min((uint64_t)m_mtu, qp->m_size - seq);
+
+    // uint32_t payload_size = qp->GetBytesLeft();
+    // if (m_mtu < payload_size) {  // possibly last packet
+    //     payload_size = m_mtu;
+    // }
+    // uint32_t seq = (uint32_t)qp->snd_nxt;
+    // bool proceed_snd_nxt = true;
     qp->stat.txTotalPkts += 1;
     qp->stat.txTotalBytes += payload_size;
 
@@ -820,7 +925,7 @@ Ptr<Packet> RdmaHw::GetNxtPacket(Ptr<RdmaQueuePair> qp) {
     }
 
     // // update state
-    if (proceed_snd_nxt) qp->snd_nxt += payload_size;
+    // if (proceed_snd_nxt) qp->snd_nxt += payload_size;
 
     qp->m_ipid++;
 
@@ -854,7 +959,6 @@ void RdmaHw::PktSent(Ptr<RdmaQueuePair> qp, Ptr<Packet> pkt, Time interframeGap)
 
 void RdmaHw::HandleTimeout(Ptr<RdmaQueuePair> qp, Time rto) {
     // Assume Outstanding Packets are lost
-    // std::cerr << "Timeout on qp=" << qp << std::endl;
     if (qp->IsFinished()) {
         return;
     }
@@ -869,9 +973,15 @@ void RdmaHw::HandleTimeout(Ptr<RdmaQueuePair> qp, Time rto) {
         acc_timeout_count[qp->m_flow_id] = 0;
     acc_timeout_count[qp->m_flow_id]++;
 
-    if (qp->irn.m_enabled) qp->irn.m_recovery = true;
+    // ====== 超时重传 ======
+    if (qp->irn.m_enabled) {
+        // IRN 模式：将最老的一个空洞加入重传队列
+        qp->irn.m_retransmit_queue.insert(qp->snd_una);
+    } else {
+        // 传统 RoCE 模式：发生超时，Go-Back-N 拉回指针
+        RecoverQueue(qp);
+    }
 
-    RecoverQueue(qp);
     dev->TriggerTransmit();
 }
 

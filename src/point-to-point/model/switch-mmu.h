@@ -116,6 +116,9 @@ class SwitchMmu : public Object {
     /*------------ ConWeave Objects-------------*/
     ConWeaveRouting m_conweaveRouting;
 
+    // ====== 新增：声明 GLB Routing 为友元 ======
+    friend class GlbRouting;
+
    private:
     bool m_PFCenabled;
 
