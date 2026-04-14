@@ -111,8 +111,8 @@ uint32_t GlbRouting::RouteInput(Ptr<Packet> p, CustomHeader& ch, const std::vect
                 uint32_t l1 = m_portUtilization[local_port];
                 uint32_t score_R = gcnTag.portScores[neighbor_port];
 
-                // // ====== PFC 状态 ======
-                // bool isLocalPaused = !m_getPortPausedCallback.IsNull() ? m_getPortPausedCallback(local_port) : false;
+                // ====== PFC 状态 ======
+                bool isLocalPaused = !m_getPortPausedCallback.IsNull() ? m_getPortPausedCallback(local_port) : false;
                 
                 // // ====== pfc2path ======
                 // if (isLocalPaused) {
@@ -125,11 +125,12 @@ uint32_t GlbRouting::RouteInput(Ptr<Packet> p, CustomHeader& ch, const std::vect
                 //     uint32_t step_size = 30; 
                 //     uint32_t congestion_level = (uint32_t)(V) / step_size;
                 //     pair.second.quality = (uint8_t)std::min(congestion_level, (uint32_t)7);
-
-                // // ====== pfc2link ======
-                // if (isLocalPaused) {
-                //     l1 = 100; // 核心修复：PFC 暂停时，视为本地链路 100% 满载
                 // }
+
+                // ====== pfc2link ======
+                if (isLocalPaused) {
+                    l1 = 100; // 核心修复：PFC 暂停时，视为本地链路 100% 满载
+                }
 
                 // 浮点运算
                 double w_q1 = 0.3;
@@ -272,9 +273,10 @@ void GlbRouting::SendGcn() {
         uint32_t q2 = m_mmu ? (m_mmu->m_usedEgressPortBytes[i] / 1000) : 0; 
         uint32_t l2 = m_portUtilization[i]; 
         
-        // // 检查当前端口是否被 PFC 暂停
-        // bool isPaused = !m_getPortPausedCallback.IsNull() ? m_getPortPausedCallback(i) : false;
+        // ====== pfc状态 ======
+        bool isPaused = !m_getPortPausedCallback.IsNull() ? m_getPortPausedCallback(i) : false;
         
+        // ====== pfc2path ======
         // // if (isPaused) {
         // //     // 被暂停时：直接分配远端的满分极限值，不做后续浮点运算
         // //     tag.portScores[i] = 65535; 
@@ -284,10 +286,10 @@ void GlbRouting::SendGcn() {
         // //     tag.portScores[i] = (uint16_t)std::min(score_R, 65535.0); 
         // // }
 
-        // // ====== 修改后：平滑处理 ======
-        // if (isPaused) {
-        //     l2 = 100; // 核心修复：远端被暂停时，视为远端链路 100% 满载
-        // }
+        // ====== pfc2link ======
+        if (isPaused) {
+            l2 = 100; // 核心修复：远端被暂停时，视为远端链路 100% 满载
+        }
 
         // 恢复正常的 3 因子计算，不再一刀切通告 65535
         double score_R = w_q2 * q2 + w_l2 * l2 + w_b * tag.b_global;
