@@ -730,8 +730,8 @@ void PrintGlbTablesDump() {
     if (g_first_spine) g_first_spine->m_glbRouting->PrintRoutingTable();
     std::cout << "****************************************************************\n\n";
     
-    // 调度下一次打印，每 0.1 秒打印一次以便观察动态 quality 变化
-    Simulator::Schedule(MicroSeconds(1000), &PrintGlbTablesDump);
+    // 调度下一次打印，每 0.1 秒打印一次质量表。若需观察动态 quality 变化请调至 1000us
+    Simulator::Schedule(MicroSeconds(100000), &PrintGlbTablesDump);
 }
 
 /************************************************************************/
