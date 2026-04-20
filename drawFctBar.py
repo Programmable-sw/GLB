@@ -11,18 +11,18 @@ def parse_slowdown(filename):
             elif line.startswith('>1BDP'):
                 large_avg = float(line.strip().split(',')[1])
             elif line.startswith('ABSOLUTE'):
-                break # 读到绝对延迟部分就停止，我们只需要SLOWDOWN
+                break
     return small_avg, large_avg
 
 # ================= 配置区 =================
-# 在这里填入你不同方案的 summary txt 文件路径和方案名称
+# 填入不同方案的 summary txt 文件路径和方案名称
 schemes = {
     "Ours": "./mix/output/glblatest_fat4_netload50/602852476_out_fct_summary.txt",
-    "Ecmp": "./mix/output/ecmp_fat4_irn2_pfc0/510364948_out_fct_summary.txt",
+    "Ecmp": "./mix/output/ecmp_fat4_irn2_pfc0/510364948_out_fct_summary.txt",    
     "Conga": "./mix/output/conga_fat4_irn2_pfc0/945688000_out_fct_summary.txt",
-    "Drill": "./mix/output/drill_fat4_irn2_pfc0/512680801_out_fct_summary.txt",
-    "Drill(*)": "./mix/output/drill_fat4_irn1_pfc1/760049578_out_fct_summary.txt",
     "Conweave": "./mix/output/conweave_fat4_irn2_pfc0/339866944_out_fct_summary.txt",
+    # "Drill": "./mix/output/drill_fat4_irn2_pfc0/512680801_out_fct_summary.txt",
+    "Drill": "./mix/output/drill_fat4_irn1_pfc1/760049578_out_fct_summary.txt",
 }
 # ==========================================
 
