@@ -128,9 +128,9 @@ uint32_t GlbRouting::RouteInput(Ptr<Packet> p, CustomHeader& ch, const std::vect
                 // }
 
                 // ====== pfc2link ======
-                if (isLocalPaused) {
-                    l1 = 100; // 核心修复：PFC 暂停时，视为本地链路 100% 满载
-                }
+                // if (isLocalPaused) {
+                //     l1 = 100; // 核心修复：PFC 暂停时，视为本地链路 100% 满载
+                // }
 
                 // 浮点运算
                 double w_q1 = 0.3;
@@ -267,7 +267,6 @@ void GlbRouting::SendGcn() {
     double w_l2 = 0.1; 
     double w_b = 0.2; 
     
-    // 【注意：就是这里！之前可能不小心把这个 for 循环头以及 q2, l2 的获取给删了】
     for (uint32_t i = 1; i <= m_num_ports; ++i) {
         // 获取远端的队列积压和利用率
         uint32_t q2 = m_mmu ? (m_mmu->m_usedEgressPortBytes[i] / 1000) : 0; 
@@ -287,9 +286,9 @@ void GlbRouting::SendGcn() {
         // // }
 
         // ====== pfc2link ======
-        if (isPaused) {
-            l2 = 100; // 核心修复：远端被暂停时，视为远端链路 100% 满载
-        }
+        // if (isPaused) {
+        //     l2 = 100; // 核心修复：远端被暂停时，视为远端链路 100% 满载
+        // }
 
         // 恢复正常的 3 因子计算，不再一刀切通告 65535
         double score_R = w_q2 * q2 + w_l2 * l2 + w_b * tag.b_global;
