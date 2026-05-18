@@ -29,6 +29,63 @@ NS_LOG_COMPONENT_DEFINE ("CnHeader");
 
 namespace ns3 {
 
+// ================= BitmapSprayTag 的具体实现 =================
+TypeId BitmapSprayTag::GetTypeId(void) {
+    static TypeId tid = TypeId("ns3::BitmapSprayTag").SetParent<Tag>().AddConstructor<BitmapSprayTag>();
+    return tid;
+}
+TypeId BitmapSprayTag::GetInstanceTypeId(void) const { return GetTypeId(); }
+
+// 4 字节的 uint32 已经足够装下 0~255，如果你强行需要 8 字节，这里可以 return 8 并用 WriteU64
+uint32_t BitmapSprayTag::GetSerializedSize(void) const { return 4; } 
+
+void BitmapSprayTag::Serialize(TagBuffer i) const { 
+    i.WriteU32(m_pathId); 
+}
+void BitmapSprayTag::Deserialize(TagBuffer i) { 
+    m_pathId = i.ReadU32(); 
+}
+void BitmapSprayTag::Print(std::ostream &os) const { 
+    os << "BitmapSpray Entropy=" << m_pathId; 
+}
+
+// ================= BitmapFeedbackTag 的具体实现 =================
+TypeId BitmapFeedbackTag::GetTypeId(void) {
+    static TypeId tid = TypeId("ns3::BitmapFeedbackTag").SetParent<Tag>().AddConstructor<BitmapFeedbackTag>();
+    return tid;
+}
+TypeId BitmapFeedbackTag::GetInstanceTypeId(void) const { return GetTypeId(); }
+
+// 严格保证 32 Bytes 的开销
+uint32_t BitmapFeedbackTag::GetSerializedSize(void) const { return 32; } 
+
+void BitmapFeedbackTag::Serialize(TagBuffer i) const {
+    // 将 256 bit 拆解为 8 个 32-bit 的 chunk 写入 Buffer
+    for (int k = 0; k < 8; k++) {
+        uint32_t chunk = 0;
+        for (int j = 0; j < 32; j++) { 
+            if (m_bitmap.test(k * 32 + j)) {
+                chunk |= (1U << j); 
+            }
+        }
+        i.WriteU32(chunk);
+    }
+}
+void BitmapFeedbackTag::Deserialize(TagBuffer i) {
+    m_bitmap.reset();
+    for (int k = 0; k < 8; k++) {
+        uint32_t chunk = i.ReadU32();
+        for (int j = 0; j < 32; j++) { 
+            if (chunk & (1U << j)) {
+                m_bitmap.set(k * 32 + j); 
+            }
+        }
+    }
+}
+void BitmapFeedbackTag::Print(std::ostream &os) const { 
+    os << "BitmapFeedback: 32B Payload";
+}
+
 NS_OBJECT_ENSURE_REGISTERED (CnHeader);
 
 CnHeader::CnHeader (const uint16_t fid, uint8_t qIndex, uint8_t ecnbits, uint16_t qfb, uint16_t total)

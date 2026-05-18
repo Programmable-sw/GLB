@@ -41,6 +41,11 @@ namespace ns3 {
         m_var_win = false;
         m_rate = 0;
         m_nextAvail = Time(0);
+
+        // ====== 新增 ======
+        m_path_bitmap.set(); // 必须调用 .set()，否则 bitset 默认全为 0
+        m_last_used_path = 0;
+
         mlx.m_alpha = 1;
         mlx.m_alpha_cnp_arrived = false;
         mlx.m_first_cnp = true;

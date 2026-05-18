@@ -5,6 +5,7 @@
 
 #include <unordered_map>
 #include <unordered_set>
+#include <bitset>
 
 #include "qbb-net-device.h"
 #include "switch-mmu.h"
@@ -28,6 +29,12 @@ class SwitchNode : public Node {
     bool m_ecnEnabled;
     uint32_t m_ccMode;
     uint32_t m_ackHighPrio;  // set high priority for ACK/NACK
+    // lb_mode=13: dToR 监控路径状态 <源 IP, 256位Bitmap>
+    std::unordered_map<uint32_t, std::bitset<256>> m_dtor_path_states; 
+    // lb_mode=13: 控制反馈频率 <源 IP, 上次反馈时间>
+    std::unordered_map<uint32_t, Time> m_last_feedback_time;
+    // lb_mode=13: 全局包计数器，用于 Epoch 全局重置 <源 IP, 包总数>
+    std::unordered_map<uint32_t, uint32_t> m_dtor_total_pkt_cnt;
 
    private:
     int GetOutDev(Ptr<Packet>, CustomHeader &ch);
@@ -39,6 +46,9 @@ class SwitchNode : public Node {
 
     /* Sending packet to Egress port */
     void DoSwitchSend(Ptr<Packet> p, CustomHeader &ch, uint32_t outDev, uint32_t qIndex);
+
+    // PFC 感知
+    bool IsPortPaused(uint32_t port);
 
     /*----- Load balancer -----*/
     // Flow ECMP (lb_mode = 0)
@@ -57,8 +67,15 @@ class SwitchNode : public Node {
     // ConWeave (lb_mode = 9)
     uint32_t DoLbConWeave(Ptr<const Packet> p, const CustomHeader &ch,
                           const std::vector<int> &nexthops);  // dummy
-    uint32_t DoLbGlb(Ptr<Packet> p, CustomHeader &ch, const std::vector<int> &nexthops); // GLB 选路逻辑
-    bool IsPortPaused(uint32_t port);
+    // Glb (lb_mode = 10)
+    uint32_t DoLbGlb(Ptr<Packet> p, CustomHeader &ch, 
+                        const std::vector<int> &nexthops);
+    // Reps (lb_mode = 11)
+    uint32_t DoLbReps(Ptr<const Packet> p, const CustomHeader &ch,
+                           const std::vector<int> &nexthops);
+    // dToR-Assisted Bitmap (lb_mode = 13)
+    uint32_t DoLbBitmap(Ptr<const Packet> p, const CustomHeader &ch,
+                           const std::vector<int> &nexthops);
    
    public:
     // Ptr<BroadcomNode> m_broadcom;

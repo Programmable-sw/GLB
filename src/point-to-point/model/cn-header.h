@@ -24,6 +24,8 @@
 #include <stdint.h>
 #include "ns3/header.h"
 #include "ns3/buffer.h"
+#include "ns3/tag.h"    // <=== 新增
+#include <bitset>       // <=== 新增
 
 namespace ns3 {
 
@@ -35,6 +37,35 @@ namespace ns3 {
  * congestion level. This can be serialized to or deserialzed from a byte
  * buffer.
  */
+
+// ================= START: lb_mode=13 熵值喷洒 Tag =================
+class BitmapSprayTag : public Tag {
+public:
+    static TypeId GetTypeId(void);
+    virtual TypeId GetInstanceTypeId(void) const;
+    virtual uint32_t GetSerializedSize(void) const;
+    virtual void Serialize(TagBuffer i) const;
+    virtual void Deserialize(TagBuffer i);
+    virtual void Print(std::ostream &os) const;
+    
+    uint32_t m_pathId; // 保存 0~255 的熵值
+    
+    void SetPathId(uint32_t path_id) { m_pathId = path_id; }
+    uint32_t GetPathId() const { return m_pathId; }
+};
+
+// ================= START: lb_mode=13 dToR 回馈 Tag =================
+class BitmapFeedbackTag : public Tag {
+public:
+    std::bitset<256> m_bitmap; // 256 位的路径状态
+
+    static TypeId GetTypeId(void);
+    virtual TypeId GetInstanceTypeId(void) const;
+    virtual uint32_t GetSerializedSize(void) const;
+    virtual void Serialize(TagBuffer i) const;
+    virtual void Deserialize(TagBuffer i);
+    virtual void Print(std::ostream &os) const;
+};
 
 class CnHeader : public Header 
 {

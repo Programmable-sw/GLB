@@ -111,10 +111,15 @@ lb_modes = {
     "letflow": 6,
     "conweave": 9,
     "glb": 10,
+    "reps": 11,
+    "dtor": 13,
 }
 
 topo2bdp = {
     "leaf_spine_128_100G_OS2": 104000,  # 2-tier -> all 100Gbps
+    "leaf128_spine64_100G_OS1": 104000,
+    "leaf64_spine32_100G_OS1": 104000, 
+    "leaf32_spine16_100G_OS1": 104000,
     "fat_k8_100G_OS2": 156000,  # 3-tier -> all 100Gbps
     "fat_k4_100G_OS2": 156000,
 }

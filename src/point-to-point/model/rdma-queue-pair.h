@@ -13,6 +13,7 @@
 #include <climits> /* for CHAR_BIT */
 #include <vector>
 #include <set> // <=== 新增
+#include <bitset> // <=== 新增
 
 #define BITMASK(b) (1 << ((b) % CHAR_BIT))
 #define BITSLOT(b) ((b) / CHAR_BIT)
@@ -52,6 +53,24 @@ class IrnSackManager {
     friend std::ostream &operator<<(std::ostream &os, const IrnSackManager &im);
 };
 
+struct RepsState {
+    uint16_t buffer[8];
+    bool isValid[8];
+    uint8_t head;       // 写入指针
+    uint8_t numValid;   // 当前有效EV数量
+    bool isFreezingMode;
+
+    RepsState() {
+        head = 0;
+        numValid = 0;
+        isFreezingMode = false;
+        for (int i = 0; i < 8; ++i) {
+            buffer[i] = 0;
+            isValid[i] = false;
+        }
+    }
+};
+
 class RdmaQueuePair : public Object {
    public:
     Time startTime;
@@ -70,6 +89,11 @@ class RdmaQueuePair : public Object {
     uint32_t lastPktSize;
     int32_t m_flow_id;
     Time m_timeout;
+    RepsState reps;       // REPS 连接状态
+
+    // ====== 新增：用于 lb_mode=13 的 dToR 辅助 Bitmap ======
+    std::bitset<256> m_path_bitmap;
+    uint32_t m_last_used_path; 
 
     /******************************
      * runtime states

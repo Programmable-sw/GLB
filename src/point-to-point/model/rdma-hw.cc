@@ -25,6 +25,22 @@ namespace ns3 {
 
 NS_LOG_COMPONENT_DEFINE("RdmaHw");
 
+// ================= START: REPS 自定义 Tag =================
+class RepsTag : public Tag {
+public:
+    static TypeId GetTypeId(void) {
+        static TypeId tid = TypeId("ns3::RepsTag").SetParent<Tag>().AddConstructor<RepsTag>();
+        return tid;
+    }
+    virtual TypeId GetInstanceTypeId(void) const { return GetTypeId(); }
+    virtual uint32_t GetSerializedSize(void) const { return 2; }
+    virtual void Serialize(TagBuffer i) const { i.WriteU16(m_value); }
+    virtual void Deserialize(TagBuffer i) { m_value = i.ReadU16(); }
+    virtual void Print(std::ostream &os) const { os << "v=" << m_value; }
+    uint16_t m_value;
+};
+// ================= END: REPS 自定义 Tag =================
+
 std::unordered_map<unsigned, unsigned> acc_timeout_count;
 uint64_t RdmaHw::nAllPkts = 0;
 
@@ -299,12 +315,21 @@ void RdmaHw::DeleteRxQp(uint32_t dip, uint16_t dport, uint16_t sport, uint16_t p
 
 int RdmaHw::ReceiveUdp(Ptr<Packet> p, CustomHeader &ch) {
     uint8_t ecnbits = ch.GetIpv4EcnBits();
-
     uint32_t payload_size = p->GetSize() - ch.GetSerializedSize();
 
+    // 从 Tag 提取真实源端口
+    uint16_t original_sport = ch.udp.sport;     // 仅在修改 sport 路由的模式才修改 original_sport 获取
+    if (Settings::lb_mode == 11) {
+        RepsTag tag;
+        if (p->PeekPacketTag(tag)) {
+            original_sport = tag.m_value;
+        }
+    }
+
     // find corresponding rx queue pair
+    // 便于 udp srcport 随机变化的修改，由 tag 携带取用，用 original_sport 代替原 ch.udp.sport
     Ptr<RdmaRxQueuePair> rxQp =
-        GetRxQp(ch.dip, ch.sip, ch.udp.dport, ch.udp.sport, ch.udp.pg, true);
+        GetRxQp(ch.dip, ch.sip, ch.udp.dport, original_sport, ch.udp.pg, true);
     if (rxQp == NULL) {
         uint64_t rxKey = GetRxQpKey(ch.sip, ch.udp.sport, ch.udp.dport, ch.udp.pg);
         if (akashic_RxQp.find(rxKey) != akashic_RxQp.end()) {
@@ -340,7 +365,7 @@ int RdmaHw::ReceiveUdp(Ptr<Packet> p, CustomHeader &ch) {
         seqh.SetSeq(rxQp->ReceiverNextExpectedSeq);
         seqh.SetPG(ch.udp.pg);
         seqh.SetSport(ch.udp.dport);
-        seqh.SetDport(ch.udp.sport);
+        seqh.SetDport(original_sport); // 使用 original_sport 指代真正端口发回给 Sender
         seqh.SetIntHeader(ch.udp.ih);
 
         if (m_irn) {
@@ -403,6 +428,13 @@ int RdmaHw::ReceiveUdp(Ptr<Packet> p, CustomHeader &ch) {
 
         newp->AddHeader(head);
         AddHeader(newp, 0x800);  // Attach PPP header
+
+        // 把收到的 EV 放进 ACK 的额外 Tag 里，带回给发送端回收
+        if (Settings::lb_mode == 11) {
+            RepsTag ackTag;
+            ackTag.m_value = ch.udp.sport; // 接收到的包的源端口就是 EV
+            newp->AddPacketTag(ackTag); // Packet Tags | PPP Header | IPv4 Header | qbb Header
+        }
 
         // send
         uint32_t nic_idx = GetNicIdxOfRxQp(rxQp);
@@ -624,6 +656,20 @@ int RdmaHw::ReceiveAck(Ptr<Packet> p, CustomHeader &ch) {
     return 0;
 }
 
+int RdmaHw::ReceiveBitmap(Ptr<Packet> p, CustomHeader &ch) {
+    BitmapFeedbackTag f_tag;
+    if (p->PeekPacketTag(f_tag)) {
+        // 遍历本机所有的 QP，把属于这条流（dip 对应反馈包的 sip）的 QP 状态更新
+        for (auto &it : m_qpMap) {
+            Ptr<RdmaQueuePair> qp = it.second;
+            if (qp->dip.Get() == ch.sip) { 
+                qp->m_path_bitmap = f_tag.m_bitmap;
+            }
+        }
+    }
+    return 0;
+}
+
 size_t RdmaHw::getIrnBufferOverhead() {
     size_t overhead = 0;
     for (auto it = m_rxQpMap.begin(); it != m_rxQpMap.end(); it++) {
@@ -645,6 +691,8 @@ int RdmaHw::Receive(Ptr<Packet> p, CustomHeader &ch) {
         return ReceiveAck(p, ch);
     } else if (ch.l3Prot == 0xFC) {  // ACK
         return ReceiveAck(p, ch);
+    } else if (ch.l3Prot == 0xFA) {  // Bitmap feedback
+        return ReceiveBitmap(p, ch);
     }
     return 0;
 }
@@ -876,7 +924,37 @@ Ptr<Packet> RdmaHw::GetNxtPacket(Ptr<RdmaQueuePair> qp) {
     // add udp header
     UdpHeader udpHeader;
     udpHeader.SetDestinationPort(qp->dport);
-    udpHeader.SetSourcePort(qp->sport);
+    // sport 封装逻辑修改
+    // ================= START: REPS 发包逻辑 =================
+    if (Settings::lb_mode == 11) {
+        uint16_t ev;
+        if (qp->reps.numValid > 0 && !qp->reps.isFreezingMode) {
+            // 1. 正常模式，有优质路径
+            // 直接用数学公式算出最老的有效EV索引，彻底消灭 while 死循环
+            // 加 8 是为了防止 C++ 中出现负数取模的问题
+            uint8_t offset = (qp->reps.head - qp->reps.numValid + 8) % 8;
+            qp->reps.isValid[offset] = false;
+            qp->reps.numValid--;
+            ev = qp->reps.buffer[offset];
+        } else if (qp->reps.isFreezingMode) {
+            // 2. 冻结模式：直接循环使用 buffer 里的历史优质 EV（无视 isValid）
+            // 论文算法指出，冻结模式下直接复用并推动 head 指针
+            uint8_t offset = qp->reps.head;
+            qp->reps.head = (qp->reps.head + 1) % 8;
+            ev = qp->reps.buffer[offset];
+        } else {
+            // 3. 正常模式且无有效EV，随机探索
+            ev = rand() % 65536; 
+        }
+        udpHeader.SetSourcePort(ev);
+        // 使用 tag 传递真实源端口
+        RepsTag tag;
+        tag.m_value = qp->sport;
+        p->AddPacketTag(tag);
+    } else {
+        udpHeader.SetSourcePort(qp->sport); // 原有默认逻辑
+    }
+    // ================= END: REPS 发包逻辑 =================
     p->AddHeader(udpHeader);
     // add ipv4 header
     Ipv4Header ipHeader;
@@ -893,6 +971,33 @@ Ptr<Packet> RdmaHw::GetNxtPacket(Ptr<RdmaQueuePair> qp) {
     ppp.SetProtocol(0x0021);  // EtherToPpp(0x800), see point-to-point-net-device.cc
     p->AddHeader(ppp);
 
+    // ================= ToR 辅助发包 ====================
+    if (Settings::lb_mode == 13) {
+        // 找出所有可用的路径 (bit == 1)
+        std::vector<uint32_t> available_paths;
+        for (size_t i = 0; i < 128; ++i) { // 针对 radix=128 的拓扑，我们只用前 128 bit
+            if (qp->m_path_bitmap.test(i)) {
+                available_paths.push_back(i);
+            }
+        }
+
+        uint32_t chosen_path = 0;
+        if (!available_paths.empty()) {
+            // 随机选择或轮询
+            uint32_t rand_idx = rand() % available_paths.size();
+            chosen_path = available_paths[rand_idx];
+        } else {
+            // 降级方案：如果全 0（极其拥塞），回退到随机喷洒
+            chosen_path = rand() % 128; 
+        }
+
+        // 将选定的路径写入 Tag，类似现有的 RepsTag
+        BitmapSprayTag bitmapTag;
+        bitmapTag.SetPathId(chosen_path); 
+        p->AddPacketTag(bitmapTag);
+    }
+    // =================================================
+
     // attach Stat Tag
     uint8_t packet_pos = UINT8_MAX;
     {
@@ -905,15 +1010,21 @@ Ptr<Packet> RdmaHw::GetNxtPacket(Ptr<RdmaQueuePair> qp) {
         FlowStatTag fst;
         uint64_t size = qp->m_size;
         if (!p->PeekPacketTag(fst)) {
-            if (size < m_mtu && qp->snd_nxt + payload_size >= qp->m_size) {
+            if (size < m_mtu && seq + payload_size >= qp->m_size) {
                 fst.SetType(FlowStatTag::FLOW_START_AND_END);
-            } else if (qp->snd_nxt + payload_size >= qp->m_size) {
+            } else if (seq + payload_size >= qp->m_size) {
                 fst.SetType(FlowStatTag::FLOW_END);
-            } else if (qp->snd_nxt == 0) {
+            } else if (seq == 0) {
                 fst.SetType(FlowStatTag::FLOW_START);
             } else {
                 fst.SetType(FlowStatTag::FLOW_NOTEND);
             }
+
+            // 额外保护：如果是重传包，不计入流的启动与正常结束统计，避免干扰旁路流量监控
+            if (is_retransmission) {
+                fst.SetType(FlowStatTag::FLOW_NOTEND);
+            }
+            
             packet_pos = fst.GetType();
             fst.setInitiatedTime(Simulator::Now().GetSeconds());
             p->AddPacketTag(fst);
@@ -1411,6 +1522,29 @@ void RdmaHw::FastReactTimely(Ptr<RdmaQueuePair> qp, Ptr<Packet> p, CustomHeader 
 void RdmaHw::HandleAckDctcp(Ptr<RdmaQueuePair> qp, Ptr<Packet> p, CustomHeader &ch) {
     uint32_t ack_seq = ch.ack.seq;
     uint8_t cnp = (ch.ack.flags >> qbbHeader::FLAG_CNP) & 1;
+
+    // ================= START: REPS 回收逻辑 =================
+    if (Settings::lb_mode == 11) {
+        if (!cnp) {
+            RepsTag ackTag;
+            if (p->PeekPacketTag(ackTag)) {
+                uint16_t ev_from_ack = ackTag.m_value;
+                
+                // 论文算法 1：如果是无效位置被写入，有效数量 +1[cite: 1]
+                if (!qp->reps.isValid[qp->reps.head]) {
+                    qp->reps.numValid++;
+                }
+                qp->reps.buffer[qp->reps.head] = ev_from_ack;
+                qp->reps.isValid[qp->reps.head] = true;
+                qp->reps.head = (qp->reps.head + 1) % 8;
+
+                // 收到健康 ACK 时，解除冻结模式
+                qp->reps.isFreezingMode = false; 
+            }
+        }
+    }
+    // ================= END: REPS 回收逻辑 =================
+
     bool new_batch = false;
 
     // update alpha

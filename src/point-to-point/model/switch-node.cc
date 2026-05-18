@@ -15,6 +15,7 @@
 #include "ns3/uinteger.h"
 #include "ppp-header.h"
 #include "qbb-net-device.h"
+#include "cn-header.h"
 
 namespace ns3 {
 
@@ -80,7 +81,7 @@ uint32_t SwitchNode::DoLbFlowECMP(Ptr<const Packet> p, const CustomHeader &ch,
         buf.u32[2] = ch.tcp.sport | ((uint32_t)ch.tcp.dport << 16);
     else if (ch.l3Prot == 0x11)  // XXX RDMA traffic on UDP
         buf.u32[2] = ch.udp.sport | ((uint32_t)ch.udp.dport << 16);
-    else if (ch.l3Prot == 0xFC || ch.l3Prot == 0xFD)  // ACK or NACK
+    else if (ch.l3Prot == 0xFC || ch.l3Prot == 0xFD || ch.l3Prot == 0xFA)  // ACK or NACK or Bitmap FB
         buf.u32[2] = ch.ack.sport | ((uint32_t)ch.ack.dport << 16);
     else {
         std::cout << "[ERROR] Sw(" << m_id << ")," << PARSE_FIVE_TUPLE(ch)
@@ -178,6 +179,31 @@ uint32_t SwitchNode::DoLbGlb(Ptr<Packet> p, CustomHeader &ch, const std::vector<
     return outPort;
 }
 
+/*------------------Reps----------------*/
+uint32_t SwitchNode::DoLbReps(Ptr<const Packet> p, const CustomHeader &ch,
+                                  const std::vector<int> &nexthops) {
+    return DoLbFlowECMP(p, ch, nexthops);  // 无需修改交换机
+}
+
+/*------------------ToR Bitmap----------------*/
+uint32_t SwitchNode::DoLbBitmap(Ptr<const Packet> p, const CustomHeader &ch, const std::vector<int> &nexthops) {
+    if (m_isToR && nexthops.size() == 1) {
+        if (m_isToR_hostIP.find(ch.sip) != m_isToR_hostIP.end() &&
+            m_isToR_hostIP.find(ch.dip) != m_isToR_hostIP.end()) {
+            return nexthops[0];
+        }
+    }
+    // 读取端侧打上的下标，作为唯一熵值进行哈希
+    BitmapSprayTag tag;
+    if (p->PeekPacketTag(tag)) {
+        union { uint8_t u8[4]; uint32_t u32; } buf;
+        buf.u32 = tag.GetPathId();
+        uint32_t hashVal = EcmpHash(buf.u8, 4, m_ecmpSeed);
+        return nexthops[hashVal % nexthops.size()];
+    }
+    // 若无 BitmapSprayTag，降级为正常 ECMP
+    return DoLbFlowECMP(p, ch, nexthops);
+}
 /*----------------------------------*/
 
 void SwitchNode::CheckAndSendPfc(uint32_t inDev, uint32_t qIndex) {
@@ -218,6 +244,72 @@ void SwitchNode::CheckAndSendResume(uint32_t inDev, uint32_t qIndex) {
 // This function can only be called in switch mode
 bool SwitchNode::SwitchReceiveFromDevice(Ptr<NetDevice> device, Ptr<Packet> packet,
                                          CustomHeader &ch) {
+// 拦截 lb_mode=13 且当前为目的 ToR 的下行流量
+    if (Settings::lb_mode == 13 && m_isToR) {
+        if (m_isToR_hostIP.count(ch.dip) > 0 && m_isToR_hostIP.count(ch.sip) == 0) {
+            BitmapSprayTag tag;
+            if (packet->PeekPacketTag(tag)) {
+
+                // ===== 1. 初始化 =====
+                if (m_dtor_path_states.find(ch.sip) == m_dtor_path_states.end()) {
+                    m_dtor_path_states[ch.sip].set(); 
+                    m_dtor_total_pkt_cnt[ch.sip] = 0; // 初始化全局包计数器
+                }
+
+                uint32_t path_index = tag.GetPathId() % 256;
+                uint8_t ecn = ch.GetIpv4EcnBits(); 
+
+                // ===== 2. 状态更新与 Epoch 计数 =====
+                m_dtor_total_pkt_cnt[ch.sip]++; // 收包累加
+                
+                if (ecn != 0) {
+                    m_dtor_path_states[ch.sip].reset(path_index);
+                } else {
+                    m_dtor_path_states[ch.sip].set(path_index);
+                }
+
+                // ===== 3. Epoch 全局重置机制 =====
+                // 假设网络以 100Gbps 运行，MTU 1000B，1000个包大约是 80us 的数据量。
+                // 调整 EPOCH_THRESHOLD 改变重置周期
+                const uint32_t EPOCH_THRESHOLD = 1000; 
+                if (m_dtor_total_pkt_cnt[ch.sip] >= EPOCH_THRESHOLD) {
+                    m_dtor_path_states[ch.sip].set(); // 周期一到，直接全量置 1 刷新！
+                    m_dtor_total_pkt_cnt[ch.sip] = 0;
+                }
+
+                // ===== 4. 定时发送反馈 =====
+                if (Simulator::Now() - m_last_feedback_time[ch.sip] > MicroSeconds(20)) {
+                    m_last_feedback_time[ch.sip] = Simulator::Now();
+                    
+                    Ptr<Packet> feedback_pkt = Create<Packet>(20); 
+                    BitmapFeedbackTag f_tag;
+                    f_tag.m_bitmap = m_dtor_path_states[ch.sip];
+                    feedback_pkt->AddPacketTag(f_tag);
+
+                    CustomHeader f_ch;
+                    f_ch.sip = ch.dip; 
+                    f_ch.dip = ch.sip; 
+                    f_ch.l3Prot = 0xFA; 
+                    f_ch.ack.sport = ch.udp.dport;
+                    f_ch.ack.dport = ch.udp.sport; 
+
+                    Ipv4Header ipHeader;
+                    ipHeader.SetSource(Ipv4Address(ch.dip));
+                    ipHeader.SetDestination(Ipv4Address(ch.sip));
+                    ipHeader.SetProtocol(0xFA); 
+                    ipHeader.SetPayloadSize(feedback_pkt->GetSize());
+                    ipHeader.SetTtl(64);
+                    feedback_pkt->AddHeader(ipHeader);
+
+                    PppHeader ppp;
+                    ppp.SetProtocol(0x0021); 
+                    feedback_pkt->AddHeader(ppp);
+
+                    SendToDev(feedback_pkt, f_ch);
+                }
+            }
+        }
+    }
     SendToDev(packet, ch);
     return true;
 }
@@ -315,6 +407,10 @@ int SwitchNode::GetOutDev(Ptr<Packet> p, CustomHeader &ch) {
             return DoLbConWeave(p, ch, nexthops); /** DUMMY: Do ECMP */
         case 10:
             return DoLbGlb(p, ch, nexthops);
+        case 11:
+            return DoLbReps(p, ch, nexthops);   /* REPS, do ECMP */
+        case 13:
+            return DoLbBitmap(p, ch, nexthops);     /* Bitmap 单字段哈希 */
         default:
             std::cout << "Unknown lb_mode(" << Settings::lb_mode << ")" << std::endl;
             assert(false);
