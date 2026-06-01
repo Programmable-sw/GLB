@@ -12,9 +12,11 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 SIM = ROOT / "sim" / "datacenter" / "htsim_roce"
-OUT = Path(__file__).resolve().parent / "output" / "scenario_compare"
+EXP_DIR = Path(__file__).resolve().parent
 
-TOPOLOGIES = os.environ.get("SCENARIO_TOPOLOGIES", "1024:3,128:2")
+TOPOLOGIES = os.environ.get("SCENARIO_TOPOLOGIES")
+HEALTHY_TOPOLOGIES = os.environ.get("SCENARIO_HEALTHY_TOPOLOGIES", TOPOLOGIES or "2048:2")
+ASYM_TOPOLOGIES = os.environ.get("SCENARIO_ASYM_TOPOLOGIES", TOPOLOGIES or "1024:3")
 FLOW_SIZE_MIBS = os.environ.get("SCENARIO_FLOW_SIZE_MIBS", "4,8,16,32")
 TRAFFIC = os.environ.get("SCENARIO_TRAFFIC", "tornado")
 LINKSPEED_MBPS = int(os.environ.get("SCENARIO_LINKSPEED_MBPS", "400000"))
@@ -26,6 +28,31 @@ CC_MODE = os.environ.get("SCENARIO_CC", "dcqcn_variant")
 
 FINISH_RE = re.compile(r"Flow Roce_(\d+)_(\d+) \d+ finished at ([0-9.]+)")
 KEEP_RAW = os.environ.get("KEEP_RAW_OUTPUT") == "1"
+
+
+def topology_slug(raw):
+    parts = []
+    for nodes, tiers in parse_topologies(raw):
+        parts.append(f"{nodes}n{tiers}t")
+    return "-".join(parts)
+
+
+def flow_size_slug(raw):
+    sizes = parse_flow_sizes(raw)
+    if not sizes:
+        return "none"
+    if len(sizes) == 1:
+        return f"{sizes[0]}m"
+    return f"{min(sizes)}-{max(sizes)}m"
+
+
+def default_output_dir():
+    name = (
+        f"topo-healthy{topology_slug(HEALTHY_TOPOLOGIES)}-asym{topology_slug(ASYM_TOPOLOGIES)}"
+        f"_traffic-{TRAFFIC}_flow-{flow_size_slug(FLOW_SIZE_MIBS)}"
+        "_scene-healthy-asym3pct_schemes-ecmp-ops-reps-nmrc"
+    )
+    return EXP_DIR / "output" / name
 
 VARIANTS = [
     ("ecmp", "ecmp", []),
@@ -118,6 +145,9 @@ def parse_flow_sizes(raw):
     return [int(item.strip()) for item in raw.split(",") if item.strip()]
 
 
+OUT = Path(os.environ.get("SCENARIO_OUT", str(default_output_dir()))).resolve()
+
+
 def build_flow_builder():
     if TRAFFIC == "tornado":
         return lambda scenario: tornado_flows(scenario["nodes"], scenario["flow_size"])
@@ -131,7 +161,7 @@ def build_flow_builder():
 def build_scenarios():
     scenarios = []
     flow_builder = build_flow_builder()
-    for nodes, tiers in parse_topologies(TOPOLOGIES):
+    for nodes, tiers in parse_topologies(HEALTHY_TOPOLOGIES):
         validate_generated_fattree(nodes, tiers)
         paths = int(os.environ.get("SCENARIO_PATHS", str(nodes)))
         for size_mib in parse_flow_sizes(FLOW_SIZE_MIBS):
@@ -155,6 +185,22 @@ def build_scenarios():
                     f"{size_mib}MiB flows, all links 400Gbps."
                 ),
             })
+
+    for nodes, tiers in parse_topologies(ASYM_TOPOLOGIES):
+        validate_generated_fattree(nodes, tiers)
+        paths = int(os.environ.get("SCENARIO_PATHS", str(nodes)))
+        for size_mib in parse_flow_sizes(FLOW_SIZE_MIBS):
+            flow_size = size_mib * 1024 * 1024
+            base = {
+                "nodes": nodes,
+                "tiers": tiers,
+                "paths": paths,
+                "flow_size": flow_size,
+                "flow_size_mib": size_mib,
+                "traffic": TRAFFIC,
+                "flow_builder": flow_builder,
+                "end_us": END_US,
+            }
             scenarios.append({
                 **base,
                 "name": f"asym_tor3pct_{nodes}n_{tiers}tier_{size_mib}m",
