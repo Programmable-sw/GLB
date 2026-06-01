@@ -50,7 +50,7 @@ def default_output_dir():
     name = (
         f"topo-healthy{topology_slug(HEALTHY_TOPOLOGIES)}-asym{topology_slug(ASYM_TOPOLOGIES)}"
         f"_traffic-{TRAFFIC}_flow-{flow_size_slug(FLOW_SIZE_MIBS)}"
-        "_scene-healthy-asym3pct_schemes-ecmp-ops-reps-nmrc"
+        "_scene-healthy-asym3pct_schemes-ecmp-ops-reps-n-mrc"
     )
     return EXP_DIR / "output" / name
 
@@ -58,14 +58,14 @@ VARIANTS = [
     ("ecmp", "ecmp", []),
     ("ops", "ops", []),
     ("reps", "reps", []),
-    ("dtor", "dtor", ["-dtor_state_mode", "2bit-ecn01", "-dtor_unknown_reopen"]),
+    ("n-mrc", "n-mrc", ["-nmrc_state_mode", "2bit-ecn01", "-nmrc_unknown_reopen"]),
 ]
 
 VARIANT_DISPLAY = {
     "ecmp": "ECMP",
     "ops": "OPS",
     "reps": "REPS",
-    "dtor": "N-MRC",
+    "n-mrc": "N-MRC",
 }
 
 

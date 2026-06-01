@@ -143,19 +143,19 @@ public:
     static uint32_t _glb_max_quality;
     static simtime_picosec _glb_update_interval;
     static bool _glb_normalize_scores;
-    static uint32_t _dtor_feedback_pkts;
-    static simtime_picosec _dtor_feedback_min_interval;
-    static simtime_picosec _dtor_feedback_max_interval;
-    static uint32_t _dtor_path_count;
-    static bool _dtor_feedback_observed_values;
+    static uint32_t _nmrc_feedback_pkts;
+    static simtime_picosec _nmrc_feedback_min_interval;
+    static simtime_picosec _nmrc_feedback_max_interval;
+    static uint32_t _nmrc_path_count;
+    static bool _nmrc_feedback_observed_values;
     static bool _pathid_only_hash;
 private:
-    struct DtorState {
+    struct NmrcState {
         std::vector<uint8_t> bitmap;
         uint32_t packets;
         simtime_picosec last_feedback;
 
-        DtorState() : packets(0), last_feedback(0) {}
+        NmrcState() : packets(0), last_feedback(0) {}
     };
 
     struct GlbRemoteCache {
@@ -174,7 +174,7 @@ private:
     vector<FibEntry*>* _uproutes;
 
     unordered_map<uint32_t,FlowletInfo*> _flowlet_maps;
-    unordered_map<uint32_t,DtorState> _dtor_states;
+    unordered_map<uint32_t,NmrcState> _nmrc_states;
     unordered_map<uint32_t,uint32_t> _drill_memory;
     unordered_map<uint32_t,GlbRemoteCache> _glb_remote_cache;
 
@@ -196,7 +196,7 @@ private:
     double glb_score(FibEntry* entry, uint32_t dst, uint32_t depth);
     uint8_t glb_quality(double score);
     uint32_t pathid_ecmp_choice(Packet& pkt, uint32_t hop_count, packet_direction direction);
-    void maybe_update_dtor_feedback(Packet& pkt);
+    void maybe_update_nmrc_feedback(Packet& pkt);
 };
 
 #endif

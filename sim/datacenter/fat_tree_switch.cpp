@@ -329,11 +329,11 @@ double FatTreeSwitch::_glb_quality_bucket = 20.0;
 uint32_t FatTreeSwitch::_glb_max_quality = 7;
 simtime_picosec FatTreeSwitch::_glb_update_interval = timeFromUs(5.0);
 bool FatTreeSwitch::_glb_normalize_scores = false;
-uint32_t FatTreeSwitch::_dtor_feedback_pkts = 100;
-simtime_picosec FatTreeSwitch::_dtor_feedback_min_interval = timeFromUs(5.0);
-simtime_picosec FatTreeSwitch::_dtor_feedback_max_interval = timeFromUs(20.0);
-uint32_t FatTreeSwitch::_dtor_path_count = 1;
-bool FatTreeSwitch::_dtor_feedback_observed_values = false;
+uint32_t FatTreeSwitch::_nmrc_feedback_pkts = 100;
+simtime_picosec FatTreeSwitch::_nmrc_feedback_min_interval = timeFromUs(5.0);
+simtime_picosec FatTreeSwitch::_nmrc_feedback_max_interval = timeFromUs(20.0);
+uint32_t FatTreeSwitch::_nmrc_path_count = 1;
+bool FatTreeSwitch::_nmrc_feedback_observed_values = false;
 bool FatTreeSwitch::_pathid_only_hash = false;
 int8_t (*FatTreeSwitch::fn)(FibEntry*,FibEntry*)= &FatTreeSwitch::compare_queuesize;
 
@@ -614,7 +614,7 @@ uint32_t FatTreeSwitch::pathid_ecmp_choice(Packet& pkt, uint32_t hop_count, pack
     return pathid % hop_count;
 }
 
-void FatTreeSwitch::maybe_update_dtor_feedback(Packet& pkt) {
+void FatTreeSwitch::maybe_update_nmrc_feedback(Packet& pkt) {
     if (_type != TOR || pkt.type() != ROCE)
         return;
 
@@ -626,8 +626,8 @@ void FatTreeSwitch::maybe_update_dtor_feedback(Packet& pkt) {
     if (src_tor == _id)
         return;
 
-    DtorState& state = _dtor_states[src_tor];
-    uint32_t path_count = _dtor_path_count ? _dtor_path_count : 1;
+    NmrcState& state = _nmrc_states[src_tor];
+    uint32_t path_count = _nmrc_path_count ? _nmrc_path_count : 1;
     if (state.bitmap.size() != path_count) {
         state.bitmap.assign(path_count, 1);
         state.packets = 0;
@@ -639,16 +639,16 @@ void FatTreeSwitch::maybe_update_dtor_feedback(Packet& pkt) {
     if (ecn)
         state.bitmap[path] = 0;
     else
-        state.bitmap[path] = _dtor_feedback_observed_values ? 2 : 1;
+        state.bitmap[path] = _nmrc_feedback_observed_values ? 2 : 1;
 
     simtime_picosec now = eventlist().now();
-    bool packet_trigger = state.packets >= _dtor_feedback_pkts;
+    bool packet_trigger = state.packets >= _nmrc_feedback_pkts;
     bool time_trigger = state.packets > 0 &&
-                        now - state.last_feedback >= _dtor_feedback_max_interval;
+                        now - state.last_feedback >= _nmrc_feedback_max_interval;
 
-    bool min_elapsed = now - state.last_feedback >= _dtor_feedback_min_interval;
+    bool min_elapsed = now - state.last_feedback >= _nmrc_feedback_min_interval;
     if ((packet_trigger && min_elapsed) || time_trigger) {
-        roce->set_dtor_feedback(state.bitmap);
+        roce->set_nmrc_feedback(state.bitmap);
         state.bitmap.assign(path_count, 1);
         state.packets = 0;
         state.last_feedback = now;
@@ -749,7 +749,7 @@ Route* FatTreeSwitch::getNextHop(Packet& pkt, BaseQueue* ingress_port){
             HostFibEntry* fe = _fib->getHostRoute(pkt.dst(),pkt.flow_id());
             assert(fe);
             pkt.set_direction(DOWN);
-            maybe_update_dtor_feedback(pkt);
+            maybe_update_nmrc_feedback(pkt);
             return fe->getEgressPort();
         } else {
             //route packet up!

@@ -49,8 +49,8 @@ int DEFAULT_NODES = 432;
 EventList eventlist;
 
 void exit_error(char* progr) {
-    cout << "Usage " << progr << " [-nodes N]\n\t[-conns C]\n\t[-q queue_size]\n\t[-queue_type composite|random|lossless|lossless_input|lossless_input_ecn]\n\t[-tm traffic_matrix_file]\n\t[-lb ecmp|ecmp_rr|adaptive-routing|glb|drill|reps|dtor|spray|ops|conweave|ndp]\n\t[-cc none|dcqcn|dcqcn_variant|mprdma]\n\t[-cc_iw_pkts pkts]\n\t[-cc_min_cwnd_pkts pkts]\n\t[-cc_max_cwnd_pkts pkts]\n\t[-dcqcn_g x]\n\t[-dcqcn_initial_alpha x]\n\t[-dcqcn_ai_mbps x]\n\t[-dcqcn_min_rate_mbps x]\n\t[-dcqcn_alpha_us x]\n\t[-dcqcn_rate_us x]\n\t[-dcqcn_cnp_us x]\n\t[-dcqcn_byte_counter bytes]\n\t[-dcqcn_fast_recovery_steps N]\n\t[-strat route_strategy (single,\n\tecmp_host,ecmp_ar,\n\tecmp_host_ar ar_thresh)]\n\t[-log log_level]\n\t[-seed random_seed]\n\t[-end end_time_in_usec]\n\t[-mtu MTU] default 4096\n\t[-linkspeed Mbps] default 400000\n\t[-hop_latency x] per hop wire latency in us, default 0.5\n\t[-switch_latency x] switching latency in us, default 0.5\n\t[-start_delta] time in us to randomly delay the start of connections\n\t[-slow_core_downlinks N]\n\t[-slow_core_downlink_divisor N]\n\t[-slow_tor_uplinks N]\n\t[-slow_tor_uplink_divisor N]\n\t[-dtor_bad_hold_down_us x]\n\t[-dtor_state_mode binary|2bit-observed|2bit-ecn01]\n\t[-dtor_weak_sample_pkts N]\n\t[-dtor_ecn_degrade aggressive|graded]\n\t[-glb_update_us x]\n\t[-glb_weights q_weight util_weight remote_busy_weight]\n\t[-glb_factors local_q local_util remote_q remote_util remote_busy]\n\t[-glb_normalize]\n\t[-glb_downstream_weight x]\n\t[-glb_quality_bucket x]\n\t[-conweave_rtt_us x]\n\t[-ndp_cwnd pkts]\n\t[-pfc_thresholds low high]" << endl;
-    cout << "\t[-dtor_unknown_reopen]" << endl;
+    cout << "Usage " << progr << " [-nodes N]\n\t[-conns C]\n\t[-q queue_size]\n\t[-queue_type composite|random|lossless|lossless_input|lossless_input_ecn]\n\t[-tm traffic_matrix_file]\n\t[-lb ecmp|ecmp_rr|adaptive-routing|glb|drill|reps|n-mrc|spray|ops|conweave|ndp]\n\t[-cc none|dcqcn|dcqcn_variant|mprdma]\n\t[-cc_iw_pkts pkts]\n\t[-cc_min_cwnd_pkts pkts]\n\t[-cc_max_cwnd_pkts pkts]\n\t[-dcqcn_g x]\n\t[-dcqcn_initial_alpha x]\n\t[-dcqcn_ai_mbps x]\n\t[-dcqcn_min_rate_mbps x]\n\t[-dcqcn_alpha_us x]\n\t[-dcqcn_rate_us x]\n\t[-dcqcn_cnp_us x]\n\t[-dcqcn_byte_counter bytes]\n\t[-dcqcn_fast_recovery_steps N]\n\t[-strat route_strategy (single,\n\tecmp_host,ecmp_ar,\n\tecmp_host_ar ar_thresh)]\n\t[-log log_level]\n\t[-seed random_seed]\n\t[-end end_time_in_usec]\n\t[-mtu MTU] default 4096\n\t[-linkspeed Mbps] default 400000\n\t[-hop_latency x] per hop wire latency in us, default 0.5\n\t[-switch_latency x] switching latency in us, default 0.5\n\t[-start_delta] time in us to randomly delay the start of connections\n\t[-slow_core_downlinks N]\n\t[-slow_core_downlink_divisor N]\n\t[-slow_tor_uplinks N]\n\t[-slow_tor_uplink_divisor N]\n\t[-nmrc_bad_hold_down_us x]\n\t[-nmrc_state_mode binary|2bit-observed|2bit-ecn01]\n\t[-nmrc_weak_sample_pkts N]\n\t[-nmrc_ecn_degrade aggressive|graded]\n\t[-glb_update_us x]\n\t[-glb_weights q_weight util_weight remote_busy_weight]\n\t[-glb_factors local_q local_util remote_q remote_util remote_busy]\n\t[-glb_normalize]\n\t[-glb_downstream_weight x]\n\t[-glb_quality_bucket x]\n\t[-conweave_rtt_us x]\n\t[-ndp_cwnd pkts]\n\t[-pfc_thresholds low high]" << endl;
+    cout << "\t[-nmrc_unknown_reopen]" << endl;
     exit(1);
 }
 
@@ -87,13 +87,13 @@ int main(int argc, char **argv) {
     uint32_t slow_core_downlink_divisor = 10;
     uint32_t slow_tor_uplinks = 0;
     uint32_t slow_tor_uplink_divisor = 2;
-    double dtor_bad_hold_down_us = 0.0;
-    uint32_t dtor_state_mode = 0;
-    uint32_t dtor_weak_sample_pkts = 0;
-    uint32_t dtor_ecn_degrade_mode = 0;
-    bool dtor_unknown_reopen = false;
-    double dtor_feedback_min_us = 5.0;
-    double dtor_feedback_max_us = 20.0;
+    double nmrc_bad_hold_down_us = 0.0;
+    uint32_t nmrc_state_mode = 0;
+    uint32_t nmrc_weak_sample_pkts = 0;
+    uint32_t nmrc_ecn_degrade_mode = 0;
+    bool nmrc_unknown_reopen = false;
+    double nmrc_feedback_min_us = 5.0;
+    double nmrc_feedback_max_us = 20.0;
 
     bool log_sink = false;
     bool log_tor_downqueue = false;
@@ -224,10 +224,10 @@ int main(int argc, char **argv) {
                 route_strategy = ECMP_FIB;
                 FatTreeSwitch::set_strategy(FatTreeSwitch::ECMP);
                 roce_lb_mode = RoceSrc::LB_REPS;
-            } else if (!strcmp(argv[i+1], "dtor")) {
+            } else if (!strcmp(argv[i+1], "n-mrc")) {
                 route_strategy = ECMP_FIB;
                 FatTreeSwitch::set_strategy(FatTreeSwitch::ECMP);
-                roce_lb_mode = RoceSrc::LB_DTOR;
+                roce_lb_mode = RoceSrc::LB_NMRC;
             } else if (!strcmp(argv[i+1], "spray")) {
                 route_strategy = ECMP_FIB;
                 FatTreeSwitch::set_strategy(FatTreeSwitch::ECMP);
@@ -479,80 +479,80 @@ int main(int argc, char **argv) {
                 FatTreeSwitch::_glb_quality_bucket = 1.0;
             cout << "GLB quality bucket " << FatTreeSwitch::_glb_quality_bucket << endl;
             i++;
-        } else if (!strcmp(argv[i],"-dtor_feedback_pkts")){
-            cout << "dToR feedback packet threshold is canonical auto(path_count); ignoring deprecated value " << argv[i+1] << endl;
+        } else if (!strcmp(argv[i],"-nmrc_feedback_pkts")){
+            cout << "N-MRC feedback packet threshold is canonical auto(path_count); ignoring deprecated value " << argv[i+1] << endl;
             i++;
-        } else if (!strcmp(argv[i],"-dtor_feedback_hot_path_pkts")){
-            cout << "dToR hot-path feedback threshold is disabled; ignoring deprecated value " << argv[i+1] << endl;
+        } else if (!strcmp(argv[i],"-nmrc_feedback_hot_path_pkts")){
+            cout << "N-MRC hot-path feedback threshold is disabled; ignoring deprecated value " << argv[i+1] << endl;
             i++;
-        } else if (!strcmp(argv[i],"-dtor_feedback_min_us")){
-            dtor_feedback_min_us = atof(argv[i+1]);
-            if (dtor_feedback_min_us < 0)
-                dtor_feedback_min_us = 0;
-            cout << "dToR minimum feedback interval " << dtor_feedback_min_us << "us" << endl;
+        } else if (!strcmp(argv[i],"-nmrc_feedback_min_us")){
+            nmrc_feedback_min_us = atof(argv[i+1]);
+            if (nmrc_feedback_min_us < 0)
+                nmrc_feedback_min_us = 0;
+            cout << "N-MRC minimum feedback interval " << nmrc_feedback_min_us << "us" << endl;
             i++;
-        } else if (!strcmp(argv[i],"-dtor_feedback_max_us")){
-            dtor_feedback_max_us = atof(argv[i+1]);
-            if (dtor_feedback_max_us < 0)
-                dtor_feedback_max_us = 0;
-            cout << "dToR maximum feedback interval " << dtor_feedback_max_us << "us" << endl;
+        } else if (!strcmp(argv[i],"-nmrc_feedback_max_us")){
+            nmrc_feedback_max_us = atof(argv[i+1]);
+            if (nmrc_feedback_max_us < 0)
+                nmrc_feedback_max_us = 0;
+            cout << "N-MRC maximum feedback interval " << nmrc_feedback_max_us << "us" << endl;
             i++;
-        } else if (!strcmp(argv[i],"-dtor_min_good_paths")){
-            cout << "dToR minimum confirmed good paths is canonical min(16,path_count/2); ignoring deprecated value " << argv[i+1] << endl;
+        } else if (!strcmp(argv[i],"-nmrc_min_good_paths")){
+            cout << "N-MRC minimum confirmed good paths is canonical min(16,path_count/2); ignoring deprecated value " << argv[i+1] << endl;
             i++;
-        } else if (!strcmp(argv[i],"-dtor_bad_hold_down_us")){
-            dtor_bad_hold_down_us = atof(argv[i+1]);
-            if (dtor_bad_hold_down_us < 0)
-                dtor_bad_hold_down_us = 0;
-            cout << "dToR bad path keeping window " << dtor_bad_hold_down_us << "us" << endl;
+        } else if (!strcmp(argv[i],"-nmrc_bad_hold_down_us")){
+            nmrc_bad_hold_down_us = atof(argv[i+1]);
+            if (nmrc_bad_hold_down_us < 0)
+                nmrc_bad_hold_down_us = 0;
+            cout << "N-MRC bad path keeping window " << nmrc_bad_hold_down_us << "us" << endl;
             i++;
-        } else if (!strcmp(argv[i],"-dtor_state_mode")){
+        } else if (!strcmp(argv[i],"-nmrc_state_mode")){
             if (!strcmp(argv[i+1], "binary"))
-                dtor_state_mode = 0;
+                nmrc_state_mode = 0;
             else if (!strcmp(argv[i+1], "2bit-observed"))
-                dtor_state_mode = 1;
+                nmrc_state_mode = 1;
             else if (!strcmp(argv[i+1], "2bit-ecn01"))
-                dtor_state_mode = 2;
+                nmrc_state_mode = 2;
             else {
-                cout << "Unknown dToR state mode " << argv[i+1] << endl;
+                cout << "Unknown N-MRC state mode " << argv[i+1] << endl;
                 exit_error(argv[0]);
             }
-            cout << "dToR endpoint state mode " << argv[i+1] << endl;
+            cout << "N-MRC endpoint state mode " << argv[i+1] << endl;
             i++;
-        } else if (!strcmp(argv[i],"-dtor_weak_sample_pkts")){
-            dtor_weak_sample_pkts = atoi(argv[i+1]);
-            cout << "dToR weak path sampling interval " << dtor_weak_sample_pkts << " packets" << endl;
+        } else if (!strcmp(argv[i],"-nmrc_weak_sample_pkts")){
+            nmrc_weak_sample_pkts = atoi(argv[i+1]);
+            cout << "N-MRC weak path sampling interval " << nmrc_weak_sample_pkts << " packets" << endl;
             i++;
-        } else if (!strcmp(argv[i],"-dtor_ecn_degrade")){
+        } else if (!strcmp(argv[i],"-nmrc_ecn_degrade")){
             if (!strcmp(argv[i+1], "aggressive"))
-                dtor_ecn_degrade_mode = 0;
+                nmrc_ecn_degrade_mode = 0;
             else if (!strcmp(argv[i+1], "graded"))
-                dtor_ecn_degrade_mode = 1;
+                nmrc_ecn_degrade_mode = 1;
             else {
-                cout << "Unknown dToR ECN degrade mode " << argv[i+1] << endl;
+                cout << "Unknown N-MRC ECN degrade mode " << argv[i+1] << endl;
                 exit_error(argv[0]);
             }
-            cout << "dToR ECN degrade mode " << argv[i+1] << endl;
+            cout << "N-MRC ECN degrade mode " << argv[i+1] << endl;
             i++;
-        } else if (!strcmp(argv[i],"-dtor_unknown_reopen")){
-            dtor_unknown_reopen = true;
-            cout << "dToR unknown low-state reopen enabled" << endl;
-        } else if (!strcmp(argv[i],"-dtor_select")){
+        } else if (!strcmp(argv[i],"-nmrc_unknown_reopen")){
+            nmrc_unknown_reopen = true;
+            cout << "N-MRC unknown low-state reopen enabled" << endl;
+        } else if (!strcmp(argv[i],"-nmrc_select")){
             if (strcmp(argv[i+1], "random") && strcmp(argv[i+1], "rr")) {
-                cout << "Unknown dToR select mode " << argv[i+1] << endl;
+                cout << "Unknown N-MRC select mode " << argv[i+1] << endl;
                 exit_error(argv[0]);
             }
-            cout << "dToR select mode is canonical rr; ignoring deprecated value " << argv[i+1] << endl;
+            cout << "N-MRC select mode is canonical rr; ignoring deprecated value " << argv[i+1] << endl;
             i++;
-        } else if (!strcmp(argv[i],"-dtor_ack_update")){
-            cout << "dToR per-ACK path update is disabled in canonical mode; ignoring deprecated value " << argv[i+1] << endl;
+        } else if (!strcmp(argv[i],"-nmrc_ack_update")){
+            cout << "N-MRC per-ACK path update is disabled in canonical mode; ignoring deprecated value " << argv[i+1] << endl;
             i++;
-        } else if (!strcmp(argv[i],"-dtor_path_hash")){
+        } else if (!strcmp(argv[i],"-nmrc_path_hash")){
             if (strcmp(argv[i+1], "hash") && strcmp(argv[i+1], "direct") && strcmp(argv[i+1], "tier")) {
-                cout << "Unknown dToR path hash mode " << argv[i+1] << endl;
+                cout << "Unknown N-MRC path hash mode " << argv[i+1] << endl;
                 exit_error(argv[0]);
             }
-            cout << "dToR path hash is canonical tier EV mapping; ignoring deprecated value " << argv[i+1] << endl;
+            cout << "N-MRC path hash is canonical tier EV mapping; ignoring deprecated value " << argv[i+1] << endl;
             i++;
         }
          else if (!strcmp(argv[i],"-pfc_thresholds")){
@@ -641,14 +641,14 @@ int main(int argc, char **argv) {
     cout << "Parsed args\n";
     Packet::set_packet_size(packet_size);
 
-    if (dtor_feedback_max_us < dtor_feedback_min_us)
-        dtor_feedback_max_us = dtor_feedback_min_us;
+    if (nmrc_feedback_max_us < nmrc_feedback_min_us)
+        nmrc_feedback_max_us = nmrc_feedback_min_us;
 
     FatTreeSwitch::_ar_sticky = ar_granularity;
     FatTreeSwitch::_sticky_delta = timeFromUs(ar_sticky_delta);
-    FatTreeSwitch::_dtor_feedback_min_interval = timeFromUs(dtor_feedback_min_us);
-    FatTreeSwitch::_dtor_feedback_max_interval = timeFromUs(dtor_feedback_max_us);
-    bool source_pathid_lb = (roce_lb_mode == RoceSrc::LB_DTOR ||
+    FatTreeSwitch::_nmrc_feedback_min_interval = timeFromUs(nmrc_feedback_min_us);
+    FatTreeSwitch::_nmrc_feedback_max_interval = timeFromUs(nmrc_feedback_max_us);
+    bool source_pathid_lb = (roce_lb_mode == RoceSrc::LB_NMRC ||
                              roce_lb_mode == RoceSrc::LB_SPRAY ||
                              roce_lb_mode == RoceSrc::LB_CONWEAVE ||
                              roce_lb_mode == RoceSrc::LB_NDP);
@@ -791,41 +791,41 @@ int main(int argc, char **argv) {
             RoceSrc::setPathEntropySize(path_entropy_size);
         }
     }
-    RoceSrc::setDtorHostsPerTor(top->radix_down(TOR_TIER));
+    RoceSrc::setNmrcHostsPerTor(top->radix_down(TOR_TIER));
 
-    uint32_t dtor_path_space = path_entropy_size ? path_entropy_size : 1;
-    FatTreeSwitch::_dtor_path_count = dtor_path_space;
-    uint32_t auto_dtor_feedback_pkts = dtor_path_space / 2;
-    if (auto_dtor_feedback_pkts < 32)
-        auto_dtor_feedback_pkts = 32;
-    if (auto_dtor_feedback_pkts > 128)
-        auto_dtor_feedback_pkts = 128;
+    uint32_t nmrc_path_space = path_entropy_size ? path_entropy_size : 1;
+    FatTreeSwitch::_nmrc_path_count = nmrc_path_space;
+    uint32_t auto_nmrc_feedback_pkts = nmrc_path_space / 2;
+    if (auto_nmrc_feedback_pkts < 32)
+        auto_nmrc_feedback_pkts = 32;
+    if (auto_nmrc_feedback_pkts > 128)
+        auto_nmrc_feedback_pkts = 128;
 
-    FatTreeSwitch::_dtor_feedback_pkts = auto_dtor_feedback_pkts;
-    FatTreeSwitch::_dtor_feedback_observed_values = dtor_state_mode == 1 || dtor_state_mode == 2;
-    uint32_t effective_dtor_min_good_paths = dtor_path_space / 2;
-    if (effective_dtor_min_good_paths < 1)
-        effective_dtor_min_good_paths = 1;
-    if (effective_dtor_min_good_paths > 16)
-        effective_dtor_min_good_paths = 16;
-    if (roce_lb_mode == RoceSrc::LB_DTOR) {
-        cout << "dToR canonical: paths " << dtor_path_space
-             << ", feedback_pkts " << FatTreeSwitch::_dtor_feedback_pkts
-             << ", min_interval_us " << dtor_feedback_min_us
-             << ", max_interval_us " << dtor_feedback_max_us
-             << ", min_good_paths " << effective_dtor_min_good_paths
-             << ", bad_hold_down_us " << dtor_bad_hold_down_us
-             << ", state_mode " << dtor_state_mode
-             << ", weak_sample_pkts " << dtor_weak_sample_pkts
-             << ", ecn_degrade_mode " << dtor_ecn_degrade_mode
-             << ", unknown_reopen " << dtor_unknown_reopen << endl;
+    FatTreeSwitch::_nmrc_feedback_pkts = auto_nmrc_feedback_pkts;
+    FatTreeSwitch::_nmrc_feedback_observed_values = nmrc_state_mode == 1 || nmrc_state_mode == 2;
+    uint32_t effective_nmrc_min_good_paths = nmrc_path_space / 2;
+    if (effective_nmrc_min_good_paths < 1)
+        effective_nmrc_min_good_paths = 1;
+    if (effective_nmrc_min_good_paths > 16)
+        effective_nmrc_min_good_paths = 16;
+    if (roce_lb_mode == RoceSrc::LB_NMRC) {
+        cout << "N-MRC canonical: paths " << nmrc_path_space
+             << ", feedback_pkts " << FatTreeSwitch::_nmrc_feedback_pkts
+             << ", min_interval_us " << nmrc_feedback_min_us
+             << ", max_interval_us " << nmrc_feedback_max_us
+             << ", min_good_paths " << effective_nmrc_min_good_paths
+             << ", bad_hold_down_us " << nmrc_bad_hold_down_us
+             << ", state_mode " << nmrc_state_mode
+             << ", weak_sample_pkts " << nmrc_weak_sample_pkts
+             << ", ecn_degrade_mode " << nmrc_ecn_degrade_mode
+             << ", unknown_reopen " << nmrc_unknown_reopen << endl;
     }
-    RoceSrc::setDtorMinGoodPaths(effective_dtor_min_good_paths);
-    RoceSrc::setDtorBadHoldDown(timeFromUs(dtor_bad_hold_down_us));
-    RoceSrc::setDtorStateMode(dtor_state_mode);
-    RoceSrc::setDtorWeakSamplePkts(dtor_weak_sample_pkts);
-    RoceSrc::setDtorEcnDegradeMode(dtor_ecn_degrade_mode);
-    RoceSrc::setDtorUnknownReopen(dtor_unknown_reopen);
+    RoceSrc::setNmrcMinGoodPaths(effective_nmrc_min_good_paths);
+    RoceSrc::setNmrcBadHoldDown(timeFromUs(nmrc_bad_hold_down_us));
+    RoceSrc::setNmrcStateMode(nmrc_state_mode);
+    RoceSrc::setNmrcWeakSamplePkts(nmrc_weak_sample_pkts);
+    RoceSrc::setNmrcEcnDegradeMode(nmrc_ecn_degrade_mode);
+    RoceSrc::setNmrcUnknownReopen(nmrc_unknown_reopen);
     RoceSrc::setPathEntropySize(path_entropy_size);
 
     vector<const Route*>*** net_paths;

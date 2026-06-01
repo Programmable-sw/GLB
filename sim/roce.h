@@ -34,7 +34,7 @@ class Switch;
 class RoceSrc : public BaseQueue, public TriggerTarget {
     friend class RoceSink;
 public:
-    typedef enum {LB_ECMP = 0, LB_REPS = 1, LB_DTOR = 2, LB_CONWEAVE = 3, LB_NDP = 4, LB_SPRAY = 5, LB_OPS = 6} lb_mode_t;
+    typedef enum {LB_ECMP = 0, LB_REPS = 1, LB_NMRC = 2, LB_CONWEAVE = 3, LB_NDP = 4, LB_SPRAY = 5, LB_OPS = 6} lb_mode_t;
     typedef enum {CC_NONE = 0, CC_DCQCN_VARIANT = 1, CC_MPRDMA = 1, CC_DCQCN = 2} cc_mode_t;
 
     RoceSrc(RoceLogger* logger, TrafficLogger* pktlogger, EventList &eventlist, linkspeed_bps rate);
@@ -54,13 +54,13 @@ public:
     static void setLoadBalancing(lb_mode_t mode) {_lb_mode = mode;}
     static void setPathEntropySize(uint32_t paths) {_path_entropy_size = paths ? paths : 1;}
     static void setRepsBufferSize(uint32_t size) {_reps_buffer_size = size ? size : 1;}
-    static void setDtorMinGoodPaths(uint32_t paths) {_dtor_min_good_paths = paths ? paths : 1;}
-    static void setDtorHostsPerTor(uint32_t hosts) {_dtor_hosts_per_tor = hosts ? hosts : 1;}
-    static void setDtorBadHoldDown(simtime_picosec hold_down) {_dtor_bad_hold_down = hold_down;}
-    static void setDtorStateMode(uint32_t mode) {_dtor_state_mode = mode;}
-    static void setDtorWeakSamplePkts(uint32_t pkts) {_dtor_weak_sample_pkts = pkts;}
-    static void setDtorEcnDegradeMode(uint32_t mode) {_dtor_ecn_degrade_mode = mode;}
-    static void setDtorUnknownReopen(bool enable) {_dtor_unknown_reopen = enable;}
+    static void setNmrcMinGoodPaths(uint32_t paths) {_nmrc_min_good_paths = paths ? paths : 1;}
+    static void setNmrcHostsPerTor(uint32_t hosts) {_nmrc_hosts_per_tor = hosts ? hosts : 1;}
+    static void setNmrcBadHoldDown(simtime_picosec hold_down) {_nmrc_bad_hold_down = hold_down;}
+    static void setNmrcStateMode(uint32_t mode) {_nmrc_state_mode = mode;}
+    static void setNmrcWeakSamplePkts(uint32_t pkts) {_nmrc_weak_sample_pkts = pkts;}
+    static void setNmrcEcnDegradeMode(uint32_t mode) {_nmrc_ecn_degrade_mode = mode;}
+    static void setNmrcUnknownReopen(bool enable) {_nmrc_unknown_reopen = enable;}
     static void setConweaveRttThreshold(simtime_picosec threshold) {_conweave_rtt_threshold = threshold;}
     static void setConweaveMinRerouteGap(simtime_picosec gap) {_conweave_min_reroute_gap = gap;}
     static void setNdpInitialWindow(uint32_t pkts) {_ndp_initial_window = pkts ? pkts : 1;}
@@ -152,13 +152,13 @@ public:
     static lb_mode_t _lb_mode;
     static uint32_t _path_entropy_size;
     static uint32_t _reps_buffer_size;
-    static uint32_t _dtor_min_good_paths;
-    static uint32_t _dtor_hosts_per_tor;
-    static simtime_picosec _dtor_bad_hold_down;
-    static uint32_t _dtor_state_mode;
-    static uint32_t _dtor_weak_sample_pkts;
-    static uint32_t _dtor_ecn_degrade_mode;
-    static bool _dtor_unknown_reopen;
+    static uint32_t _nmrc_min_good_paths;
+    static uint32_t _nmrc_hosts_per_tor;
+    static simtime_picosec _nmrc_bad_hold_down;
+    static uint32_t _nmrc_state_mode;
+    static uint32_t _nmrc_weak_sample_pkts;
+    static uint32_t _nmrc_ecn_degrade_mode;
+    static bool _nmrc_unknown_reopen;
     static simtime_picosec _conweave_rtt_threshold;
     static simtime_picosec _conweave_min_reroute_gap;
     static uint32_t _ndp_initial_window;
@@ -227,13 +227,13 @@ private:
     uint32_t choose_path(Packet::PktPriority priority);
     void update_reps(const RoceAck& ack);
     void update_conweave(const RoceAck& ack, simtime_picosec rtt);
-    void update_dtor(const RoceAck& ack);
-    void init_dtor_priority(Packet::PktPriority priority, uint32_t path_space);
-    void ensure_dtor_bitmap(uint32_t path_space);
-    void load_dtor_shared_bitmap(uint32_t path_space);
-    void store_dtor_shared_bitmap();
-    std::pair<uint32_t, uint32_t> dtor_cache_key() const;
-    void release_dtor_hold_if_expired(uint32_t path_space);
+    void update_nmrc(const RoceAck& ack);
+    void init_nmrc_priority(Packet::PktPriority priority, uint32_t path_space);
+    void ensure_nmrc_bitmap(uint32_t path_space);
+    void load_nmrc_shared_bitmap(uint32_t path_space);
+    void store_nmrc_shared_bitmap();
+    std::pair<uint32_t, uint32_t> nmrc_cache_key() const;
+    void release_nmrc_hold_if_expired(uint32_t path_space);
     void init_ndp_paths(uint32_t path_space);
     uint32_t choose_ndp_path(uint32_t path_space);
     void grant_ndp_credit(uint32_t credits = 1);
@@ -249,18 +249,18 @@ private:
     std::vector<RepsBufferEntry> _reps_buffer;
     uint32_t _reps_head;
     uint32_t _reps_valid_count;
-    static std::map<std::pair<uint32_t, uint32_t>, DtorBitmap> _dtor_shared_bitmaps;
-    static std::map<std::pair<uint32_t, uint32_t>, simtime_picosec> _dtor_shared_hold_until;
-    DtorBitmap _dtor_path_bitmap;
-    simtime_picosec _dtor_hold_until;
+    static std::map<std::pair<uint32_t, uint32_t>, NmrcBitmap> _nmrc_shared_bitmaps;
+    static std::map<std::pair<uint32_t, uint32_t>, simtime_picosec> _nmrc_shared_hold_until;
+    NmrcBitmap _nmrc_path_bitmap;
+    simtime_picosec _nmrc_hold_until;
     std::vector<uint32_t> _ndp_path_ids;
     uint32_t _ndp_cursor;
     uint32_t _ndp_pull_credit;
     bool _ndp_paths_ready;
     simtime_picosec _conweave_last_reroute;
-    std::array<uint32_t, 3> _dtor_cursor;
-    std::array<uint32_t, 3> _dtor_stride;
-    std::array<bool, 3> _dtor_cursor_ready;
+    std::array<uint32_t, 3> _nmrc_cursor;
+    std::array<uint32_t, 3> _nmrc_stride;
+    std::array<bool, 3> _nmrc_cursor_ready;
 };
 
 class RoceSink : public PacketSink, public DataReceiver {

@@ -5,7 +5,7 @@
 - 健康网络：2048 nodes / 2-tier leaf-spine。
 - 非对称带宽：1024 nodes / 3-tier fat-tree，3% ToR 上行链路带宽减半。
 
-当前主线方案为 `ecmp`、`ops`、`reps`、`N-MRC`，统一使用 `DCQCN_variant`。注意：N-MRC 在模拟器 CLI 和代码路径中仍复用历史名称 `dtor`。
+当前主线对比方案为 `ecmp`、`ops`、`reps`、`N-MRC` 四个；四个方案统一使用 `DCQCN_variant`。文档、图表、结果和推荐 CLI 统一使用 `N-MRC` 作为方案名称；直接调用 htsim 时使用 `-lb n-mrc -nmrc_state_mode 2bit-ecn01 -nmrc_unknown_reopen`。
 
 ## 仿真器信息
 
@@ -17,7 +17,7 @@
 
 该版本的核心改动：
 
-- 增加/整理 N-MRC，即 CLI `-lb dtor -dtor_state_mode 2bit-ecn01 -dtor_unknown_reopen`。
+- 增加/整理 N-MRC；直接调用仿真器时使用 `-lb n-mrc -nmrc_state_mode 2bit-ecn01 -nmrc_unknown_reopen` 启用。
 - N-MRC 使用 ToR-pair 共享 2-bit EV/path bitmap，支持 ECN soft-degrade、observed-clean 恢复和 unknown-low-state reopen。
 - source-controlled pathid 模式使用 tier EV mapping：交换机在每个 ECMP stage 从 EV 中截取对应段并对本级 ECMP 组取模。
 - N-MRC 的 path space、feedback packet 阈值和 `min_good_paths` 按拓扑自动校准。
@@ -31,8 +31,8 @@
 | `ecmp` | `-lb ecmp` | 基线 | 端侧使用固定 pathid；交换机按 `flow_id + pathid` 做 ECMP 哈希。 |
 | `ops` | `-lb ops` | 逐包基线 | 源端逐包随机选择 EV/pathid；交换机仍按 ECMP 组转发。 |
 | `reps` | `-lb reps` | 端侧反馈对照 | ACK 携带上一跳未 ECN 的 pathid；源端优先复用近期 clean EV，buffer 为空时随机。 |
-| `N-MRC` | `-lb dtor -dtor_state_mode 2bit-ecn01 -dtor_unknown_reopen` | 主推方案 | 端侧按 ToR-pair 共享逐 EV 的 2-bit 状态。优先在 `11` 状态路径中轮询；ECN 将路径降到 `01`；observed-clean 才逐步升到 `11`；unknown feedback 只把低状态温和复开到最高 `10`。 |
-| `N-MRC(1bit+hold)` | `-lb dtor -dtor_bad_hold_down_us 60` | 保留对照 | 原二值 bitmap 方案，加 ToR-pair 级 60us bad hold-down，避免 bad feedback 后过早 reset。 |
+| `N-MRC` | `-lb n-mrc -nmrc_state_mode 2bit-ecn01 -nmrc_unknown_reopen` | 主推方案 | 端侧按 ToR-pair 共享逐 EV 的 2-bit 状态。优先在 `11` 状态路径中轮询；ECN 将路径降到 `01`；observed-clean 才逐步升到 `11`；unknown feedback 只把低状态温和复开到最高 `10`。 |
+| `N-MRC(1bit+hold)` | `-lb n-mrc -nmrc_bad_hold_down_us 60` | 保留对照 | 原二值 bitmap 方案，加 ToR-pair 级 60us bad hold-down，避免 bad feedback 后过早 reset。 |
 | `conweave` | `-lb conweave` | 简化对照 | 当前仓库里是 RTT-threshold reroute 的 ConWeave-like 逻辑，不包含论文版 VOQ 保序缓冲。 |
 | `adaptive-routing` | `-lb adaptive-routing -ar_granularity packet -ar_method queue` | 交换机本地对照 | Broadcom/csg-htsim 原有本地拥塞自适应选路。 |
 | `drill` | `-lb drill` | 交换机本地对照 | 交换机保留历史候选端口，并结合随机候选按本地拥塞 metric 选择。 |
@@ -163,7 +163,7 @@ python3 experiments/n-mrc/run_literature_metric_compare.py
 默认输出目录：
 
 ```text
-experiments/n-mrc/output/topo-healthy2048n2t-asym1024n3t_traffic-tornado_flow-4-32m_scene-healthy-asym3pct_schemes-ecmp-ops-reps-nmrc/
+experiments/n-mrc/output/topo-healthy2048n2t-asym1024n3t_traffic-tornado_flow-4-32m_scene-healthy-asym3pct_schemes-ecmp-ops-reps-n-mrc/
 ```
 
 只跑 8MiB 快速检查：

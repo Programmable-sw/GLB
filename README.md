@@ -1,11 +1,11 @@
 # N-MRC on htsim
 
-本仓库基于 Broadcom `csg-htsim`，用于在 RoCE over generated fat-tree 拓扑中评估 N-MRC 及若干负载均衡方案。当前主线实验对比 `ECMP`、`OPS`、`REPS`、`N-MRC`，统一使用 `DCQCN_variant` 拥塞控制。
+本仓库基于 Broadcom `csg-htsim`，用于在 RoCE over generated fat-tree 拓扑中评估 N-MRC 及若干负载均衡方案。当前主线实验对比 `ECMP`、`OPS`、`REPS`、`N-MRC` 四个方案；四个方案统一使用 `DCQCN_variant` 拥塞控制。
 
-N-MRC 在代码和 CLI 中仍复用历史名称 `dtor`。主推配置为：
+文档、图表、结果和推荐 CLI 统一使用 `N-MRC` 作为方案名称。直接调用 htsim 时，使用：
 
 ```bash
--lb dtor -dtor_state_mode 2bit-ecn01 -dtor_unknown_reopen
+-lb n-mrc -nmrc_state_mode 2bit-ecn01 -nmrc_unknown_reopen
 ```
 
 ## 仓库内容
@@ -21,7 +21,7 @@ N-MRC 在代码和 CLI 中仍复用历史名称 `dtor`。主推配置为：
 
 相对原始 `csg-htsim`，本分支主要增加和整理了以下能力：
 
-- 增加 N-MRC 端侧选路逻辑，即 `-lb dtor`。
+- 增加 N-MRC 端侧选路逻辑；直接调用仿真器时使用 `-lb n-mrc -nmrc_state_mode 2bit-ecn01 -nmrc_unknown_reopen` 启用。
 - N-MRC 使用 ToR-pair 共享 2-bit EV/path bitmap，不维护 per-flow/per-QP 大路径表。
 - 支持 ECN soft-degrade：ECN bad feedback 将路径降为 `01`，observed-clean 逐步恢复到 `11`。
 - 支持 unknown-low-state reopen：unknown feedback 可把低状态路径温和复开到最高 `10`，不会直接升到 strong-good。
@@ -37,7 +37,7 @@ N-MRC 在代码和 CLI 中仍复用历史名称 `dtor`。主推配置为：
 | ECMP | `-lb ecmp` | 端侧固定 pathid，交换机按 `flow_id + pathid` 做 ECMP 哈希。 |
 | OPS | `-lb ops` | 源端逐包随机选择 EV/pathid。 |
 | REPS | `-lb reps` | ACK 携带 clean pathid，源端优先复用近期 clean EV。 |
-| N-MRC | `-lb dtor -dtor_state_mode 2bit-ecn01 -dtor_unknown_reopen` | ToR-pair 共享 2-bit EV 状态，按状态优先级逐包选路。 |
+| N-MRC | `-lb n-mrc -nmrc_state_mode 2bit-ecn01 -nmrc_unknown_reopen` | ToR-pair 共享 2-bit EV 状态，按状态优先级逐包选路。 |
 | ConWeave-like | `-lb conweave` | 当前仓库中的简化 RTT-threshold reroute 版本，不包含论文版 VOQ 保序缓冲。 |
 | Adaptive Routing | `-lb adaptive-routing` | 交换机本地拥塞自适应选路。 |
 | DRILL | `-lb drill` | 交换机本地随机候选 + 历史候选的拥塞感知选路。 |
@@ -127,7 +127,7 @@ python3 experiments/n-mrc/run_literature_metric_compare.py
 默认输出目录：
 
 ```text
-experiments/n-mrc/output/topo-healthy2048n2t-asym1024n3t_traffic-tornado_flow-4-32m_scene-healthy-asym3pct_schemes-ecmp-ops-reps-nmrc/
+experiments/n-mrc/output/topo-healthy2048n2t-asym1024n3t_traffic-tornado_flow-4-32m_scene-healthy-asym3pct_schemes-ecmp-ops-reps-n-mrc/
 ```
 
 快速检查只跑 8MiB：

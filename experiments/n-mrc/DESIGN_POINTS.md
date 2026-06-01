@@ -297,13 +297,13 @@ shared_state[(src_tor, dst_tor)] = state
 
 | 参数 | 含义 | 当前主线取值 |
 | --- | --- | --- |
-| `dtor_state_mode` | path state 模式 | `2bit-ecn01` |
-| `dtor_unknown_reopen` | unknown 是否温和复开低状态路径 | enabled |
+| `nmrc_state_mode` | path state 模式 | `2bit-ecn01` |
+| `nmrc_unknown_reopen` | unknown 是否温和复开低状态路径 | enabled |
 | `min_good_paths` | strong-good 集合的最低期望数量 | `clamp(path_space / 2, 1, 16)` |
 | `feedback_pkts` | packet 数触发阈值 | `clamp(path_space / 2, 32, 128)` |
 | `feedback_min_interval` | feedback 最小间隔 | `5us` |
 | `feedback_max_interval` | feedback 最大间隔 | `20us` |
-| `dtor_weak_sample_pkts` | 主动采样低状态路径的间隔 | 默认关闭 |
+| `nmrc_weak_sample_pkts` | 主动采样低状态路径的间隔 | 默认关闭 |
 
 ## 11. 完整流程
 
@@ -427,21 +427,21 @@ update_state_on_ack(ack):
 | --- | --- |
 | CLI 和 canonical 参数 | `sim/datacenter/main_roce.cpp` |
 | 源端 EV 选择 | `sim/roce.cpp` 的 `RoceSrc::choose_path` |
-| 源端 N-MRC 状态更新 | `sim/roce.cpp` 的 `RoceSrc::update_dtor` |
-| ToR-pair shared bitmap | `sim/roce.cpp` / `sim/roce.h` 的 `_dtor_shared_bitmaps` |
-| cursor/stride 派生 | `sim/roce.cpp` 的 `init_dtor_priority` |
+| 源端 N-MRC 状态更新 | `sim/roce.cpp` 的 `RoceSrc::update_nmrc` |
+| ToR-pair shared bitmap | `sim/roce.cpp` / `sim/roce.h` 的 `_nmrc_shared_bitmaps` |
+| cursor/stride 派生 | `sim/roce.cpp` 的 `init_nmrc_priority` |
 | packet/ACK feedback 字段 | `sim/rocepacket.h` |
-| 目的 ToR feedback 聚合 | `sim/datacenter/fat_tree_switch.cpp` 的 `maybe_update_dtor_feedback` |
+| 目的 ToR feedback 聚合 | `sim/datacenter/fat_tree_switch.cpp` 的 `maybe_update_nmrc_feedback` |
 | EV 分段映射 | `sim/datacenter/fat_tree_switch.cpp` |
 
 ## 15. 文档中的命名
 
-代码里仍沿用历史名称 `dtor`，本文统一写作 N-MRC。
+文档、图表、结果和 CLI 统一写作 N-MRC。C++ 标识符不能使用连字符，因此内部函数和变量使用 `nmrc` 前缀。
 
 | 文档名 | 代码/CLI 名 |
 | --- | --- |
-| N-MRC | `-lb dtor` |
-| N-MRC state mode | `-dtor_state_mode` |
-| unknown reopen | `-dtor_unknown_reopen` |
-| path bitmap | `DtorBitmap` |
-| ToR-pair shared bitmap | `_dtor_shared_bitmaps` |
+| N-MRC | `-lb n-mrc` |
+| N-MRC state mode | `-nmrc_state_mode` |
+| unknown reopen | `-nmrc_unknown_reopen` |
+| path bitmap | `NmrcBitmap` |
+| ToR-pair shared bitmap | `_nmrc_shared_bitmaps` |

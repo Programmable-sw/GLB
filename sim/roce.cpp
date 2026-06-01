@@ -10,7 +10,7 @@
 #include "ecn.h"
 using namespace std;
 
-static uint32_t dtor_mix(uint32_t a, uint32_t b, uint32_t c) {
+static uint32_t nmrc_mix(uint32_t a, uint32_t b, uint32_t c) {
     a += 0x9e3779b9;
     b += 0x9e3779b9;
     c += 0x85ebca6b;
@@ -26,7 +26,7 @@ static uint32_t dtor_mix(uint32_t a, uint32_t b, uint32_t c) {
     return c;
 }
 
-static uint32_t dtor_gcd(uint32_t a, uint32_t b) {
+static uint32_t nmrc_gcd(uint32_t a, uint32_t b) {
     while (b != 0) {
         uint32_t t = a % b;
         a = b;
@@ -35,7 +35,7 @@ static uint32_t dtor_gcd(uint32_t a, uint32_t b) {
     return a;
 }
 
-static uint32_t dtor_priority_index(Packet::PktPriority priority) {
+static uint32_t nmrc_priority_index(Packet::PktPriority priority) {
     switch (priority) {
     case Packet::PRIO_LO:
         return 0;
@@ -49,7 +49,7 @@ static uint32_t dtor_priority_index(Packet::PktPriority priority) {
     return 0;
 }
 
-static uint32_t dtor_bitmap_count(const DtorBitmap& bitmap) {
+static uint32_t nmrc_bitmap_count(const NmrcBitmap& bitmap) {
     uint32_t count = 0;
     for (uint32_t i = 0; i < bitmap.size(); i++) {
         if (bitmap[i])
@@ -58,7 +58,7 @@ static uint32_t dtor_bitmap_count(const DtorBitmap& bitmap) {
     return count;
 }
 
-static uint32_t dtor_bitmap_count_at_least(const DtorBitmap& bitmap, uint8_t min_value) {
+static uint32_t nmrc_bitmap_count_at_least(const NmrcBitmap& bitmap, uint8_t min_value) {
     uint32_t count = 0;
     for (uint32_t i = 0; i < bitmap.size(); i++) {
         if (bitmap[i] >= min_value)
@@ -67,7 +67,7 @@ static uint32_t dtor_bitmap_count_at_least(const DtorBitmap& bitmap, uint8_t min
     return count;
 }
 
-static bool dtor_bitmap_any(const DtorBitmap& bitmap) {
+static bool nmrc_bitmap_any(const NmrcBitmap& bitmap) {
     for (uint32_t i = 0; i < bitmap.size(); i++) {
         if (bitmap[i])
             return true;
@@ -75,12 +75,12 @@ static bool dtor_bitmap_any(const DtorBitmap& bitmap) {
     return false;
 }
 
-static bool dtor_uses_2bit_state(uint32_t mode) {
+static bool nmrc_uses_2bit_state(uint32_t mode) {
     return mode == 1 || mode == 2;
 }
 
-static uint8_t dtor_initial_state(uint32_t mode) {
-    return dtor_uses_2bit_state(mode) ? 3 : 1;
+static uint8_t nmrc_initial_state(uint32_t mode) {
+    return nmrc_uses_2bit_state(mode) ? 3 : 1;
 }
 
 ////////////////////////////////////////////////////////////////
@@ -106,13 +106,13 @@ simtime_picosec RoceSrc::_min_rto = timeFromUs((uint32_t)DEFAULT_RTO_MIN);
 RoceSrc::lb_mode_t RoceSrc::_lb_mode = RoceSrc::LB_ECMP;
 uint32_t RoceSrc::_path_entropy_size = 256;
 uint32_t RoceSrc::_reps_buffer_size = 8;
-uint32_t RoceSrc::_dtor_min_good_paths = 16;
-uint32_t RoceSrc::_dtor_hosts_per_tor = 1;
-simtime_picosec RoceSrc::_dtor_bad_hold_down = 0;
-uint32_t RoceSrc::_dtor_state_mode = 0;
-uint32_t RoceSrc::_dtor_weak_sample_pkts = 0;
-uint32_t RoceSrc::_dtor_ecn_degrade_mode = 0;
-bool RoceSrc::_dtor_unknown_reopen = false;
+uint32_t RoceSrc::_nmrc_min_good_paths = 16;
+uint32_t RoceSrc::_nmrc_hosts_per_tor = 1;
+simtime_picosec RoceSrc::_nmrc_bad_hold_down = 0;
+uint32_t RoceSrc::_nmrc_state_mode = 0;
+uint32_t RoceSrc::_nmrc_weak_sample_pkts = 0;
+uint32_t RoceSrc::_nmrc_ecn_degrade_mode = 0;
+bool RoceSrc::_nmrc_unknown_reopen = false;
 simtime_picosec RoceSrc::_conweave_rtt_threshold = timeFromUs(16.0);
 simtime_picosec RoceSrc::_conweave_min_reroute_gap = timeFromUs(4.0);
 uint32_t RoceSrc::_ndp_initial_window = 256;
@@ -129,8 +129,8 @@ uint32_t RoceSrc::_dcqcn_fast_recovery_steps = 5;
 simtime_picosec RoceSrc::_dcqcn_alpha_interval = timeFromUs(55.0);
 simtime_picosec RoceSrc::_dcqcn_rate_increase_interval = timeFromUs(55.0);
 simtime_picosec RoceSrc::_dcqcn_cnp_interval = timeFromUs(50.0);
-std::map<std::pair<uint32_t, uint32_t>, DtorBitmap> RoceSrc::_dtor_shared_bitmaps;
-std::map<std::pair<uint32_t, uint32_t>, simtime_picosec> RoceSrc::_dtor_shared_hold_until;
+std::map<std::pair<uint32_t, uint32_t>, NmrcBitmap> RoceSrc::_nmrc_shared_bitmaps;
+std::map<std::pair<uint32_t, uint32_t>, simtime_picosec> RoceSrc::_nmrc_shared_hold_until;
 
 RoceSrc::RoceSrc(RoceLogger* logger, TrafficLogger* pktlogger, EventList &eventlist, linkspeed_bps rate)
     : BaseQueue(rate,eventlist,NULL), _flow(pktlogger), _logger(logger)
@@ -169,15 +169,15 @@ RoceSrc::RoceSrc(RoceLogger* logger, TrafficLogger* pktlogger, EventList &eventl
     _reps_head = 0;
     _reps_valid_count = 0;
     reset_reps_buffer();
-    _dtor_path_bitmap.assign(_path_entropy_size ? _path_entropy_size : 1, dtor_initial_state(_dtor_state_mode));
-    _dtor_hold_until = 0;
+    _nmrc_path_bitmap.assign(_path_entropy_size ? _path_entropy_size : 1, nmrc_initial_state(_nmrc_state_mode));
+    _nmrc_hold_until = 0;
     _ndp_cursor = 0;
     _ndp_pull_credit = 0;
     _ndp_paths_ready = false;
     _conweave_last_reroute = 0;
-    _dtor_cursor.fill(0);
-    _dtor_stride.fill(1);
-    _dtor_cursor_ready.fill(false);
+    _nmrc_cursor.fill(0);
+    _nmrc_stride.fill(1);
+    _nmrc_cursor_ready.fill(false);
     reset_congestion_control();
 
     //cout << _nodename << " path id is " << _pathid << endl;
@@ -535,7 +535,7 @@ void RoceSrc::processAck(const RoceAck& ack) {
     update_congestion_control_on_ack(ack, newly_acked_pkts);
     update_reps(ack);
     update_conweave(ack, m);
-    update_dtor(ack);
+    update_nmrc(ack);
     if (_lb_mode == LB_NDP && !_done) {
         grant_ndp_credit();
         if (_state_send == READY)
@@ -557,71 +557,71 @@ void RoceSrc::processAck(const RoceAck& ack) {
     }
 }
 
-void RoceSrc::init_dtor_priority(Packet::PktPriority priority, uint32_t path_space) {
-    uint32_t prio = dtor_priority_index(priority);
-    if (_dtor_cursor_ready[prio])
+void RoceSrc::init_nmrc_priority(Packet::PktPriority priority, uint32_t path_space) {
+    uint32_t prio = nmrc_priority_index(priority);
+    if (_nmrc_cursor_ready[prio])
         return;
 
     uint32_t src = _srcaddr == UINT32_MAX ? _node_num : _srcaddr;
     uint32_t dst = _dstaddr == UINT32_MAX ? (_node_num ^ 0x5bd1e995) : _dstaddr;
     uint32_t flow = _flow.flow_id();
-    uint32_t seed = dtor_mix(src, dst, flow ^ (prio * 0x9e3779b9));
+    uint32_t seed = nmrc_mix(src, dst, flow ^ (prio * 0x9e3779b9));
 
-    _dtor_cursor[prio] = seed % path_space;
+    _nmrc_cursor[prio] = seed % path_space;
 
     uint32_t stride = ((seed >> 8) % path_space) | 1;
     if (stride == 0)
         stride = 1;
-    while (dtor_gcd(stride, path_space) != 1)
+    while (nmrc_gcd(stride, path_space) != 1)
         stride = (stride + 2) % path_space;
     if (stride == 0)
         stride = 1;
-    _dtor_stride[prio] = stride;
-    _dtor_cursor_ready[prio] = true;
+    _nmrc_stride[prio] = stride;
+    _nmrc_cursor_ready[prio] = true;
 }
 
-void RoceSrc::ensure_dtor_bitmap(uint32_t path_space) {
+void RoceSrc::ensure_nmrc_bitmap(uint32_t path_space) {
     if (path_space == 0)
         path_space = 1;
-    if (_dtor_path_bitmap.size() != path_space)
-        _dtor_path_bitmap.assign(path_space, dtor_initial_state(_dtor_state_mode));
+    if (_nmrc_path_bitmap.size() != path_space)
+        _nmrc_path_bitmap.assign(path_space, nmrc_initial_state(_nmrc_state_mode));
 }
 
-std::pair<uint32_t, uint32_t> RoceSrc::dtor_cache_key() const {
-    uint32_t hosts_per_tor = _dtor_hosts_per_tor ? _dtor_hosts_per_tor : 1;
+std::pair<uint32_t, uint32_t> RoceSrc::nmrc_cache_key() const {
+    uint32_t hosts_per_tor = _nmrc_hosts_per_tor ? _nmrc_hosts_per_tor : 1;
     uint32_t src = _srcaddr == UINT32_MAX ? _node_num : _srcaddr;
     uint32_t dst = _dstaddr == UINT32_MAX ? 0 : _dstaddr;
     return std::make_pair(src / hosts_per_tor, dst / hosts_per_tor);
 }
 
-void RoceSrc::load_dtor_shared_bitmap(uint32_t path_space) {
-    std::pair<uint32_t, uint32_t> key = dtor_cache_key();
-    auto it = _dtor_shared_bitmaps.find(key);
-    if (it != _dtor_shared_bitmaps.end()) {
+void RoceSrc::load_nmrc_shared_bitmap(uint32_t path_space) {
+    std::pair<uint32_t, uint32_t> key = nmrc_cache_key();
+    auto it = _nmrc_shared_bitmaps.find(key);
+    if (it != _nmrc_shared_bitmaps.end()) {
         if (it->second.size() != path_space)
             return;
-        _dtor_path_bitmap = it->second;
+        _nmrc_path_bitmap = it->second;
     }
 
-    auto hold_it = _dtor_shared_hold_until.find(key);
-    if (hold_it != _dtor_shared_hold_until.end())
-        _dtor_hold_until = hold_it->second;
+    auto hold_it = _nmrc_shared_hold_until.find(key);
+    if (hold_it != _nmrc_shared_hold_until.end())
+        _nmrc_hold_until = hold_it->second;
 }
 
-void RoceSrc::store_dtor_shared_bitmap() {
-    std::pair<uint32_t, uint32_t> key = dtor_cache_key();
-    _dtor_shared_bitmaps[key] = _dtor_path_bitmap;
-    _dtor_shared_hold_until[key] = _dtor_hold_until;
+void RoceSrc::store_nmrc_shared_bitmap() {
+    std::pair<uint32_t, uint32_t> key = nmrc_cache_key();
+    _nmrc_shared_bitmaps[key] = _nmrc_path_bitmap;
+    _nmrc_shared_hold_until[key] = _nmrc_hold_until;
 }
 
-void RoceSrc::release_dtor_hold_if_expired(uint32_t path_space) {
-    if (_dtor_bad_hold_down == 0 || _dtor_hold_until == 0)
+void RoceSrc::release_nmrc_hold_if_expired(uint32_t path_space) {
+    if (_nmrc_bad_hold_down == 0 || _nmrc_hold_until == 0)
         return;
-    if (eventlist().now() < _dtor_hold_until)
+    if (eventlist().now() < _nmrc_hold_until)
         return;
-    _dtor_hold_until = 0;
-    _dtor_path_bitmap.assign(path_space, dtor_initial_state(_dtor_state_mode));
-    store_dtor_shared_bitmap();
+    _nmrc_hold_until = 0;
+    _nmrc_path_bitmap.assign(path_space, nmrc_initial_state(_nmrc_state_mode));
+    store_nmrc_shared_bitmap();
 }
 
 void RoceSrc::init_ndp_paths(uint32_t path_space) {
@@ -677,53 +677,53 @@ uint32_t RoceSrc::choose_path(Packet::PktPriority priority) {
         return random() % path_space;
     }
 
-    if (_lb_mode == LB_DTOR) {
-        uint32_t prio = dtor_priority_index(priority);
-        init_dtor_priority(priority, path_space);
-        ensure_dtor_bitmap(path_space);
-        load_dtor_shared_bitmap(path_space);
-        release_dtor_hold_if_expired(path_space);
+    if (_lb_mode == LB_NMRC) {
+        uint32_t prio = nmrc_priority_index(priority);
+        init_nmrc_priority(priority, path_space);
+        ensure_nmrc_bitmap(path_space);
+        load_nmrc_shared_bitmap(path_space);
+        release_nmrc_hold_if_expired(path_space);
 
-        if (dtor_uses_2bit_state(_dtor_state_mode)) {
-            uint32_t min_good_paths = _dtor_min_good_paths;
+        if (nmrc_uses_2bit_state(_nmrc_state_mode)) {
+            uint32_t min_good_paths = _nmrc_min_good_paths;
             if (min_good_paths > path_space)
                 min_good_paths = path_space;
 
-            if (_dtor_weak_sample_pkts > 0 &&
+            if (_nmrc_weak_sample_pkts > 0 &&
                 _packets_sent > 0 &&
-                _packets_sent % _dtor_weak_sample_pkts == 0) {
+                _packets_sent % _nmrc_weak_sample_pkts == 0) {
                 for (uint32_t offset = 1; offset <= path_space; offset++) {
-                    uint32_t candidate = (_dtor_cursor[prio] + offset * _dtor_stride[prio]) % path_space;
-                    if (_dtor_path_bitmap[candidate] == 1) {
-                        _dtor_cursor[prio] = candidate;
+                    uint32_t candidate = (_nmrc_cursor[prio] + offset * _nmrc_stride[prio]) % path_space;
+                    if (_nmrc_path_bitmap[candidate] == 1) {
+                        _nmrc_cursor[prio] = candidate;
                         return candidate;
                     }
                 }
             }
 
             uint8_t min_state = 3;
-            if (dtor_bitmap_count_at_least(_dtor_path_bitmap, 3) < min_good_paths) {
-                if (dtor_bitmap_count_at_least(_dtor_path_bitmap, 2) >= min_good_paths)
+            if (nmrc_bitmap_count_at_least(_nmrc_path_bitmap, 3) < min_good_paths) {
+                if (nmrc_bitmap_count_at_least(_nmrc_path_bitmap, 2) >= min_good_paths)
                     min_state = 2;
-                else if (dtor_bitmap_count_at_least(_dtor_path_bitmap, 1) > 0)
+                else if (nmrc_bitmap_count_at_least(_nmrc_path_bitmap, 1) > 0)
                     min_state = 1;
             }
 
             for (uint32_t offset = 1; offset <= path_space; offset++) {
-                uint32_t candidate = (_dtor_cursor[prio] + offset * _dtor_stride[prio]) % path_space;
-                if (_dtor_path_bitmap[candidate] >= min_state) {
-                    _dtor_cursor[prio] = candidate;
+                uint32_t candidate = (_nmrc_cursor[prio] + offset * _nmrc_stride[prio]) % path_space;
+                if (_nmrc_path_bitmap[candidate] >= min_state) {
+                    _nmrc_cursor[prio] = candidate;
                     return candidate;
                 }
             }
             return random() % path_space;
         }
 
-        if (dtor_bitmap_any(_dtor_path_bitmap)) {
+        if (nmrc_bitmap_any(_nmrc_path_bitmap)) {
             for (uint32_t offset = 1; offset <= path_space; offset++) {
-                uint32_t candidate = (_dtor_cursor[prio] + offset * _dtor_stride[prio]) % path_space;
-                if (_dtor_path_bitmap[candidate]) {
-                    _dtor_cursor[prio] = candidate;
+                uint32_t candidate = (_nmrc_cursor[prio] + offset * _nmrc_stride[prio]) % path_space;
+                if (_nmrc_path_bitmap[candidate]) {
+                    _nmrc_cursor[prio] = candidate;
                     return candidate;
                 }
             }
@@ -732,10 +732,10 @@ uint32_t RoceSrc::choose_path(Packet::PktPriority priority) {
     }
 
     if (_lb_mode == LB_SPRAY) {
-        uint32_t prio = dtor_priority_index(priority);
-        init_dtor_priority(priority, path_space);
-        uint32_t candidate = (_dtor_cursor[prio] + _dtor_stride[prio]) % path_space;
-        _dtor_cursor[prio] = candidate;
+        uint32_t prio = nmrc_priority_index(priority);
+        init_nmrc_priority(priority, path_space);
+        uint32_t candidate = (_nmrc_cursor[prio] + _nmrc_stride[prio]) % path_space;
+        _nmrc_cursor[prio] = candidate;
         return candidate;
     }
 
@@ -800,42 +800,42 @@ void RoceSrc::update_conweave(const RoceAck& ack, simtime_picosec rtt) {
     _conweave_last_reroute = now;
 }
 
-void RoceSrc::update_dtor(const RoceAck& ack) {
-    if (_lb_mode != LB_DTOR)
+void RoceSrc::update_nmrc(const RoceAck& ack) {
+    if (_lb_mode != LB_NMRC)
         return;
 
     uint32_t path_space = _path_entropy_size ? _path_entropy_size : 1;
-    ensure_dtor_bitmap(path_space);
+    ensure_nmrc_bitmap(path_space);
 
-    if (!ack.has_dtor_feedback())
+    if (!ack.has_nmrc_feedback())
         return;
 
-    DtorBitmap fresh_bitmap = ack.dtor_bitmap();
+    NmrcBitmap fresh_bitmap = ack.nmrc_bitmap();
     if (fresh_bitmap.size() != path_space)
         fresh_bitmap.resize(path_space, 1);
 
-    uint32_t min_good_paths = _dtor_min_good_paths;
+    uint32_t min_good_paths = _nmrc_min_good_paths;
     if (min_good_paths > path_space)
         min_good_paths = path_space;
 
-    if (dtor_uses_2bit_state(_dtor_state_mode)) {
+    if (nmrc_uses_2bit_state(_nmrc_state_mode)) {
         for (uint32_t i = 0; i < path_space; i++) {
             if (!fresh_bitmap[i]) {
-                if (_dtor_state_mode == 2) {
-                    if (_dtor_ecn_degrade_mode == 1 && _dtor_path_bitmap[i] > 1)
-                        _dtor_path_bitmap[i]--;
+                if (_nmrc_state_mode == 2) {
+                    if (_nmrc_ecn_degrade_mode == 1 && _nmrc_path_bitmap[i] > 1)
+                        _nmrc_path_bitmap[i]--;
                     else
-                        _dtor_path_bitmap[i] = 1;
+                        _nmrc_path_bitmap[i] = 1;
                 } else {
-                    _dtor_path_bitmap[i] = 0;
+                    _nmrc_path_bitmap[i] = 0;
                 }
-            } else if (fresh_bitmap[i] > 1 && _dtor_path_bitmap[i] < 3) {
-                _dtor_path_bitmap[i]++;
-            } else if (_dtor_unknown_reopen && fresh_bitmap[i] == 1 && _dtor_path_bitmap[i] < 2) {
-                _dtor_path_bitmap[i]++;
+            } else if (fresh_bitmap[i] > 1 && _nmrc_path_bitmap[i] < 3) {
+                _nmrc_path_bitmap[i]++;
+            } else if (_nmrc_unknown_reopen && fresh_bitmap[i] == 1 && _nmrc_path_bitmap[i] < 2) {
+                _nmrc_path_bitmap[i]++;
             }
         }
-        store_dtor_shared_bitmap();
+        store_nmrc_shared_bitmap();
         return;
     }
 
@@ -847,45 +847,45 @@ void RoceSrc::update_dtor(const RoceAck& ack) {
         }
     }
 
-    if (_dtor_bad_hold_down > 0) {
-        release_dtor_hold_if_expired(path_space);
+    if (_nmrc_bad_hold_down > 0) {
+        release_nmrc_hold_if_expired(path_space);
         if (hold_bad)
-            _dtor_hold_until = eventlist().now() + _dtor_bad_hold_down;
-        if (_dtor_hold_until && eventlist().now() < _dtor_hold_until) {
-            DtorBitmap held = _dtor_path_bitmap;
+            _nmrc_hold_until = eventlist().now() + _nmrc_bad_hold_down;
+        if (_nmrc_hold_until && eventlist().now() < _nmrc_hold_until) {
+            NmrcBitmap held = _nmrc_path_bitmap;
             for (uint32_t i = 0; i < path_space; i++) {
                 if (!fresh_bitmap[i])
                     held[i] = 0;
             }
-            if (dtor_bitmap_count(held) < min_good_paths) {
+            if (nmrc_bitmap_count(held) < min_good_paths) {
                 for (uint32_t i = 0; i < path_space; i++) {
                     if (fresh_bitmap[i])
                         held[i] = 1;
                 }
             }
-            if (!dtor_bitmap_any(held))
+            if (!nmrc_bitmap_any(held))
                 held.assign(path_space, 1);
-            _dtor_path_bitmap = held;
-            store_dtor_shared_bitmap();
+            _nmrc_path_bitmap = held;
+            store_nmrc_shared_bitmap();
             return;
         }
     }
 
-    if (dtor_bitmap_count(fresh_bitmap) >= min_good_paths) {
-        _dtor_path_bitmap = fresh_bitmap;
-        store_dtor_shared_bitmap();
+    if (nmrc_bitmap_count(fresh_bitmap) >= min_good_paths) {
+        _nmrc_path_bitmap = fresh_bitmap;
+        store_nmrc_shared_bitmap();
         return;
     }
 
-    DtorBitmap merged = _dtor_path_bitmap;
+    NmrcBitmap merged = _nmrc_path_bitmap;
     for (uint32_t i = 0; i < path_space; i++) {
         if (fresh_bitmap[i])
             merged[i] = 1;
     }
-    if (!dtor_bitmap_any(merged))
+    if (!nmrc_bitmap_any(merged))
         merged.assign(path_space, 1);
-    _dtor_path_bitmap = merged;
-    store_dtor_shared_bitmap();
+    _nmrc_path_bitmap = merged;
+    store_nmrc_shared_bitmap();
 }
 
 void RoceSrc::processPause(const EthPausePacket& p) {
@@ -1127,8 +1127,8 @@ void RoceSink::send_ack(const RocePacket& pkt, simtime_picosec ts) {
     ack->set_ts(ts);
     if (pkt.flags() & ECN_CE)
         ack->set_flags(ack->flags() | ECN_ECHO);
-    if (pkt.has_dtor_feedback())
-        ack->set_dtor_feedback(pkt.dtor_bitmap());
+    if (pkt.has_nmrc_feedback())
+        ack->set_nmrc_feedback(pkt.nmrc_bitmap());
     ack->sendOn();
 }
 

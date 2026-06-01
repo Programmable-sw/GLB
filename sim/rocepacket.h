@@ -6,7 +6,7 @@
 #include <vector>
 #include "network.h"
 
-typedef std::vector<uint8_t> DtorBitmap;
+typedef std::vector<uint8_t> NmrcBitmap;
 
 // NdpPacket and NdpAck are subclasses of Packet.
 // They incorporate a packet database, to reuse packet objects that are no longer needed.
@@ -37,8 +37,8 @@ class RocePacket : public Packet {
                 p->_path_len = 0;
                 p->_direction = NONE;
                 p->_srcaddr = UINT32_MAX;
-                p->_has_dtor_feedback = false;
-                p->_dtor_bitmap.clear();
+                p->_has_nmrc_feedback = false;
+                p->_nmrc_bitmap.clear();
                 p->set_dst(destination);
                 return p;
     }
@@ -58,8 +58,8 @@ class RocePacket : public Packet {
                 p->_last_packet = last_packet;
                 p->_path_len = route.size();
                 p->_srcaddr = UINT32_MAX;
-                p->_has_dtor_feedback = false;
-                p->_dtor_bitmap.clear();
+                p->_has_nmrc_feedback = false;
+                p->_nmrc_bitmap.clear();
                 p->set_dst(destination);
                 return p;
     }
@@ -79,12 +79,12 @@ class RocePacket : public Packet {
     inline uint32_t src() const {return _srcaddr;}
     inline void set_src(uint32_t src) {_srcaddr = src;}
     inline uint32_t path_id() const {if (_pathid!=UINT32_MAX) return _pathid; else return _route->path_id();}
-    inline void set_dtor_feedback(const DtorBitmap& bitmap) {
-        _dtor_bitmap = bitmap;
-        _has_dtor_feedback = true;
+    inline void set_nmrc_feedback(const NmrcBitmap& bitmap) {
+        _nmrc_bitmap = bitmap;
+        _has_nmrc_feedback = true;
     }
-    inline bool has_dtor_feedback() const {return _has_dtor_feedback;}
-    inline const DtorBitmap& dtor_bitmap() const {return _dtor_bitmap;}
+    inline bool has_nmrc_feedback() const {return _has_nmrc_feedback;}
+    inline const NmrcBitmap& nmrc_bitmap() const {return _nmrc_bitmap;}
     virtual PktPriority priority() const {return Packet::PRIO_LO;}
     const static int ACKSIZE=64;
  protected:
@@ -93,8 +93,8 @@ class RocePacket : public Packet {
     bool _retransmitted;
     bool _last_packet;  // set to true in the last packet in a flow.
     uint32_t _srcaddr;
-    bool _has_dtor_feedback;
-    DtorBitmap _dtor_bitmap;
+    bool _has_nmrc_feedback;
+    NmrcBitmap _nmrc_bitmap;
     static PacketDB<RocePacket> _packetdb;
 };
 
@@ -112,8 +112,8 @@ class RoceAck : public Packet {
                 p->_ackno = ackno;
                 p->_path_len = 0;
                 p->_direction = NONE;
-                p->_has_dtor_feedback = false;
-                p->_dtor_bitmap.clear();
+                p->_has_nmrc_feedback = false;
+                p->_nmrc_bitmap.clear();
                 p->set_dst(destination);
                 return p;
     }
@@ -122,12 +122,12 @@ class RoceAck : public Packet {
     inline seq_t ackno() const {return _ackno;}
     inline simtime_picosec ts() const {return _ts;}
     inline void set_ts(simtime_picosec ts) {_ts = ts;}
-    inline void set_dtor_feedback(const DtorBitmap& bitmap) {
-        _dtor_bitmap = bitmap;
-        _has_dtor_feedback = true;
+    inline void set_nmrc_feedback(const NmrcBitmap& bitmap) {
+        _nmrc_bitmap = bitmap;
+        _has_nmrc_feedback = true;
     }
-    inline bool has_dtor_feedback() const {return _has_dtor_feedback;}
-    inline const DtorBitmap& dtor_bitmap() const {return _dtor_bitmap;}
+    inline bool has_nmrc_feedback() const {return _has_nmrc_feedback;}
+    inline const NmrcBitmap& nmrc_bitmap() const {return _nmrc_bitmap;}
     virtual PktPriority priority() const {return Packet::PRIO_HI;}
 
     virtual ~RoceAck(){}
@@ -135,8 +135,8 @@ class RoceAck : public Packet {
  protected:
     seq_t _ackno;
     simtime_picosec _ts;
-    bool _has_dtor_feedback;
-    DtorBitmap _dtor_bitmap;
+    bool _has_nmrc_feedback;
+    NmrcBitmap _nmrc_bitmap;
     static PacketDB<RoceAck> _packetdb;
 };
 
