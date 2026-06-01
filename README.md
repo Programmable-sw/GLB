@@ -1,75 +1,84 @@
 # N-MRC on htsim
 
-本仓库基于 Broadcom `csg-htsim`，用于在 RoCE over generated fat-tree 拓扑中评估 N-MRC 及若干负载均衡方案。当前主线实验对比 `ECMP`、`OPS`、`REPS`、`N-MRC` 四个方案；四个方案统一使用 `DCQCN_variant` 拥塞控制。
+This repository implements and evaluates N-MRC in Broadcom `csg-htsim`, using the RoCE datacenter simulator on generated fat-tree topologies.
 
-文档、图表、结果和推荐 CLI 统一使用 `N-MRC` 作为方案名称。直接调用 htsim 时，使用：
+N-MRC is a source-controlled packet-level load balancing scheme. The source host chooses an EV/pathid for each packet; switches interpret that EV at each ECMP stage; the destination ToR aggregates path observations and returns compact path-state feedback to the source. The source then uses a shared `(src ToR, dst ToR)` path-health bitmap to steer later packets, without keeping a large per-flow/per-QP path table.
 
-```bash
--lb n-mrc -nmrc_state_mode 2bit-ecn01 -nmrc_unknown_reopen
-```
+The standard experiments in this branch use two scenarios:
 
-## 仓库内容
+- Scenario 1, healthy network: 2048 nodes / 2-tier leaf-spine.
+- Scenario 2, asymmetric bandwidth: 1024 nodes / 3-tier fat-tree, with 3% ToR uplinks set to half bandwidth.
 
-- `sim/`：htsim C++ 离散事件仿真器。
-- `sim/datacenter/htsim_roce`：RoCE 仿真入口，编译后生成。
-- `experiments/n-mrc/run_literature_metric_compare.py`：当前标准场景主测试脚本。
-- `experiments/n-mrc/run_glb_factor_compare.py`：GLB 五因子参数辅助对比脚本。
-- `experiments/n-mrc/README.md`：N-MRC 实验目录内的详细说明。
-- `experiments/n-mrc/output/`：本地实验输出目录，已被 `.gitignore` 忽略。
+Both scenarios mainly compare `ECMP`, `OPS`, `REPS`, and `N-MRC`.
 
-## 当前版本改动
+## Repository Layout
 
-相对原始 `csg-htsim`，本分支主要增加和整理了以下能力：
+- `sim/`: htsim C++ discrete-event simulator.
+- `sim/datacenter/htsim_roce`: compiled RoCE simulator executable.
+- `experiments/n-mrc/run_literature_metric_compare.py`: standard N-MRC comparison script.
+- `experiments/n-mrc/run_glb_factor_compare.py`: auxiliary GLB parameter sweep script.
+- `experiments/n-mrc/README.md`: detailed experiment notes.
+- `experiments/n-mrc/output/`: local experiment outputs, ignored by git.
 
-- 增加 N-MRC 端侧选路逻辑；直接调用仿真器时使用 `-lb n-mrc -nmrc_state_mode 2bit-ecn01 -nmrc_unknown_reopen` 启用。
-- N-MRC 使用 ToR-pair 共享 2-bit EV/path bitmap，不维护 per-flow/per-QP 大路径表。
-- 支持 ECN soft-degrade：ECN bad feedback 将路径降为 `01`，observed-clean 逐步恢复到 `11`。
-- 支持 unknown-low-state reopen：unknown feedback 可把低状态路径温和复开到最高 `10`，不会直接升到 strong-good。
-- source-controlled pathid 使用 tier EV mapping：交换机在每个 ECMP stage 从 EV 中截取对应段并对本级 ECMP 组取模。
-- N-MRC path space、feedback packet 阈值和 `min_good_paths` 按拓扑自动校准。
-- 支持 `-slow_tor_uplinks` / `-slow_tor_uplink_divisor` 注入 ToR 上行半带宽链路。
-- 增加标准化实验脚本，自动生成 traffic matrix、运行仿真、解析 FCT/CCT 指标并输出报告。
+## N-MRC Mechanism
 
-## 负载均衡方案
+N-MRC treats an EV as an end-to-end path combination. In a 2-tier topology, the EV identifies the ToR uplink choice. In a 3-tier topology, the EV is segmented across ToR uplink, aggregation uplink, core-down bundle, and aggregation-down bundle choices.
 
-| 方案 | CLI | 说明 |
-| --- | --- | --- |
-| ECMP | `-lb ecmp` | 端侧固定 pathid，交换机按 `flow_id + pathid` 做 ECMP 哈希。 |
-| OPS | `-lb ops` | 源端逐包随机选择 EV/pathid。 |
-| REPS | `-lb reps` | ACK 携带 clean pathid，源端优先复用近期 clean EV。 |
-| N-MRC | `-lb n-mrc -nmrc_state_mode 2bit-ecn01 -nmrc_unknown_reopen` | ToR-pair 共享 2-bit EV 状态，按状态优先级逐包选路。 |
-| ConWeave-like | `-lb conweave` | 当前仓库中的简化 RTT-threshold reroute 版本，不包含论文版 VOQ 保序缓冲。 |
-| Adaptive Routing | `-lb adaptive-routing` | 交换机本地拥塞自适应选路。 |
-| DRILL | `-lb drill` | 交换机本地随机候选 + 历史候选的拥塞感知选路。 |
-| GLB | `-lb glb` | 基于本地端口拥塞、链路利用率和远端候选状态评分。 |
+At the source, N-MRC keeps one shared path-state bitmap per `(src ToR, dst ToR)` pair. Each EV uses a 2-bit state:
 
-## 标准测试场景
+| State | Meaning |
+| --- | --- |
+| `11` | strong-good path |
+| `10` | usable path |
+| `01` | suspect path |
+| `00` | reserved for loss/unavailable semantics |
 
-当前主测试只保留两个标准场景：
+The source prefers `11` paths. If there are not enough strong-good paths, it gradually widens selection to `10` and then `01`. The destination ToR records whether packets on each EV arrive cleanly or with ECN CE marks, emits bitmap feedback, and the source updates the shared path-state bitmap from ACK feedback.
 
-| 场景 | 拓扑 | 链路条件 | Flow size | 方案 |
+## Load Balancing Schemes
+
+| Scheme | Mechanism |
+| --- | --- |
+| ECMP | Baseline hashing over ECMP next hops. |
+| OPS | Source randomly selects an EV per packet. |
+| REPS | Receiver feedback lets the source reuse recently clean EVs. |
+| N-MRC | Source selects packets using ToR-pair shared 2-bit path health. |
+| ConWeave-like | RTT-threshold based reroute logic implemented in this simulator. |
+| Adaptive Routing | Switch-local congestion-aware next-hop selection. |
+| DRILL | Switch-local random candidates plus remembered candidate selection. |
+| GLB | Switch-local scoring using local and remote queue/utilization signals. |
+
+## Standard Scenarios
+
+| Scenario | Topology | Link condition | Flow size | Compared schemes |
 | --- | --- | --- | --- | --- |
-| 健康网络 | 2048 nodes / 2-tier leaf-spine | 全链路 400Gbps | 4/8/16/32MiB | ECMP / OPS / REPS / N-MRC |
-| 非对称带宽 | 1024 nodes / 3-tier fat-tree | 3% ToR 上行链路带宽减半 | 4/8/16/32MiB | ECMP / OPS / REPS / N-MRC |
+| Healthy network | 2048 nodes / 2-tier | all links 400Gbps | 4/8/16/32MiB | ECMP / OPS / REPS / N-MRC |
+| Asymmetric bandwidth | 1024 nodes / 3-tier | 3% ToR uplinks at 200Gbps | 4/8/16/32MiB | ECMP / OPS / REPS / N-MRC |
 
-通用参数：
+Common settings:
 
-- 链路速率：400Gbps。
-- 队列：`lossless_input_ecn`。
-- 队列长度：`-q 100` packets。
-- ECN：Kmin=20% queue、Kmax=80% queue，即 20/80 packets。
-- PFC：low/high threshold 为 20/80 packets。
-- Host queue：`prio`。
-- MTU：4096 bytes。
-- 拥塞控制：`DCQCN_variant`。
-- 流量：`tornado`，每个 host 发一个 foreground flow，目的端为 `(src + nodes/2) % nodes`。
-- 主要指标：avg FCT、p99 FCT、p99.9 FCT、max FCT、CCT。
+- Link speed: 400Gbps.
+- Switch queue model: `lossless_input_ecn`.
+- Switch queue length: `-q 100` packets.
+- ECN: Kmin/Kmax = 20/80 packets.
+- PFC: low/high threshold = 20/80 packets.
+- Host queue: `prio`.
+- MTU: 4096 bytes.
+- Congestion control: `DCQCN_variant`.
+- Traffic: `tornado`, one foreground flow per host, destination `(src + nodes/2) % nodes`.
+- Metrics: avg FCT, p99 FCT, p99.9 FCT, max FCT, CCT.
 
-非对称带宽场景按 ToR-to-aggregation uplink 总数注入慢链路。1024-node / 3-tier generated fat-tree 共有 1024 条 ToR 上行链路，因此 `ceil(1024 * 0.03) = 31` 条链路降为 200Gbps。
+`lossless_input_ecn` is the switch-side lossless input queue with ECN marking and PFC pause behavior. It models a lossless RoCE-style fabric: congestion is signaled by ECN/PFC instead of intentional packet drops in the standard scenarios.
 
-## 从 Clone 到运行
+`prio` is the host-side priority queue. It separates control/high-priority packets such as ACK/NACK/CNP-like traffic from ordinary data packets, so feedback is not queued behind data in the same way.
 
-推荐直接 clone 当前 N-MRC 分支：
+The simulator also contains queue types that can drop packets and RoCE NACK/retransmission code paths, but the standard N-MRC experiments in this repository use the lossless ECN/PFC setting above. Lossy-network experiments are not part of the current default comparison.
+
+In the asymmetric bandwidth scenario, slow links are selected from all ToR-to-aggregation uplinks. A generated 1024-node / 3-tier fat-tree has 1024 such uplinks, so the default slow-link count is `ceil(1024 * 0.03) = 31`.
+
+## Setup
+
+Clone this branch:
 
 ```bash
 git clone -b main-htsim https://github.com/Programmable-sw/GLB.git csg-htsim
@@ -78,17 +87,7 @@ git remote add upstream https://github.com/Broadcom/csg-htsim.git || true
 git fetch --all --prune
 ```
 
-如果已经从 Broadcom 上游仓库 clone，可以这样切到本分支：
-
-```bash
-git clone https://github.com/Broadcom/csg-htsim.git csg-htsim
-cd csg-htsim
-git remote add n-mrc https://github.com/Programmable-sw/GLB.git
-git fetch n-mrc main-htsim
-git checkout -B main-htsim n-mrc/main-htsim
-```
-
-安装依赖。Ubuntu/Debian 上可用：
+Install dependencies on Ubuntu/Debian:
 
 ```bash
 sudo apt-get update
@@ -96,13 +95,13 @@ sudo apt-get install -y build-essential make g++ git python3 python3-pip
 python3 -m pip install --user matplotlib
 ```
 
-编译 htsim：
+Build the simulator:
 
 ```bash
 make -C sim -j"$(nproc)"
 ```
 
-确认 RoCE 仿真入口和 Python 脚本可用：
+Check the RoCE executable and Python scripts:
 
 ```bash
 ./sim/datacenter/htsim_roce -h | head -n 40
@@ -111,122 +110,89 @@ python3 -m py_compile \
   experiments/n-mrc/run_glb_factor_compare.py
 ```
 
-## 运行标准主测试
+## Run Experiments
 
-运行完整标准测试：
+Run the standard comparison:
 
 ```bash
 python3 experiments/n-mrc/run_literature_metric_compare.py
 ```
 
-默认会展开 8 个 scenario，并对每个 scenario 跑 4 个方案，共 32 次仿真：
+This runs 8 scenarios and 4 schemes per scenario:
 
 - `healthy_2048n_2tier_{4,8,16,32}m`
 - `asym_tor3pct_1024n_3tier_{4,8,16,32}m`
 
-默认输出目录：
+Default output directory:
 
 ```text
 experiments/n-mrc/output/topo-healthy2048n2t-asym1024n3t_traffic-tornado_flow-4-32m_scene-healthy-asym3pct_schemes-ecmp-ops-reps-n-mrc/
 ```
 
-快速检查只跑 8MiB：
+Run a quick 8MiB check:
 
 ```bash
 SCENARIO_FLOW_SIZE_MIBS=8 \
 python3 experiments/n-mrc/run_literature_metric_compare.py
 ```
 
-只跑健康网络：
-
-```bash
-SCENARIO_ASYM_TOPOLOGIES= SCENARIO_FLOW_SIZE_MIBS=8 \
-python3 experiments/n-mrc/run_literature_metric_compare.py
-```
-
-只跑非对称带宽：
-
-```bash
-SCENARIO_HEALTHY_TOPOLOGIES= SCENARIO_FLOW_SIZE_MIBS=8 \
-python3 experiments/n-mrc/run_literature_metric_compare.py
-```
-
-保留每个方案的原始 stdout/dat/cmd/traffic matrix：
+Keep raw per-run files:
 
 ```bash
 KEEP_RAW_OUTPUT=1 \
 python3 experiments/n-mrc/run_literature_metric_compare.py
 ```
 
-常用环境变量：
+Useful environment variables:
 
-| 环境变量 | 默认值 | 含义 |
+| Variable | Default | Meaning |
 | --- | --- | --- |
-| `SCENARIO_HEALTHY_TOPOLOGIES` | `2048:2` | 健康网络拓扑列表，格式为 `nodes:tiers`。 |
-| `SCENARIO_ASYM_TOPOLOGIES` | `1024:3` | 非对称带宽拓扑列表。 |
-| `SCENARIO_TOPOLOGIES` | unset | 同时覆盖健康和非对称拓扑，主要用于临时扫参。 |
-| `SCENARIO_FLOW_SIZE_MIBS` | `4,8,16,32` | flow size 列表。 |
-| `SCENARIO_TRAFFIC` | `tornado` | 支持 `tornado` / `permutation`。 |
-| `SCENARIO_CC` | `dcqcn_variant` | 可改为 `dcqcn`。 |
-| `SCENARIO_OUT` | 自动生成 | 输出目录。 |
-| `KEEP_RAW_OUTPUT` | unset | 设为 `1` 时保留每个 scenario 的原始运行文件。 |
+| `SCENARIO_HEALTHY_TOPOLOGIES` | `2048:2` | Healthy-network topology list, in `nodes:tiers` format. |
+| `SCENARIO_ASYM_TOPOLOGIES` | `1024:3` | Asymmetric-bandwidth topology list. |
+| `SCENARIO_FLOW_SIZE_MIBS` | `4,8,16,32` | Flow size list. |
+| `SCENARIO_TRAFFIC` | `tornado` | `tornado` or `permutation`. |
+| `SCENARIO_CC` | `dcqcn_variant` | Can be changed to `dcqcn`. |
+| `SCENARIO_OUT` | auto-generated | Output directory. |
+| `KEEP_RAW_OUTPUT` | unset | Set to `1` to keep `.cmd`, `.stdout`, `.dat`, and `.cm` files. |
 
-## 输出文件
+## Outputs
 
-主测试输出目录包含：
+- `summary.csv`: metrics per scenario and scheme.
+- `normalized.csv`: scenario-local normalized metrics.
+- `per_flow.csv`: per-flow FCT details.
+- `comparison_report.md`: generated Markdown report.
+- `scenario_plan.md`: scenario list generated by the script.
 
-- `summary.csv`：每个场景、每个方案的原始指标。
-- `normalized.csv`：场景内相对最优值的归一化结果。
-- `per_flow.csv`：逐流 FCT 明细。
-- `comparison_report.md`：自动生成的 Markdown 汇总报告。
-- `scenario_plan.md`：脚本本次展开的场景列表。
-
-使用 `KEEP_RAW_OUTPUT=1` 时，每个 scenario 子目录还会包含：
-
-- `*.cmd`：实际 htsim 命令。
-- `*.stdout`：仿真器 stdout。
-- `*.dat`：仿真器 dat 输出。
-- `*.cm`：traffic matrix。
-
-## GLB 辅助实验
-
-GLB 五因子参数对比脚本保留为辅助实验，不属于当前标准主测试：
+## Auxiliary GLB Sweep
 
 ```bash
 python3 experiments/n-mrc/run_glb_factor_compare.py
 ```
 
-示例：1024-node / 3-tier / 32MiB：
+Example:
 
 ```bash
 GLB_FACTOR_NODES=1024 GLB_FACTOR_TIERS=3 GLB_FACTOR_FLOW_SIZE=$((32 * 1024 * 1024)) \
 python3 experiments/n-mrc/run_glb_factor_compare.py
 ```
 
-## 核心代码位置
+## Core Code
 
-- `experiments/n-mrc/run_literature_metric_compare.py`：标准场景生成、命令拼接、指标解析和报告生成。
-- `experiments/n-mrc/run_glb_factor_compare.py`：GLB 不同参数组合对比。
-- `sim/datacenter/main_roce.cpp`：RoCE CLI 参数、LB 模式选择、N-MRC canonical 参数、EV 空间按拓扑自动校准。
-- `sim/roce.cpp` / `sim/roce.h`：源端 `ecmp`、`ops`、`reps`、`N-MRC` 选路状态机和 ACK feedback 更新。
-- `sim/rocepacket.h`：RoCE packet/ACK 上携带 pathid 和 N-MRC bitmap feedback。
-- `sim/datacenter/fat_tree_switch.cpp` / `sim/datacenter/fat_tree_switch.h`：交换机 ECMP/AR/DRILL/GLB 转发、source-controlled pathid 分段映射、N-MRC feedback 生成。
-- `sim/datacenter/fat_tree_topology.cpp` / `sim/datacenter/fat_tree_topology.h`：generated fat-tree 拓扑、bundle/radix 参数、慢链路注入。
+- `experiments/n-mrc/run_literature_metric_compare.py`: scenario generation, command construction, metric parsing, and report generation.
+- `experiments/n-mrc/run_glb_factor_compare.py`: GLB factor sweep.
+- `sim/datacenter/main_roce.cpp`: RoCE CLI, LB mode selection, and N-MRC default parameters.
+- `sim/roce.cpp` / `sim/roce.h`: source-side ECMP/OPS/REPS/N-MRC selection and feedback updates.
+- `sim/rocepacket.h`: pathid and N-MRC feedback fields on RoCE packets/ACKs.
+- `sim/datacenter/fat_tree_switch.cpp` / `sim/datacenter/fat_tree_switch.h`: switch forwarding, EV segmentation, and N-MRC feedback generation.
+- `sim/datacenter/fat_tree_topology.cpp` / `sim/datacenter/fat_tree_topology.h`: generated fat-tree topology and slow-link injection.
 
-## 清理
-
-清理实验输出：
+## Cleanup
 
 ```bash
 rm -rf experiments/n-mrc/output experiments/n-mrc/output_*
-```
-
-清理编译产物：
-
-```bash
 make -C sim clean
 ```
 
-## htsim 背景
+## htsim Background
 
-htsim is a high performance discrete event simulator, inspired by ns2, but much faster, primarily intended to examine congestion control algorithm behaviour. It was originally written by Mark Handley to examine TCP stability issues, extended to study Multipath TCP and datacenter topologies, and later adopted by Correct Networks/Broadcom to develop EQDS. This fork keeps the htsim/RoCE simulator structure and adds N-MRC-oriented experiments on top.
+htsim is a high performance discrete event simulator, inspired by ns2, but much faster, primarily intended to examine congestion control algorithm behaviour. This fork keeps the htsim/RoCE simulator structure and adds N-MRC-oriented experiments on top.

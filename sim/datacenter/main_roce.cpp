@@ -88,10 +88,10 @@ int main(int argc, char **argv) {
     uint32_t slow_tor_uplinks = 0;
     uint32_t slow_tor_uplink_divisor = 2;
     double nmrc_bad_hold_down_us = 0.0;
-    uint32_t nmrc_state_mode = 0;
+    uint32_t nmrc_state_mode = 2;
     uint32_t nmrc_weak_sample_pkts = 0;
     uint32_t nmrc_ecn_degrade_mode = 0;
-    bool nmrc_unknown_reopen = false;
+    bool nmrc_unknown_reopen = true;
     double nmrc_feedback_min_us = 5.0;
     double nmrc_feedback_max_us = 20.0;
 

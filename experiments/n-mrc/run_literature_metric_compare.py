@@ -58,7 +58,7 @@ VARIANTS = [
     ("ecmp", "ecmp", []),
     ("ops", "ops", []),
     ("reps", "reps", []),
-    ("n-mrc", "n-mrc", ["-nmrc_state_mode", "2bit-ecn01", "-nmrc_unknown_reopen"]),
+    ("n-mrc", "n-mrc", []),
 ]
 
 VARIANT_DISPLAY = {
