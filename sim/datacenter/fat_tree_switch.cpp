@@ -5,6 +5,9 @@
 #include "callback_pipe.h"
 #include "queue_lossless.h"
 #include "queue_lossless_output.h"
+#include "rocepacket.h"
+#include "ecn.h"
+#include <limits>
 
 unordered_map<BaseQueue*,uint32_t> FatTreeSwitch::_port_flow_counts;
 
@@ -316,7 +319,341 @@ uint16_t FatTreeSwitch::_ar_sticky = FatTreeSwitch::PER_PACKET;
 simtime_picosec FatTreeSwitch::_sticky_delta = timeFromUs((uint32_t)10);
 double FatTreeSwitch::_ecn_threshold_fraction = 1.0;
 double FatTreeSwitch::_speculative_threshold_fraction = 0.2;
+double FatTreeSwitch::_glb_downstream_weight = 1.0;
+double FatTreeSwitch::_glb_queue_weight = 0.5;
+double FatTreeSwitch::_glb_util_weight = 0.05;
+double FatTreeSwitch::_glb_remote_queue_weight = 0.5;
+double FatTreeSwitch::_glb_remote_util_weight = 0.05;
+double FatTreeSwitch::_glb_remote_busy_weight = 0.2;
+double FatTreeSwitch::_glb_quality_bucket = 20.0;
+uint32_t FatTreeSwitch::_glb_max_quality = 7;
+simtime_picosec FatTreeSwitch::_glb_update_interval = timeFromUs(5.0);
+bool FatTreeSwitch::_glb_normalize_scores = false;
+uint32_t FatTreeSwitch::_dtor_feedback_pkts = 100;
+simtime_picosec FatTreeSwitch::_dtor_feedback_min_interval = timeFromUs(5.0);
+simtime_picosec FatTreeSwitch::_dtor_feedback_max_interval = timeFromUs(20.0);
+uint32_t FatTreeSwitch::_dtor_path_count = 1;
+bool FatTreeSwitch::_dtor_feedback_observed_values = false;
+bool FatTreeSwitch::_pathid_only_hash = false;
 int8_t (*FatTreeSwitch::fn)(FibEntry*,FibEntry*)= &FatTreeSwitch::compare_queuesize;
+
+uint32_t FatTreeSwitch::glb_queue_kbytes(BaseQueue* q) {
+    if (!q)
+        return 0;
+
+    uint64_t q_kbytes = q->queuesize() / 1000;
+    if (q_kbytes > 65535)
+        q_kbytes = 65535;
+
+    return (uint32_t)q_kbytes;
+}
+
+double FatTreeSwitch::glb_queue_fraction(BaseQueue* q) {
+    if (!q)
+        return 0.0;
+
+    mem_b maxsize = q->maxsize();
+    if (maxsize <= 0)
+        return 0.0;
+
+    double fraction = (double)q->queuesize() / (double)maxsize;
+    if (fraction < 0.0)
+        fraction = 0.0;
+    if (fraction > 1.0)
+        fraction = 1.0;
+    return fraction;
+}
+
+uint32_t FatTreeSwitch::glb_utilization_percent(BaseQueue* q) {
+    if (!q)
+        return 0;
+
+    uint32_t utilization = q->average_utilization();
+    if (utilization > 100)
+        utilization = 100;
+
+    LosslessOutputQueue* lq = dynamic_cast<LosslessOutputQueue*>(q);
+    if (lq && lq->is_paused())
+        utilization = 100;
+
+    return utilization;
+}
+
+double FatTreeSwitch::glb_port_score(BaseQueue* q, double queue_weight, double util_weight) {
+    if (!q)
+        return 0.0;
+
+    double queue = _glb_normalize_scores ? glb_queue_fraction(q) : (double)glb_queue_kbytes(q);
+    double utilization = _glb_normalize_scores ?
+        (double)glb_utilization_percent(q) / 100.0 :
+        (double)glb_utilization_percent(q);
+
+    return queue_weight * queue + util_weight * utilization;
+}
+
+void FatTreeSwitch::glb_candidate_queues(uint32_t dst, vector<BaseQueue*>& queues) {
+    if (_type == TOR) {
+        if (_ft->HOST_POD_SWITCH(dst) == _id) {
+            for (uint32_t b = 0; b < _ft->bundlesize(TOR_TIER); b++) {
+                BaseQueue* q = _ft->queues_nlp_ns[_id][dst][b];
+                if (q)
+                    queues.push_back(q);
+            }
+            return;
+        }
+
+        uint32_t agg_min, agg_max;
+        if (_ft->get_tiers() == 3) {
+            uint32_t podid = _id / _ft->tor_switches_per_pod();
+            agg_min = _ft->MIN_POD_AGG_SWITCH(podid);
+            agg_max = _ft->MAX_POD_AGG_SWITCH(podid);
+        } else {
+            agg_min = 0;
+            agg_max = _ft->getNAGG() - 1;
+        }
+
+        for (uint32_t agg = agg_min; agg <= agg_max; agg++) {
+            for (uint32_t b = 0; b < _ft->bundlesize(AGG_TIER); b++) {
+                BaseQueue* q = _ft->queues_nlp_nup[_id][agg][b];
+                if (q)
+                    queues.push_back(q);
+            }
+        }
+        return;
+    }
+
+    if (_type == AGG) {
+        if (_ft->get_tiers() == 2 || _ft->HOST_POD(dst) == _ft->AGG_SWITCH_POD_ID(_id)) {
+            uint32_t target_tor = _ft->HOST_POD_SWITCH(dst);
+            for (uint32_t b = 0; b < _ft->bundlesize(AGG_TIER); b++) {
+                BaseQueue* q = _ft->queues_nup_nlp[_id][target_tor][b];
+                if (q)
+                    queues.push_back(q);
+            }
+            return;
+        }
+
+        uint32_t podpos = _id % _ft->agg_switches_per_pod();
+        uint32_t uplink_bundles = _ft->radix_up(AGG_TIER) / _ft->bundlesize(CORE_TIER);
+        for (uint32_t l = 0; l < uplink_bundles; l++) {
+            uint32_t core = l * _ft->agg_switches_per_pod() + podpos;
+            for (uint32_t b = 0; b < _ft->bundlesize(CORE_TIER); b++) {
+                BaseQueue* q = _ft->queues_nup_nc[_id][core][b];
+                if (q)
+                    queues.push_back(q);
+            }
+        }
+        return;
+    }
+
+    if (_type == CORE) {
+        uint32_t target_agg = _ft->MIN_POD_AGG_SWITCH(_ft->HOST_POD(dst)) +
+                              (_id % _ft->agg_switches_per_pod());
+        for (uint32_t b = 0; b < _ft->bundlesize(CORE_TIER); b++) {
+            BaseQueue* q = _ft->queues_nc_nup[_id][target_agg][b];
+            if (q)
+                queues.push_back(q);
+        }
+    }
+}
+
+double FatTreeSwitch::glb_compute_remote_score(uint32_t dst) {
+    vector<BaseQueue*> queues;
+    glb_candidate_queues(dst, queues);
+    if (queues.empty())
+        return 0.0;
+
+    double best = std::numeric_limits<double>::max();
+    double busy = 0.0;
+    for (uint32_t i = 0; i < queues.size(); i++) {
+        double score = glb_port_score(queues[i], _glb_remote_queue_weight, _glb_remote_util_weight);
+        if (score < best)
+            best = score;
+        busy += _glb_normalize_scores ? glb_queue_fraction(queues[i]) : (double)glb_queue_kbytes(queues[i]);
+    }
+
+    double avg_busy = busy / queues.size();
+    return best + _glb_remote_busy_weight * avg_busy;
+}
+
+double FatTreeSwitch::glb_remote_score(uint32_t dst) {
+    if (_glb_update_interval == 0)
+        return glb_compute_remote_score(dst);
+
+    simtime_picosec now = eventlist().now();
+    GlbRemoteCache& cache = _glb_remote_cache[dst];
+    if (cache.valid && now - cache.last_update < _glb_update_interval)
+        return cache.score;
+
+    cache.score = glb_compute_remote_score(dst);
+    cache.last_update = now;
+    cache.valid = true;
+    return cache.score;
+}
+
+double FatTreeSwitch::glb_score(FibEntry* entry, uint32_t dst, uint32_t depth) {
+    Route *r = entry->getEgressPort();
+    assert(r && r->size() > 0);
+
+    BaseQueue* q = dynamic_cast<BaseQueue*>(r->at(0));
+    if (!q)
+        return 0.0;
+
+    double score = glb_port_score(q, _glb_queue_weight, _glb_util_weight);
+
+    if (depth > 0 && r->size() > 2) {
+        FatTreeSwitch* next = dynamic_cast<FatTreeSwitch*>(r->at(2));
+        if (next)
+            score += _glb_downstream_weight * next->glb_remote_score(dst);
+    }
+    return score;
+}
+
+uint8_t FatTreeSwitch::glb_quality(double score) {
+    double bucket = _glb_quality_bucket > 0.0 ? _glb_quality_bucket : 1.0;
+    uint32_t quality = (uint32_t)(score / bucket);
+    if (quality > _glb_max_quality)
+        quality = _glb_max_quality;
+    return (uint8_t)quality;
+}
+
+uint32_t FatTreeSwitch::glb_best_score(uint32_t dst, uint32_t depth) {
+    vector<FibEntry*> *available_hops = _fib->getRoutes(dst);
+    if (!available_hops || available_hops->empty())
+        return 0;
+
+    double best = std::numeric_limits<double>::max();
+    for (uint32_t i = 0; i < available_hops->size(); i++) {
+        double score = glb_score((*available_hops)[i], dst, depth);
+        if (score < best)
+            best = score;
+    }
+    return best == std::numeric_limits<double>::max() ? 0 : (uint32_t)best;
+}
+
+uint32_t FatTreeSwitch::glb_route(vector<FibEntry*>* ecmp_set, uint32_t dst) {
+    uint8_t qualities[256];
+    uint32_t best_choices[256];
+    uint32_t best_choices_count = 0;
+    uint8_t best_quality = 255;
+
+    for (uint32_t i = 0; i < ecmp_set->size(); i++) {
+        qualities[i] = glb_quality(glb_score((*ecmp_set)[i], dst, 1));
+        if (qualities[i] < best_quality)
+            best_quality = qualities[i];
+    }
+
+    for (uint32_t i = 0; i < ecmp_set->size(); i++) {
+        if (qualities[i] == best_quality) {
+            assert(best_choices_count < 256);
+            best_choices[best_choices_count++] = i;
+        }
+    }
+
+    assert(best_choices_count > 0);
+    return best_choices[random() % best_choices_count];
+}
+
+uint32_t FatTreeSwitch::drill_route(vector<FibEntry*>* ecmp_set, uint32_t dst) {
+    uint32_t candidates[3];
+    uint32_t candidate_count = 0;
+    uint32_t hop_count = ecmp_set->size();
+
+    candidates[candidate_count++] = random() % hop_count;
+    candidates[candidate_count++] = random() % hop_count;
+
+    if (_drill_memory.find(dst) != _drill_memory.end())
+        candidates[candidate_count++] = _drill_memory[dst] % hop_count;
+
+    uint32_t best = candidates[0];
+    for (uint32_t i = 1; i < candidate_count; i++) {
+        int8_t c = fn((*ecmp_set)[best], (*ecmp_set)[candidates[i]]);
+        if (c < 0)
+            best = candidates[i];
+    }
+
+    _drill_memory[dst] = best;
+    return best;
+}
+
+uint32_t FatTreeSwitch::pathid_ecmp_choice(Packet& pkt, uint32_t hop_count, packet_direction direction) {
+    if (!_pathid_only_hash)
+        return freeBSDHash(pkt.flow_id(), pkt.pathid(), _hash_salt) % hop_count;
+
+    uint32_t pathid = pkt.pathid();
+    if (_type == TOR)
+        return pathid % hop_count;
+
+    uint32_t tor_choices = _ft->radix_up(TOR_TIER);
+    if (tor_choices == 0)
+        tor_choices = 1;
+
+    if (_type == AGG) {
+        if (direction == UP)
+            return (pathid / tor_choices) % hop_count;
+
+        uint32_t divisor = tor_choices;
+        if (_ft->get_tiers() == 3) {
+            uint32_t agg_up_choices = _ft->radix_up(AGG_TIER);
+            if (agg_up_choices == 0)
+                agg_up_choices = 1;
+            uint32_t core_down_choices = _ft->bundlesize(CORE_TIER);
+            if (core_down_choices == 0)
+                core_down_choices = 1;
+            divisor *= agg_up_choices;
+            divisor *= core_down_choices;
+        }
+        return (pathid / divisor) % hop_count;
+    }
+    if (_type == CORE) {
+        uint32_t agg_up_choices = _ft->radix_up(AGG_TIER);
+        if (agg_up_choices == 0)
+            agg_up_choices = 1;
+        return (pathid / (tor_choices * agg_up_choices)) % hop_count;
+    }
+    return pathid % hop_count;
+}
+
+void FatTreeSwitch::maybe_update_dtor_feedback(Packet& pkt) {
+    if (_type != TOR || pkt.type() != ROCE)
+        return;
+
+    RocePacket* roce = dynamic_cast<RocePacket*>(&pkt);
+    if (!roce || roce->src() == UINT32_MAX)
+        return;
+
+    uint32_t src_tor = _ft->HOST_POD_SWITCH(roce->src());
+    if (src_tor == _id)
+        return;
+
+    DtorState& state = _dtor_states[src_tor];
+    uint32_t path_count = _dtor_path_count ? _dtor_path_count : 1;
+    if (state.bitmap.size() != path_count) {
+        state.bitmap.assign(path_count, 1);
+        state.packets = 0;
+    }
+
+    uint32_t path = pkt.pathid() % path_count;
+    bool ecn = (pkt.flags() & ECN_CE) != 0;
+    state.packets++;
+    if (ecn)
+        state.bitmap[path] = 0;
+    else
+        state.bitmap[path] = _dtor_feedback_observed_values ? 2 : 1;
+
+    simtime_picosec now = eventlist().now();
+    bool packet_trigger = state.packets >= _dtor_feedback_pkts;
+    bool time_trigger = state.packets > 0 &&
+                        now - state.last_feedback >= _dtor_feedback_max_interval;
+
+    bool min_elapsed = now - state.last_feedback >= _dtor_feedback_min_interval;
+    if ((packet_trigger && min_elapsed) || time_trigger) {
+        roce->set_dtor_feedback(state.bitmap);
+        state.bitmap.assign(path_count, 1);
+        state.packets = 0;
+        state.last_feedback = now;
+    }
+}
 
 Route* FatTreeSwitch::getNextHop(Packet& pkt, BaseQueue* ingress_port){
     vector<FibEntry*> * available_hops = _fib->getRoutes(pkt.dst());
@@ -329,7 +666,7 @@ Route* FatTreeSwitch::getNextHop(Packet& pkt, BaseQueue* ingress_port){
             case NIX:
                 abort();
             case ECMP:
-                ecmp_choice = freeBSDHash(pkt.flow_id(),pkt.pathid(),_hash_salt) % available_hops->size();
+                ecmp_choice = pathid_ecmp_choice(pkt, available_hops->size(), (*available_hops)[0]->getDirection());
                 break;
             case ADAPTIVE_ROUTING:
                 if (_ar_sticky==FatTreeSwitch::PER_PACKET){
@@ -391,6 +728,12 @@ Route* FatTreeSwitch::getNextHop(Packet& pkt, BaseQueue* ingress_port){
                 else ecmp_choice = freeBSDHash(pkt.flow_id(),pkt.pathid(),_hash_salt) % available_hops->size();
                 
                 break;
+            case GLB:
+                ecmp_choice = glb_route(available_hops, pkt.dst());
+                break;
+            case DRILL:
+                ecmp_choice = drill_route(available_hops, pkt.dst());
+                break;
             }
         
         FibEntry* e = (*available_hops)[ecmp_choice];
@@ -406,6 +749,7 @@ Route* FatTreeSwitch::getNextHop(Packet& pkt, BaseQueue* ingress_port){
             HostFibEntry* fe = _fib->getHostRoute(pkt.dst(),pkt.flow_id());
             assert(fe);
             pkt.set_direction(DOWN);
+            maybe_update_dtor_feedback(pkt);
             return fe->getEgressPort();
         } else {
             //route packet up!

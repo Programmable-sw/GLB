@@ -5,6 +5,7 @@
 #include "switch.h"
 #include "callback_pipe.h"
 #include <unordered_map>
+#include <vector>
 
 class FatTreeTopology;
 
@@ -88,7 +89,7 @@ public:
     };
 
     enum routing_strategy {
-        NIX = 0, ECMP = 1, ADAPTIVE_ROUTING = 2, ECMP_ADAPTIVE = 3, RR = 4, RR_ECMP = 5
+        NIX = 0, ECMP = 1, ADAPTIVE_ROUTING = 2, ECMP_ADAPTIVE = 3, RR = 4, RR_ECMP = 5, GLB = 6, DRILL = 7
     };
 
     enum sticky_choices {
@@ -104,6 +105,9 @@ public:
     uint32_t adaptive_route(vector<FibEntry*>* ecmp_set, int8_t (*cmp)(FibEntry*,FibEntry*));
     uint32_t replace_worst_choice(vector<FibEntry*>* ecmp_set, int8_t (*cmp)(FibEntry*,FibEntry*),uint32_t my_choice);
     uint32_t adaptive_route_p2c(vector<FibEntry*>* ecmp_set, int8_t (*cmp)(FibEntry*,FibEntry*));
+    uint32_t glb_route(vector<FibEntry*>* ecmp_set, uint32_t dst);
+    uint32_t glb_best_score(uint32_t dst, uint32_t depth);
+    uint32_t drill_route(vector<FibEntry*>* ecmp_set, uint32_t dst);
 
     static int8_t compare_flow_count(FibEntry* l, FibEntry* r);
     static int8_t compare_pause(FibEntry* l, FibEntry* r);
@@ -129,7 +133,39 @@ public:
     static simtime_picosec _sticky_delta;
     static double _ecn_threshold_fraction;
     static double _speculative_threshold_fraction;
+    static double _glb_downstream_weight;
+    static double _glb_queue_weight;
+    static double _glb_util_weight;
+    static double _glb_remote_queue_weight;
+    static double _glb_remote_util_weight;
+    static double _glb_remote_busy_weight;
+    static double _glb_quality_bucket;
+    static uint32_t _glb_max_quality;
+    static simtime_picosec _glb_update_interval;
+    static bool _glb_normalize_scores;
+    static uint32_t _dtor_feedback_pkts;
+    static simtime_picosec _dtor_feedback_min_interval;
+    static simtime_picosec _dtor_feedback_max_interval;
+    static uint32_t _dtor_path_count;
+    static bool _dtor_feedback_observed_values;
+    static bool _pathid_only_hash;
 private:
+    struct DtorState {
+        std::vector<uint8_t> bitmap;
+        uint32_t packets;
+        simtime_picosec last_feedback;
+
+        DtorState() : packets(0), last_feedback(0) {}
+    };
+
+    struct GlbRemoteCache {
+        double score;
+        simtime_picosec last_update;
+        bool valid;
+
+        GlbRemoteCache() : score(0.0), last_update(0), valid(false) {}
+    };
+
     switch_type _type;
     Pipe* _pipe;
     FatTreeTopology* _ft;
@@ -138,6 +174,9 @@ private:
     vector<FibEntry*>* _uproutes;
 
     unordered_map<uint32_t,FlowletInfo*> _flowlet_maps;
+    unordered_map<uint32_t,DtorState> _dtor_states;
+    unordered_map<uint32_t,uint32_t> _drill_memory;
+    unordered_map<uint32_t,GlbRemoteCache> _glb_remote_cache;
 
     static unordered_map<BaseQueue*,uint32_t> _port_flow_counts;
 
@@ -146,6 +185,18 @@ private:
     simtime_picosec _last_choice;
 
     unordered_map<Packet*,bool> _packets;
+
+    void glb_candidate_queues(uint32_t dst, vector<BaseQueue*>& queues);
+    uint32_t glb_queue_kbytes(BaseQueue* q);
+    double glb_queue_fraction(BaseQueue* q);
+    uint32_t glb_utilization_percent(BaseQueue* q);
+    double glb_port_score(BaseQueue* q, double queue_weight, double util_weight);
+    double glb_remote_score(uint32_t dst);
+    double glb_compute_remote_score(uint32_t dst);
+    double glb_score(FibEntry* entry, uint32_t dst, uint32_t depth);
+    uint8_t glb_quality(double score);
+    uint32_t pathid_ecmp_choice(Packet& pkt, uint32_t hop_count, packet_direction direction);
+    void maybe_update_dtor_feedback(Packet& pkt);
 };
 
 #endif

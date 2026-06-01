@@ -33,6 +33,9 @@ mem_b FatTreeTopology::_queue_down[] = {0,0,0};
 uint32_t FatTreeTopology::_bundlesize[] = {1,1,1};
 uint32_t FatTreeTopology::_oversub[] = {1,1,1};
 linkspeed_bps FatTreeTopology::_downlink_speeds[] = {0,0,0};
+uint32_t FatTreeTopology::_slow_link_divisor = 10;
+uint32_t FatTreeTopology::_slow_tor_uplinks = 0;
+uint32_t FatTreeTopology::_slow_tor_uplink_divisor = 2;
 
 void
 FatTreeTopology::set_tier_parameters(int tier, int radix_up, int radix_down, mem_b queue_up, mem_b queue_down, int bundlesize, linkspeed_bps linkspeed, int oversub) {
@@ -246,7 +249,7 @@ FatTreeTopology* FatTreeTopology::load(istream& file, QueueLoggerFactory* logger
 FatTreeTopology::FatTreeTopology(uint32_t no_of_nodes, linkspeed_bps linkspeed, mem_b queuesize,
                                  QueueLoggerFactory* logger_factory,
                                  EventList* ev,FirstFit * fit,queue_type q, simtime_picosec latency, simtime_picosec switch_latency, queue_type snd){
-    
+
     set_linkspeeds(linkspeed);
     set_queue_sizes(queuesize);
     _logger_factory = logger_factory;
@@ -255,6 +258,48 @@ FatTreeTopology::FatTreeTopology(uint32_t no_of_nodes, linkspeed_bps linkspeed, 
     _qt = q;
     _sender_qt = snd;
     failed_links = 0;
+    if ((latency != 0 || switch_latency != 0) && _link_latencies[TOR_TIER] != 0) {
+        cerr << "Don't set latencies using both the constructor and set_latencies - use only one of the two\n";
+        exit(1);
+    }
+    _hop_latency = latency;
+    _switch_latency = switch_latency;
+
+    if (_link_latencies[TOR_TIER] == 0) {
+        cout << "Fat Tree topology with " << timeAsUs(_hop_latency) << "us links and " << timeAsUs(_switch_latency) <<"us switching latency." <<endl;
+    } else {
+        cout << "Fat Tree topology with "
+             << timeAsUs(_link_latencies[TOR_TIER]) << "us Src-ToR links, "
+             << timeAsUs(_link_latencies[AGG_TIER]) << "us ToR-Agg links, ";
+        if (_tiers == 3) {
+            cout << timeAsUs(_link_latencies[CORE_TIER]) << "us Agg-Core links, ";
+        }
+        cout << timeAsUs(_switch_latencies[TOR_TIER]) << "us ToR switch latency, "
+             << timeAsUs(_switch_latencies[AGG_TIER]) << "us Agg switch latency";
+        if (_tiers == 3) {
+            cout << ", " << timeAsUs(_switch_latencies[CORE_TIER]) << "us Core switch latency." << endl;
+        } else {
+            cout << "." << endl;
+        }
+    }
+    set_params(no_of_nodes);
+
+    init_network();
+}
+
+FatTreeTopology::FatTreeTopology(uint32_t no_of_nodes, linkspeed_bps linkspeed, mem_b queuesize,
+                                 QueueLoggerFactory* logger_factory,
+                                 EventList* ev,FirstFit * fit,queue_type q, simtime_picosec latency, simtime_picosec switch_latency,
+                                 queue_type snd, uint32_t num_failed){
+
+    set_linkspeeds(linkspeed);
+    set_queue_sizes(queuesize);
+    _logger_factory = logger_factory;
+    _eventlist = ev;
+    ff = fit;
+    _qt = q;
+    _sender_qt = snd;
+    failed_links = num_failed;
     if ((latency != 0 || switch_latency != 0) && _link_latencies[TOR_TIER] != 0) {
         cerr << "Don't set latencies using both the constructor and set_latencies - use only one of the two\n";
         exit(1);
@@ -681,8 +726,9 @@ FatTreeTopology::alloc_queue(QueueLogger* queueLogger, linkspeed_bps speed, mem_
         return new LosslessQueue(speed, queuesize, *_eventlist, queueLogger, NULL);
     case LOSSLESS_INPUT:
         return new LosslessOutputQueue(speed, queuesize, *_eventlist, queueLogger);
-    case LOSSLESS_INPUT_ECN: 
-        return new LosslessOutputQueue(speed, memFromPkt(10000), *_eventlist, queueLogger,1,memFromPkt(16));
+    case LOSSLESS_INPUT_ECN:
+        return new LosslessOutputQueue(speed, queuesize, *_eventlist, queueLogger,
+                                       1, queuesize / 5, queuesize * 4 / 5);
     case COMPOSITE_ECN:
         if (tor && dir == DOWNLINK) 
             return new CompositeQueue(speed, queuesize, *_eventlist, queueLogger);
@@ -809,6 +855,11 @@ void FatTreeTopology::init_network(){
     }
 
     //Lower layer in pod to upper layer in pod!
+    uint32_t tor_uplink_total =
+        NTOR * ((_tiers == 3) ? _agg_switches_per_pod : NAGG) * _bundlesize[AGG_TIER];
+    uint32_t slow_tor_uplinks =
+        (_slow_tor_uplinks > tor_uplink_total) ? tor_uplink_total : _slow_tor_uplinks;
+    uint32_t tor_uplink_index = 0;
     for (uint32_t tor = 0; tor < NTOR; tor++) {
         uint32_t podid = tor/_tor_switches_per_pod;
         uint32_t agg_min, agg_max;
@@ -845,7 +896,21 @@ void FatTreeTopology::init_network(){
                 } else {
                     queueLogger = NULL;
                 }
-                queues_nlp_nup[tor][agg][b] = alloc_queue(queueLogger, _queue_up[TOR_TIER], UPLINK, TOR_TIER, true);
+                bool slow_tor_uplink = slow_tor_uplinks != 0 &&
+                    (((uint64_t)(tor_uplink_index + 1) * slow_tor_uplinks) / tor_uplink_total >
+                     ((uint64_t)tor_uplink_index * slow_tor_uplinks) / tor_uplink_total);
+                if (slow_tor_uplink) {
+                    queues_nlp_nup[tor][agg][b] =
+                        alloc_queue(queueLogger, _downlink_speeds[AGG_TIER] / _slow_tor_uplink_divisor,
+                                    _queue_up[TOR_TIER], UPLINK, AGG_TIER, true);
+                    cout << "Adding slow ToR-to-agg uplink for tor " << ntoa(tor) << " agg " << ntoa(agg)
+                         << " b " << ntoa(b) << " index " << ntoa(tor_uplink_index)
+                         << "/" << ntoa(tor_uplink_total)
+                         << " divisor " << ntoa(_slow_tor_uplink_divisor) << endl;
+                } else {
+                    queues_nlp_nup[tor][agg][b] = alloc_queue(queueLogger, _queue_up[TOR_TIER], UPLINK, TOR_TIER, true);
+                }
+                tor_uplink_index++;
                 queues_nlp_nup[tor][agg][b]->setName("LS" + ntoa(tor) + "->US" + ntoa(agg) + "(" + ntoa(b) + ")");
                 //cout << queues_nlp_nup[tor][agg][b]->str() << endl;
                 //if (logfile) logfile->writeName(*(queues_nlp_nup[tor][agg]));
@@ -917,9 +982,10 @@ void FatTreeTopology::init_network(){
                     }
         
                     if ((l+agg*_agg_switches_per_pod)<failed_links){
-                        queues_nc_nup[core][agg][b] = alloc_queue(queueLogger, _downlink_speeds[CORE_TIER]/10, _queue_down[CORE_TIER],
+                        queues_nc_nup[core][agg][b] = alloc_queue(queueLogger, _downlink_speeds[CORE_TIER]/_slow_link_divisor, _queue_down[CORE_TIER],
                                                                DOWNLINK, CORE_TIER, false);
-                        cout << "Adding link failure for agg_sw " << ntoa(agg) << " l " << ntoa(l) << " b " << ntoa(b) << endl;
+                        cout << "Adding slow core-to-agg downlink for agg_sw " << ntoa(agg) << " l " << ntoa(l)
+                             << " b " << ntoa(b) << " divisor " << ntoa(_slow_link_divisor) << endl;
                     } else {
                         queues_nc_nup[core][agg][b] = alloc_queue(queueLogger, _queue_down[CORE_TIER], DOWNLINK, CORE_TIER);
                     }

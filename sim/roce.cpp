@@ -7,7 +7,81 @@
 #include <stdio.h>
 #include "switch.h"
 #include "trigger.h"
+#include "ecn.h"
 using namespace std;
+
+static uint32_t dtor_mix(uint32_t a, uint32_t b, uint32_t c) {
+    a += 0x9e3779b9;
+    b += 0x9e3779b9;
+    c += 0x85ebca6b;
+    a -= b; a -= c; a ^= (c >> 13);
+    b -= c; b -= a; b ^= (a << 8);
+    c -= a; c -= b; c ^= (b >> 13);
+    a -= b; a -= c; a ^= (c >> 12);
+    b -= c; b -= a; b ^= (a << 16);
+    c -= a; c -= b; c ^= (b >> 5);
+    a -= b; a -= c; a ^= (c >> 3);
+    b -= c; b -= a; b ^= (a << 10);
+    c -= a; c -= b; c ^= (b >> 15);
+    return c;
+}
+
+static uint32_t dtor_gcd(uint32_t a, uint32_t b) {
+    while (b != 0) {
+        uint32_t t = a % b;
+        a = b;
+        b = t;
+    }
+    return a;
+}
+
+static uint32_t dtor_priority_index(Packet::PktPriority priority) {
+    switch (priority) {
+    case Packet::PRIO_LO:
+        return 0;
+    case Packet::PRIO_MID:
+        return 1;
+    case Packet::PRIO_HI:
+        return 2;
+    case Packet::PRIO_NONE:
+        return 0;
+    }
+    return 0;
+}
+
+static uint32_t dtor_bitmap_count(const DtorBitmap& bitmap) {
+    uint32_t count = 0;
+    for (uint32_t i = 0; i < bitmap.size(); i++) {
+        if (bitmap[i])
+            count++;
+    }
+    return count;
+}
+
+static uint32_t dtor_bitmap_count_at_least(const DtorBitmap& bitmap, uint8_t min_value) {
+    uint32_t count = 0;
+    for (uint32_t i = 0; i < bitmap.size(); i++) {
+        if (bitmap[i] >= min_value)
+            count++;
+    }
+    return count;
+}
+
+static bool dtor_bitmap_any(const DtorBitmap& bitmap) {
+    for (uint32_t i = 0; i < bitmap.size(); i++) {
+        if (bitmap[i])
+            return true;
+    }
+    return false;
+}
+
+static bool dtor_uses_2bit_state(uint32_t mode) {
+    return mode == 1 || mode == 2;
+}
+
+static uint8_t dtor_initial_state(uint32_t mode) {
+    return dtor_uses_2bit_state(mode) ? 3 : 1;
+}
 
 ////////////////////////////////////////////////////////////////
 //  ROCE SOURCE
@@ -29,6 +103,34 @@ uint32_t RoceSrc::_global_rto_count = 0;
 
 /* _min_rto can be tuned using SetMinRTO. Don't change it here.  */
 simtime_picosec RoceSrc::_min_rto = timeFromUs((uint32_t)DEFAULT_RTO_MIN);
+RoceSrc::lb_mode_t RoceSrc::_lb_mode = RoceSrc::LB_ECMP;
+uint32_t RoceSrc::_path_entropy_size = 256;
+uint32_t RoceSrc::_reps_buffer_size = 8;
+uint32_t RoceSrc::_dtor_min_good_paths = 16;
+uint32_t RoceSrc::_dtor_hosts_per_tor = 1;
+simtime_picosec RoceSrc::_dtor_bad_hold_down = 0;
+uint32_t RoceSrc::_dtor_state_mode = 0;
+uint32_t RoceSrc::_dtor_weak_sample_pkts = 0;
+uint32_t RoceSrc::_dtor_ecn_degrade_mode = 0;
+bool RoceSrc::_dtor_unknown_reopen = false;
+simtime_picosec RoceSrc::_conweave_rtt_threshold = timeFromUs(16.0);
+simtime_picosec RoceSrc::_conweave_min_reroute_gap = timeFromUs(4.0);
+uint32_t RoceSrc::_ndp_initial_window = 256;
+RoceSrc::cc_mode_t RoceSrc::_cc_mode = RoceSrc::CC_DCQCN_VARIANT;
+uint32_t RoceSrc::_cc_initial_cwnd_pkts = 100;
+uint32_t RoceSrc::_cc_min_cwnd_pkts = 1;
+uint32_t RoceSrc::_cc_max_cwnd_pkts = 0;
+double RoceSrc::_dcqcn_g = 1.0 / 256.0;
+double RoceSrc::_dcqcn_initial_alpha = 0.0625;
+linkspeed_bps RoceSrc::_dcqcn_ai_rate = 4000000000ULL;
+linkspeed_bps RoceSrc::_dcqcn_min_rate = 1000000000ULL;
+mem_b RoceSrc::_dcqcn_byte_counter = 10 * 1024 * 1024;
+uint32_t RoceSrc::_dcqcn_fast_recovery_steps = 5;
+simtime_picosec RoceSrc::_dcqcn_alpha_interval = timeFromUs(55.0);
+simtime_picosec RoceSrc::_dcqcn_rate_increase_interval = timeFromUs(55.0);
+simtime_picosec RoceSrc::_dcqcn_cnp_interval = timeFromUs(50.0);
+std::map<std::pair<uint32_t, uint32_t>, DtorBitmap> RoceSrc::_dtor_shared_bitmaps;
+std::map<std::pair<uint32_t, uint32_t>, simtime_picosec> RoceSrc::_dtor_shared_hold_until;
 
 RoceSrc::RoceSrc(RoceLogger* logger, TrafficLogger* pktlogger, EventList &eventlist, linkspeed_bps rate)
     : BaseQueue(rate,eventlist,NULL), _flow(pktlogger), _logger(logger)
@@ -48,6 +150,7 @@ RoceSrc::RoceSrc(RoceLogger* logger, TrafficLogger* pktlogger, EventList &eventl
 
     _highest_sent = 0;
     _last_acked = 0;
+    _srcaddr = UINT32_MAX;
     _dstaddr = UINT32_MAX;
 
     _sink = 0;
@@ -62,8 +165,20 @@ RoceSrc::RoceSrc(RoceLogger* logger, TrafficLogger* pktlogger, EventList &eventl
     _node_num = _global_node_count++;
     _nodename = "rocesrc " + to_string(_node_num);
 
-    srand(time(NULL));
     _pathid = random()%256;
+    _reps_head = 0;
+    _reps_valid_count = 0;
+    reset_reps_buffer();
+    _dtor_path_bitmap.assign(_path_entropy_size ? _path_entropy_size : 1, dtor_initial_state(_dtor_state_mode));
+    _dtor_hold_until = 0;
+    _ndp_cursor = 0;
+    _ndp_pull_credit = 0;
+    _ndp_paths_ready = false;
+    _conweave_last_reroute = 0;
+    _dtor_cursor.fill(0);
+    _dtor_stride.fill(1);
+    _dtor_cursor_ready.fill(false);
+    reset_congestion_control();
 
     //cout << _nodename << " path id is " << _pathid << endl;
 
@@ -74,7 +189,7 @@ RoceSrc::RoceSrc(RoceLogger* logger, TrafficLogger* pktlogger, EventList &eventl
 
     _state_send = READY;
     _time_last_sent = 0;
-    _packet_spacing = (simtime_picosec)((Packet::data_packet_size()+RocePacket::ACKSIZE) * (pow(10.0,12.0) * 8) / _bitrate);
+    update_packet_spacing();
 }
 
 /*mem_b RoceSrc::queuesize(){
@@ -87,6 +202,206 @@ RoceSrc::RoceSrc(RoceLogger* logger, TrafficLogger* pktlogger, EventList &eventl
 
 void RoceSrc::set_traffic_logger(TrafficLogger* pktlogger) {
     _flow.set_logger(pktlogger);
+}
+
+void RoceSrc::update_packet_spacing() {
+    double rate = (double)_bitrate;
+    if (_cc_mode == CC_DCQCN && _dcqcn_current_rate > 0 && _dcqcn_current_rate < rate)
+        rate = _dcqcn_current_rate;
+    if (rate < 1.0)
+        rate = 1.0;
+
+    double spacing = (Packet::data_packet_size()+RocePacket::ACKSIZE) * (pow(10.0,12.0) * 8) / rate;
+    if (spacing < 1.0)
+        spacing = 1.0;
+    _packet_spacing = (simtime_picosec)spacing;
+}
+
+void RoceSrc::reset_congestion_control() {
+    _cc_cwnd_pkts = _cc_initial_cwnd_pkts ? _cc_initial_cwnd_pkts : 1;
+    _cc_inflate_pkts = 0;
+    clamp_congestion_window();
+
+    _dcqcn_alpha = _dcqcn_initial_alpha;
+    _dcqcn_current_rate = (double)_bitrate;
+    _dcqcn_target_rate = (double)_bitrate;
+    _dcqcn_bytes_since_increase = 0;
+    _dcqcn_recovery_count = 0;
+    _dcqcn_seen_cnp = false;
+    _dcqcn_marked_since_alpha = false;
+    _dcqcn_last_cnp = 0;
+    _dcqcn_next_alpha_update = eventlist().now() + _dcqcn_alpha_interval;
+    _dcqcn_next_rate_increase = eventlist().now() + _dcqcn_rate_increase_interval;
+    clamp_dcqcn_rate();
+    update_packet_spacing();
+}
+
+void RoceSrc::clamp_congestion_window() {
+    double min_cwnd = _cc_min_cwnd_pkts ? _cc_min_cwnd_pkts : 1;
+    if (_cc_max_cwnd_pkts && _cc_cwnd_pkts > _cc_max_cwnd_pkts)
+        _cc_cwnd_pkts = _cc_max_cwnd_pkts;
+    if (_cc_cwnd_pkts < min_cwnd)
+        _cc_cwnd_pkts = min_cwnd;
+}
+
+double RoceSrc::congestion_window_available() const {
+    if (_cc_mode == CC_NONE)
+        return 1.0;
+    if (_cc_mode == CC_DCQCN)
+        return 1.0;
+
+    double outstanding_pkts = 0;
+    if (_highest_sent > _last_acked)
+        outstanding_pkts = ((double)(_highest_sent - _last_acked)) / _mss;
+    return _cc_cwnd_pkts + _cc_inflate_pkts - outstanding_pkts;
+}
+
+bool RoceSrc::congestion_window_allows_send() const {
+    if (_cc_mode == CC_NONE)
+        return true;
+    if (_cc_mode == CC_DCQCN)
+        return true;
+    return congestion_window_available() >= 1.0;
+}
+
+void RoceSrc::update_congestion_control_on_ack(const RoceAck& ack, double newly_acked_pkts) {
+    if (_cc_mode == CC_NONE)
+        return;
+
+    if (_cc_mode == CC_DCQCN) {
+        dcqcn_update_alpha_timer();
+        if (ack.flags() & ECN_ECHO)
+            dcqcn_on_cnp();
+        dcqcn_maybe_increase(newly_acked_pkts);
+        return;
+    }
+
+    if (ack.flags() & ECN_ECHO)
+        _cc_cwnd_pkts -= 0.5;
+    else
+        _cc_cwnd_pkts += 1.0 / _cc_cwnd_pkts;
+
+    clamp_congestion_window();
+
+    _cc_inflate_pkts += 1.0;
+    if (newly_acked_pkts > 0) {
+        if (newly_acked_pkts >= _cc_inflate_pkts)
+            _cc_inflate_pkts = 0;
+        else
+            _cc_inflate_pkts -= newly_acked_pkts;
+    }
+}
+
+void RoceSrc::update_congestion_control_on_nack() {
+    if (_cc_mode == CC_NONE)
+        return;
+
+    if (_cc_mode == CC_DCQCN) {
+        dcqcn_on_cnp();
+        return;
+    }
+
+    _cc_cwnd_pkts -= 1.0;
+    clamp_congestion_window();
+    _cc_inflate_pkts = 0;
+}
+
+void RoceSrc::clamp_dcqcn_rate() {
+    double line_rate = (double)_bitrate;
+    double min_rate = _dcqcn_min_rate ? (double)_dcqcn_min_rate : 1.0;
+
+    if (_dcqcn_current_rate < min_rate)
+        _dcqcn_current_rate = min_rate;
+    if (_dcqcn_target_rate < min_rate)
+        _dcqcn_target_rate = min_rate;
+    if (_dcqcn_current_rate > line_rate)
+        _dcqcn_current_rate = line_rate;
+    if (_dcqcn_target_rate > line_rate)
+        _dcqcn_target_rate = line_rate;
+
+    if (_dcqcn_alpha < 0.0)
+        _dcqcn_alpha = 0.0;
+    if (_dcqcn_alpha > 1.0)
+        _dcqcn_alpha = 1.0;
+}
+
+void RoceSrc::dcqcn_update_alpha_timer() {
+    if (!_dcqcn_alpha_interval)
+        return;
+
+    simtime_picosec now = eventlist().now();
+    while (now >= _dcqcn_next_alpha_update) {
+        if (!_dcqcn_marked_since_alpha)
+            _dcqcn_alpha *= (1.0 - _dcqcn_g);
+        _dcqcn_marked_since_alpha = false;
+        _dcqcn_next_alpha_update += _dcqcn_alpha_interval;
+    }
+    clamp_dcqcn_rate();
+}
+
+void RoceSrc::dcqcn_on_cnp() {
+    simtime_picosec now = eventlist().now();
+    _dcqcn_marked_since_alpha = true;
+
+    if (_dcqcn_seen_cnp && _dcqcn_cnp_interval && now - _dcqcn_last_cnp < _dcqcn_cnp_interval)
+        return;
+
+    _dcqcn_target_rate = _dcqcn_current_rate;
+    double cut = 1.0 - _dcqcn_alpha / 2.0;
+    if (cut < 0.0)
+        cut = 0.0;
+    _dcqcn_current_rate *= cut;
+    _dcqcn_alpha = (1.0 - _dcqcn_g) * _dcqcn_alpha + _dcqcn_g;
+
+    _dcqcn_bytes_since_increase = 0;
+    _dcqcn_recovery_count = 0;
+    _dcqcn_seen_cnp = true;
+    _dcqcn_last_cnp = now;
+    _dcqcn_next_alpha_update = now + _dcqcn_alpha_interval;
+    _dcqcn_next_rate_increase = now + _dcqcn_rate_increase_interval;
+
+    clamp_dcqcn_rate();
+    update_packet_spacing();
+}
+
+void RoceSrc::dcqcn_increase_rate() {
+    if (_dcqcn_recovery_count < _dcqcn_fast_recovery_steps) {
+        _dcqcn_current_rate = (_dcqcn_target_rate + _dcqcn_current_rate) / 2.0;
+        _dcqcn_recovery_count++;
+    } else {
+        _dcqcn_target_rate += (double)_dcqcn_ai_rate;
+        _dcqcn_current_rate = (_dcqcn_target_rate + _dcqcn_current_rate) / 2.0;
+    }
+
+    clamp_dcqcn_rate();
+}
+
+void RoceSrc::dcqcn_maybe_increase(double newly_acked_pkts) {
+    if (newly_acked_pkts > 0.0)
+        _dcqcn_bytes_since_increase += (mem_b)(newly_acked_pkts * _mss);
+
+    simtime_picosec now = eventlist().now();
+    bool changed = false;
+    uint32_t updates = 0;
+
+    while (updates < 64) {
+        bool due_timer = _dcqcn_rate_increase_interval && now >= _dcqcn_next_rate_increase;
+        bool due_bytes = _dcqcn_byte_counter > 0 && _dcqcn_bytes_since_increase >= _dcqcn_byte_counter;
+        if (!due_timer && !due_bytes)
+            break;
+
+        dcqcn_increase_rate();
+        changed = true;
+        updates++;
+
+        if (due_timer)
+            _dcqcn_next_rate_increase += _dcqcn_rate_increase_interval;
+        if (due_bytes)
+            _dcqcn_bytes_since_increase -= _dcqcn_byte_counter;
+    }
+
+    if (changed)
+        update_packet_spacing();
 }
 
 void RoceSrc::log_me() {
@@ -109,6 +424,13 @@ void RoceSrc::startflow(){
     _acked_packets = 0;
     _packets_sent = 0;
     _done = false;
+    reset_congestion_control();
+    if (_lb_mode == LB_REPS)
+        reset_reps_buffer();
+    if (_lb_mode == LB_NDP) {
+        _ndp_pull_credit = _ndp_initial_window;
+        _ndp_paths_ready = false;
+    }
     
     eventlist().sourceIsPendingRel(*this,0);
 }
@@ -127,8 +449,10 @@ void RoceSrc::connect(Route* routeout, Route* routeback, RoceSink& sink, simtime
     _sink->connect(*this, routeback);
 
     if (starttime != TRIGGER_START) {
-        //eventlist().sourceIsPending(*this,starttime);
-        startflow();
+        if (starttime == 0)
+            startflow();
+        else
+            eventlist().sourceIsPending(*this,starttime);
     }
     //else cout << "TRIGGER START " << _nodename << endl; 
 }
@@ -153,6 +477,14 @@ void RoceSrc::processNack(const RoceNack& nack){
 
     _highest_sent = _last_acked;
     _nacks_received ++;
+    update_congestion_control_on_nack();
+    if (_lb_mode == LB_NDP) {
+        grant_ndp_credit();
+        if (_state_send == READY)
+            eventlist().sourceIsPendingRel(*this, 0);
+    }
+    if (_lb_mode != LB_NDP && _cc_mode != CC_DCQCN && _state_send == READY && congestion_window_allows_send())
+        eventlist().sourceIsPendingRel(*this, 0);
 
     //this packet be sent when it is time to send a new packet!
 }
@@ -161,6 +493,7 @@ void RoceSrc::processNack(const RoceNack& nack){
 void RoceSrc::processAck(const RoceAck& ack) {
     RoceAck::seq_t ackno = ack.ackno();
     simtime_picosec ts = ack.ts();
+    uint64_t old_last_acked = _last_acked;
 
     // Compute rtt.  This comes originally from TCP, and may not be optimal for ROCE */
     uint64_t m = eventlist().now()-ts;
@@ -189,13 +522,27 @@ void RoceSrc::processAck(const RoceAck& ack) {
     if (_rto < _min_rto)
         _rto = _min_rto * ((drand() * 0.5) + 0.75);
 
+    double newly_acked_pkts = 0;
     if (ackno > _last_acked) { // a brand new ack    
         // we should probably cancel the rtx timer for any acked by
         // the cumulative ack, but we'll get an ACK or NACK anyway in
         // due course.
         _last_acked = ackno;
+        newly_acked_pkts = ((double)(ackno - old_last_acked)) / _mss;
     }
     if (_logger) _logger->logRoce(*this, RoceLogger::ROCE_RCV);
+
+    update_congestion_control_on_ack(ack, newly_acked_pkts);
+    update_reps(ack);
+    update_conweave(ack, m);
+    update_dtor(ack);
+    if (_lb_mode == LB_NDP && !_done) {
+        grant_ndp_credit();
+        if (_state_send == READY)
+            eventlist().sourceIsPendingRel(*this, 0);
+    }
+    if (_lb_mode != LB_NDP && _cc_mode != CC_DCQCN && !_done && _state_send == READY && congestion_window_allows_send())
+        eventlist().sourceIsPendingRel(*this, 0);
 
     if (_log_me)
         cout << "Src " << get_id() << " ackno " << ackno << endl;
@@ -208,6 +555,337 @@ void RoceSrc::processAck(const RoceAck& ack) {
 
         return;
     }
+}
+
+void RoceSrc::init_dtor_priority(Packet::PktPriority priority, uint32_t path_space) {
+    uint32_t prio = dtor_priority_index(priority);
+    if (_dtor_cursor_ready[prio])
+        return;
+
+    uint32_t src = _srcaddr == UINT32_MAX ? _node_num : _srcaddr;
+    uint32_t dst = _dstaddr == UINT32_MAX ? (_node_num ^ 0x5bd1e995) : _dstaddr;
+    uint32_t flow = _flow.flow_id();
+    uint32_t seed = dtor_mix(src, dst, flow ^ (prio * 0x9e3779b9));
+
+    _dtor_cursor[prio] = seed % path_space;
+
+    uint32_t stride = ((seed >> 8) % path_space) | 1;
+    if (stride == 0)
+        stride = 1;
+    while (dtor_gcd(stride, path_space) != 1)
+        stride = (stride + 2) % path_space;
+    if (stride == 0)
+        stride = 1;
+    _dtor_stride[prio] = stride;
+    _dtor_cursor_ready[prio] = true;
+}
+
+void RoceSrc::ensure_dtor_bitmap(uint32_t path_space) {
+    if (path_space == 0)
+        path_space = 1;
+    if (_dtor_path_bitmap.size() != path_space)
+        _dtor_path_bitmap.assign(path_space, dtor_initial_state(_dtor_state_mode));
+}
+
+std::pair<uint32_t, uint32_t> RoceSrc::dtor_cache_key() const {
+    uint32_t hosts_per_tor = _dtor_hosts_per_tor ? _dtor_hosts_per_tor : 1;
+    uint32_t src = _srcaddr == UINT32_MAX ? _node_num : _srcaddr;
+    uint32_t dst = _dstaddr == UINT32_MAX ? 0 : _dstaddr;
+    return std::make_pair(src / hosts_per_tor, dst / hosts_per_tor);
+}
+
+void RoceSrc::load_dtor_shared_bitmap(uint32_t path_space) {
+    std::pair<uint32_t, uint32_t> key = dtor_cache_key();
+    auto it = _dtor_shared_bitmaps.find(key);
+    if (it != _dtor_shared_bitmaps.end()) {
+        if (it->second.size() != path_space)
+            return;
+        _dtor_path_bitmap = it->second;
+    }
+
+    auto hold_it = _dtor_shared_hold_until.find(key);
+    if (hold_it != _dtor_shared_hold_until.end())
+        _dtor_hold_until = hold_it->second;
+}
+
+void RoceSrc::store_dtor_shared_bitmap() {
+    std::pair<uint32_t, uint32_t> key = dtor_cache_key();
+    _dtor_shared_bitmaps[key] = _dtor_path_bitmap;
+    _dtor_shared_hold_until[key] = _dtor_hold_until;
+}
+
+void RoceSrc::release_dtor_hold_if_expired(uint32_t path_space) {
+    if (_dtor_bad_hold_down == 0 || _dtor_hold_until == 0)
+        return;
+    if (eventlist().now() < _dtor_hold_until)
+        return;
+    _dtor_hold_until = 0;
+    _dtor_path_bitmap.assign(path_space, dtor_initial_state(_dtor_state_mode));
+    store_dtor_shared_bitmap();
+}
+
+void RoceSrc::init_ndp_paths(uint32_t path_space) {
+    if (path_space == 0)
+        path_space = 1;
+    if (_ndp_paths_ready && _ndp_path_ids.size() == path_space)
+        return;
+
+    _ndp_path_ids.resize(path_space);
+    for (uint32_t i = 0; i < path_space; i++)
+        _ndp_path_ids[i] = i;
+    for (uint32_t i = 0; i < path_space; i++) {
+        uint32_t ix = i + (random() % (path_space - i));
+        uint32_t tmp = _ndp_path_ids[i];
+        _ndp_path_ids[i] = _ndp_path_ids[ix];
+        _ndp_path_ids[ix] = tmp;
+    }
+    _ndp_cursor = 0;
+    _ndp_paths_ready = true;
+}
+
+uint32_t RoceSrc::choose_ndp_path(uint32_t path_space) {
+    init_ndp_paths(path_space);
+    if (_ndp_cursor >= _ndp_path_ids.size()) {
+        _ndp_paths_ready = false;
+        init_ndp_paths(path_space);
+    }
+    return _ndp_path_ids[_ndp_cursor++] % path_space;
+}
+
+void RoceSrc::grant_ndp_credit(uint32_t credits) {
+    if (UINT32_MAX - _ndp_pull_credit < credits)
+        _ndp_pull_credit = UINT32_MAX;
+    else
+        _ndp_pull_credit += credits;
+}
+
+uint32_t RoceSrc::choose_path(Packet::PktPriority priority) {
+    uint32_t path_space = _path_entropy_size;
+    if (path_space == 0)
+        path_space = 1;
+
+    if (_lb_mode == LB_REPS) {
+        ensure_reps_buffer();
+        if (_reps_valid_count > 0) {
+            uint32_t offset = (_reps_head + _reps_buffer.size() - _reps_valid_count) % _reps_buffer.size();
+            assert(_reps_buffer[offset].valid);
+            uint32_t path = _reps_buffer[offset].cached_ev;
+            _reps_buffer[offset].valid = false;
+            _reps_valid_count--;
+            return path % path_space;
+        }
+        return random() % path_space;
+    }
+
+    if (_lb_mode == LB_DTOR) {
+        uint32_t prio = dtor_priority_index(priority);
+        init_dtor_priority(priority, path_space);
+        ensure_dtor_bitmap(path_space);
+        load_dtor_shared_bitmap(path_space);
+        release_dtor_hold_if_expired(path_space);
+
+        if (dtor_uses_2bit_state(_dtor_state_mode)) {
+            uint32_t min_good_paths = _dtor_min_good_paths;
+            if (min_good_paths > path_space)
+                min_good_paths = path_space;
+
+            if (_dtor_weak_sample_pkts > 0 &&
+                _packets_sent > 0 &&
+                _packets_sent % _dtor_weak_sample_pkts == 0) {
+                for (uint32_t offset = 1; offset <= path_space; offset++) {
+                    uint32_t candidate = (_dtor_cursor[prio] + offset * _dtor_stride[prio]) % path_space;
+                    if (_dtor_path_bitmap[candidate] == 1) {
+                        _dtor_cursor[prio] = candidate;
+                        return candidate;
+                    }
+                }
+            }
+
+            uint8_t min_state = 3;
+            if (dtor_bitmap_count_at_least(_dtor_path_bitmap, 3) < min_good_paths) {
+                if (dtor_bitmap_count_at_least(_dtor_path_bitmap, 2) >= min_good_paths)
+                    min_state = 2;
+                else if (dtor_bitmap_count_at_least(_dtor_path_bitmap, 1) > 0)
+                    min_state = 1;
+            }
+
+            for (uint32_t offset = 1; offset <= path_space; offset++) {
+                uint32_t candidate = (_dtor_cursor[prio] + offset * _dtor_stride[prio]) % path_space;
+                if (_dtor_path_bitmap[candidate] >= min_state) {
+                    _dtor_cursor[prio] = candidate;
+                    return candidate;
+                }
+            }
+            return random() % path_space;
+        }
+
+        if (dtor_bitmap_any(_dtor_path_bitmap)) {
+            for (uint32_t offset = 1; offset <= path_space; offset++) {
+                uint32_t candidate = (_dtor_cursor[prio] + offset * _dtor_stride[prio]) % path_space;
+                if (_dtor_path_bitmap[candidate]) {
+                    _dtor_cursor[prio] = candidate;
+                    return candidate;
+                }
+            }
+        }
+        return random() % path_space;
+    }
+
+    if (_lb_mode == LB_SPRAY) {
+        uint32_t prio = dtor_priority_index(priority);
+        init_dtor_priority(priority, path_space);
+        uint32_t candidate = (_dtor_cursor[prio] + _dtor_stride[prio]) % path_space;
+        _dtor_cursor[prio] = candidate;
+        return candidate;
+    }
+
+    if (_lb_mode == LB_OPS)
+        return random() % path_space;
+
+    if (_lb_mode == LB_NDP)
+        return choose_ndp_path(path_space);
+
+    return _pathid % path_space;
+}
+
+void RoceSrc::ensure_reps_buffer() {
+    uint32_t size = _reps_buffer_size ? _reps_buffer_size : 1;
+    if (_reps_buffer.size() == size)
+        return;
+    _reps_buffer.assign(size, RepsBufferEntry());
+    _reps_head = 0;
+    _reps_valid_count = 0;
+}
+
+void RoceSrc::reset_reps_buffer() {
+    uint32_t size = _reps_buffer_size ? _reps_buffer_size : 1;
+    _reps_buffer.assign(size, RepsBufferEntry());
+    _reps_head = 0;
+    _reps_valid_count = 0;
+}
+
+void RoceSrc::update_reps(const RoceAck& ack) {
+    if (_lb_mode != LB_REPS)
+        return;
+    if (ack.flags() & ECN_ECHO)
+        return;
+
+    ensure_reps_buffer();
+    uint32_t path_space = _path_entropy_size ? _path_entropy_size : 1;
+    if (!_reps_buffer[_reps_head].valid)
+        _reps_valid_count++;
+    _reps_buffer[_reps_head].cached_ev = ack.pathid() % path_space;
+    _reps_buffer[_reps_head].valid = true;
+    _reps_head = (_reps_head + 1) % _reps_buffer.size();
+}
+
+void RoceSrc::update_conweave(const RoceAck& ack, simtime_picosec rtt) {
+    if (_lb_mode != LB_CONWEAVE)
+        return;
+
+    uint32_t path_space = _path_entropy_size ? _path_entropy_size : 1;
+    simtime_picosec now = eventlist().now();
+    if (rtt <= _conweave_rtt_threshold)
+        return;
+    if (now - _conweave_last_reroute < _conweave_min_reroute_gap)
+        return;
+
+    uint32_t current = ack.pathid() % path_space;
+    uint32_t next = random() % path_space;
+    if (path_space > 1) {
+        while (next == current)
+            next = random() % path_space;
+    }
+    _pathid = next;
+    _conweave_last_reroute = now;
+}
+
+void RoceSrc::update_dtor(const RoceAck& ack) {
+    if (_lb_mode != LB_DTOR)
+        return;
+
+    uint32_t path_space = _path_entropy_size ? _path_entropy_size : 1;
+    ensure_dtor_bitmap(path_space);
+
+    if (!ack.has_dtor_feedback())
+        return;
+
+    DtorBitmap fresh_bitmap = ack.dtor_bitmap();
+    if (fresh_bitmap.size() != path_space)
+        fresh_bitmap.resize(path_space, 1);
+
+    uint32_t min_good_paths = _dtor_min_good_paths;
+    if (min_good_paths > path_space)
+        min_good_paths = path_space;
+
+    if (dtor_uses_2bit_state(_dtor_state_mode)) {
+        for (uint32_t i = 0; i < path_space; i++) {
+            if (!fresh_bitmap[i]) {
+                if (_dtor_state_mode == 2) {
+                    if (_dtor_ecn_degrade_mode == 1 && _dtor_path_bitmap[i] > 1)
+                        _dtor_path_bitmap[i]--;
+                    else
+                        _dtor_path_bitmap[i] = 1;
+                } else {
+                    _dtor_path_bitmap[i] = 0;
+                }
+            } else if (fresh_bitmap[i] > 1 && _dtor_path_bitmap[i] < 3) {
+                _dtor_path_bitmap[i]++;
+            } else if (_dtor_unknown_reopen && fresh_bitmap[i] == 1 && _dtor_path_bitmap[i] < 2) {
+                _dtor_path_bitmap[i]++;
+            }
+        }
+        store_dtor_shared_bitmap();
+        return;
+    }
+
+    bool hold_bad = false;
+    for (uint32_t i = 0; i < path_space; i++) {
+        if (!fresh_bitmap[i]) {
+            hold_bad = true;
+            break;
+        }
+    }
+
+    if (_dtor_bad_hold_down > 0) {
+        release_dtor_hold_if_expired(path_space);
+        if (hold_bad)
+            _dtor_hold_until = eventlist().now() + _dtor_bad_hold_down;
+        if (_dtor_hold_until && eventlist().now() < _dtor_hold_until) {
+            DtorBitmap held = _dtor_path_bitmap;
+            for (uint32_t i = 0; i < path_space; i++) {
+                if (!fresh_bitmap[i])
+                    held[i] = 0;
+            }
+            if (dtor_bitmap_count(held) < min_good_paths) {
+                for (uint32_t i = 0; i < path_space; i++) {
+                    if (fresh_bitmap[i])
+                        held[i] = 1;
+                }
+            }
+            if (!dtor_bitmap_any(held))
+                held.assign(path_space, 1);
+            _dtor_path_bitmap = held;
+            store_dtor_shared_bitmap();
+            return;
+        }
+    }
+
+    if (dtor_bitmap_count(fresh_bitmap) >= min_good_paths) {
+        _dtor_path_bitmap = fresh_bitmap;
+        store_dtor_shared_bitmap();
+        return;
+    }
+
+    DtorBitmap merged = _dtor_path_bitmap;
+    for (uint32_t i = 0; i < path_space; i++) {
+        if (fresh_bitmap[i])
+            merged[i] = 1;
+    }
+    if (!dtor_bitmap_any(merged))
+        merged.assign(path_space, 1);
+    _dtor_path_bitmap = merged;
+    store_dtor_shared_bitmap();
 }
 
 void RoceSrc::processPause(const EthPausePacket& p) {
@@ -286,7 +964,8 @@ void RoceSrc::send_packet() {
     p = RocePacket::newpkt(_flow, *_route, _highest_sent+1, _mss, false, last_packet,_dstaddr);
     
     assert(p);
-    p->set_pathid(_pathid);
+    p->set_src(_srcaddr);
+    p->set_pathid(choose_path(p->priority()));
 
     p->flow().logTraffic(*p,*this,TrafficLogger::PKT_CREATESEND);
     p->set_ts(eventlist().now());
@@ -303,10 +982,10 @@ void RoceSrc::send_packet() {
 }
 
 void RoceSrc::doNextEvent() {
-    /*if (!_flow_started){
+    if (!_flow_started){
       startflow();
       return;
-      }*/
+    }
 
     assert(_flow_started);
     if (_log_me) 
@@ -319,6 +998,12 @@ void RoceSrc::doNextEvent() {
         return;
     }
 
+    if (_lb_mode == LB_NDP && _ndp_pull_credit == 0)
+        return;
+
+    if (!congestion_window_allows_send())
+        return;
+
     if (_flow_size && _highest_sent >= _flow_size) { 
         if (_log_me) 
             cout << "Src " << get_id()  << " stopping send coz highest_sent is " << _highest_sent << endl;
@@ -326,6 +1011,8 @@ void RoceSrc::doNextEvent() {
     }
 
     if (_time_last_sent==0 || eventlist().now() - _time_last_sent >= _packet_spacing){
+        if (_lb_mode == LB_NDP && _ndp_pull_credit > 0)
+            _ndp_pull_credit--;
         send_packet();
         _time_last_sent = eventlist().now();
     }
@@ -372,6 +1059,7 @@ void RoceSink::connect(RoceSrc& src, Route* route)
     _route = route;
     _cumulative_ack = 0;
     _drops = 0;
+    _ooo_packets.clear();
 }
 
 
@@ -402,51 +1090,57 @@ void RoceSink::receivePacket(Packet& pkt) {
     simtime_picosec ts = p->ts();
     //bool last_packet = ((RocePacket*)&pkt)->last_packet();
 
-    if (seqno > _cumulative_ack+1){
-        send_nack(ts,_cumulative_ack);  
+    if (pkt.header_only()) {
+        send_nack(ts, _cumulative_ack, p->path_id());
         pkt.flow().logTraffic(pkt,*this,TrafficLogger::PKT_RCVDESTROY);
-
-        p->free();
-
-        //cout << "Wrong seqno received at Roce SINK " << seqno << " expecting " << _cumulative_ack << endl;
+        pkt.free();
         return;
     }
 
     int size = p->size()-RocePacket::ACKSIZE; 
 
-    if (seqno == _cumulative_ack+1) { // it's the next expected seq no
+    if (seqno > _cumulative_ack+1) {
+        _ooo_packets[seqno] = size;
+    } else if (seqno == _cumulative_ack+1) { // it's the next expected seq no
         _cumulative_ack = seqno + size - 1;
+        while (_ooo_packets.find(_cumulative_ack + 1) != _ooo_packets.end()) {
+            RocePacket::seq_t next_seq = _cumulative_ack + 1;
+            int next_size = _ooo_packets[next_seq];
+            _ooo_packets.erase(next_seq);
+            _cumulative_ack = next_seq + next_size - 1;
+        }
     } else if (seqno < _cumulative_ack+1) {
         //must have been a bad retransmit
     }
-    send_ack(ts);
+    send_ack(*p, ts);
     // have we seen everything yet?
     pkt.flow().logTraffic(pkt,*this,TrafficLogger::PKT_RCVDESTROY);
     pkt.free();
 }
 
-void RoceSink::send_ack(simtime_picosec ts) {
+void RoceSink::send_ack(const RocePacket& pkt, simtime_picosec ts) {
     RoceAck *ack = 0;
     ack = RoceAck::newpkt(_src->_flow, *_route, _cumulative_ack,_srcaddr);
     if (_log_me)
         cout << "Sink " << get_id() << " sending ack " << _cumulative_ack << endl;
-    ack->set_pathid(0);
+    ack->set_pathid(pkt.path_id());
+    ack->set_ts(ts);
+    if (pkt.flags() & ECN_CE)
+        ack->set_flags(ack->flags() | ECN_ECHO);
+    if (pkt.has_dtor_feedback())
+        ack->set_dtor_feedback(pkt.dtor_bitmap());
     ack->sendOn();
 }
 
-void RoceSink::send_nack(simtime_picosec ts, RocePacket::seq_t ackno) {
+void RoceSink::send_nack(simtime_picosec ts, RocePacket::seq_t ackno, uint32_t path_id) {
     RoceNack *nack = NULL;
     nack = RoceNack::newpkt(_src->_flow, *_route, ackno,_srcaddr);
     if (_log_me)
         cout << "Sink " << get_id() << " sending nack " << ackno << endl;
 
-    nack->set_pathid(0);
+    nack->set_pathid(path_id);
     assert(nack);
     nack->flow().logTraffic(*nack,*this,TrafficLogger::PKT_CREATE);
     nack->set_ts(ts);
     nack->sendOn();
 }
-
-
-
-

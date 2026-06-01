@@ -10,6 +10,8 @@
 
 #include <list>
 #include <map>
+#include <vector>
+#include <array>
 //#include "util.h"
 #include "math.h"
 #include "config.h"
@@ -32,19 +34,49 @@ class Switch;
 class RoceSrc : public BaseQueue, public TriggerTarget {
     friend class RoceSink;
 public:
+    typedef enum {LB_ECMP = 0, LB_REPS = 1, LB_DTOR = 2, LB_CONWEAVE = 3, LB_NDP = 4, LB_SPRAY = 5, LB_OPS = 6} lb_mode_t;
+    typedef enum {CC_NONE = 0, CC_DCQCN_VARIANT = 1, CC_MPRDMA = 1, CC_DCQCN = 2} cc_mode_t;
+
     RoceSrc(RoceLogger* logger, TrafficLogger* pktlogger, EventList &eventlist, linkspeed_bps rate);
 
     virtual void connect(Route* routeout, Route* routeback, RoceSink& sink, simtime_picosec startTime);
+    void set_src(uint32_t src) {_srcaddr = src;}
     void set_dst(uint32_t dst) {_dstaddr = dst;}
     void set_traffic_logger(TrafficLogger* pktlogger);
 
     void startflow();
-    void setRate(linkspeed_bps r) {_bitrate = r;_packet_spacing = (simtime_picosec)((Packet::data_packet_size()+RocePacket::ACKSIZE) * (pow(10.0,12.0) * 8) / _bitrate);doNextEvent();}
+    void setRate(linkspeed_bps r) {_bitrate = r; update_packet_spacing(); doNextEvent();}
 
     inline void set_flowid(flowid_t flow_id) { _flow.set_flowid(flow_id);}
 
 
     static void setMinRTO(uint32_t min_rto_in_us) {_min_rto = timeFromUs((uint32_t)min_rto_in_us);}
+    static void setLoadBalancing(lb_mode_t mode) {_lb_mode = mode;}
+    static void setPathEntropySize(uint32_t paths) {_path_entropy_size = paths ? paths : 1;}
+    static void setRepsBufferSize(uint32_t size) {_reps_buffer_size = size ? size : 1;}
+    static void setDtorMinGoodPaths(uint32_t paths) {_dtor_min_good_paths = paths ? paths : 1;}
+    static void setDtorHostsPerTor(uint32_t hosts) {_dtor_hosts_per_tor = hosts ? hosts : 1;}
+    static void setDtorBadHoldDown(simtime_picosec hold_down) {_dtor_bad_hold_down = hold_down;}
+    static void setDtorStateMode(uint32_t mode) {_dtor_state_mode = mode;}
+    static void setDtorWeakSamplePkts(uint32_t pkts) {_dtor_weak_sample_pkts = pkts;}
+    static void setDtorEcnDegradeMode(uint32_t mode) {_dtor_ecn_degrade_mode = mode;}
+    static void setDtorUnknownReopen(bool enable) {_dtor_unknown_reopen = enable;}
+    static void setConweaveRttThreshold(simtime_picosec threshold) {_conweave_rtt_threshold = threshold;}
+    static void setConweaveMinRerouteGap(simtime_picosec gap) {_conweave_min_reroute_gap = gap;}
+    static void setNdpInitialWindow(uint32_t pkts) {_ndp_initial_window = pkts ? pkts : 1;}
+    static void setCongestionControl(cc_mode_t mode) {_cc_mode = mode;}
+    static void setCcInitialWindow(uint32_t pkts) {_cc_initial_cwnd_pkts = pkts ? pkts : 1;}
+    static void setCcMinWindow(uint32_t pkts) {_cc_min_cwnd_pkts = pkts ? pkts : 1;}
+    static void setCcMaxWindow(uint32_t pkts) {_cc_max_cwnd_pkts = pkts;}
+    static void setDcqcnG(double g) {_dcqcn_g = g;}
+    static void setDcqcnInitialAlpha(double alpha) {_dcqcn_initial_alpha = alpha;}
+    static void setDcqcnAiRate(linkspeed_bps rate) {_dcqcn_ai_rate = rate;}
+    static void setDcqcnMinRate(linkspeed_bps rate) {_dcqcn_min_rate = rate;}
+    static void setDcqcnByteCounter(mem_b bytes) {_dcqcn_byte_counter = bytes;}
+    static void setDcqcnFastRecoverySteps(uint32_t steps) {_dcqcn_fast_recovery_steps = steps;}
+    static void setDcqcnAlphaInterval(simtime_picosec interval) {_dcqcn_alpha_interval = interval;}
+    static void setDcqcnRateIncreaseInterval(simtime_picosec interval) {_dcqcn_rate_increase_interval = interval;}
+    static void setDcqcnCnpInterval(simtime_picosec interval) {_dcqcn_cnp_interval = interval;}
 
     void set_flowsize(uint64_t flow_size_in_bytes) {
         _flow_size = flow_size_in_bytes;
@@ -117,6 +149,32 @@ public:
     static uint32_t _global_node_count; 
     static uint32_t _global_rto_count;  // keep track of the total number of timeouts across all srcs
     static simtime_picosec _min_rto;
+    static lb_mode_t _lb_mode;
+    static uint32_t _path_entropy_size;
+    static uint32_t _reps_buffer_size;
+    static uint32_t _dtor_min_good_paths;
+    static uint32_t _dtor_hosts_per_tor;
+    static simtime_picosec _dtor_bad_hold_down;
+    static uint32_t _dtor_state_mode;
+    static uint32_t _dtor_weak_sample_pkts;
+    static uint32_t _dtor_ecn_degrade_mode;
+    static bool _dtor_unknown_reopen;
+    static simtime_picosec _conweave_rtt_threshold;
+    static simtime_picosec _conweave_min_reroute_gap;
+    static uint32_t _ndp_initial_window;
+    static cc_mode_t _cc_mode;
+    static uint32_t _cc_initial_cwnd_pkts;
+    static uint32_t _cc_min_cwnd_pkts;
+    static uint32_t _cc_max_cwnd_pkts;
+    static double _dcqcn_g;
+    static double _dcqcn_initial_alpha;
+    static linkspeed_bps _dcqcn_ai_rate;
+    static linkspeed_bps _dcqcn_min_rate;
+    static mem_b _dcqcn_byte_counter;
+    static uint32_t _dcqcn_fast_recovery_steps;
+    static simtime_picosec _dcqcn_alpha_interval;
+    static simtime_picosec _dcqcn_rate_increase_interval;
+    static simtime_picosec _dcqcn_cnp_interval;
 
     PacketFlow _flow;
 
@@ -130,6 +188,7 @@ private:
     // Connectivity
     string _nodename;
     uint32_t _node_num;
+    uint32_t _srcaddr;
 
     // Mechanism
     void clear_timer(uint64_t start,uint64_t end);
@@ -139,6 +198,69 @@ private:
     simtime_picosec _packet_spacing;
     simtime_picosec _time_last_sent;
     bool _done;
+
+    void update_packet_spacing();
+    void reset_congestion_control();
+    void update_congestion_control_on_ack(const RoceAck& ack, double newly_acked_pkts);
+    void update_congestion_control_on_nack();
+    bool congestion_window_allows_send() const;
+    double congestion_window_available() const;
+    void clamp_congestion_window();
+    void dcqcn_update_alpha_timer();
+    void dcqcn_on_cnp();
+    void dcqcn_maybe_increase(double newly_acked_pkts);
+    void dcqcn_increase_rate();
+    void clamp_dcqcn_rate();
+    double _cc_cwnd_pkts;
+    double _cc_inflate_pkts;
+    double _dcqcn_alpha;
+    double _dcqcn_current_rate;
+    double _dcqcn_target_rate;
+    mem_b _dcqcn_bytes_since_increase;
+    uint32_t _dcqcn_recovery_count;
+    bool _dcqcn_seen_cnp;
+    bool _dcqcn_marked_since_alpha;
+    simtime_picosec _dcqcn_last_cnp;
+    simtime_picosec _dcqcn_next_alpha_update;
+    simtime_picosec _dcqcn_next_rate_increase;
+
+    uint32_t choose_path(Packet::PktPriority priority);
+    void update_reps(const RoceAck& ack);
+    void update_conweave(const RoceAck& ack, simtime_picosec rtt);
+    void update_dtor(const RoceAck& ack);
+    void init_dtor_priority(Packet::PktPriority priority, uint32_t path_space);
+    void ensure_dtor_bitmap(uint32_t path_space);
+    void load_dtor_shared_bitmap(uint32_t path_space);
+    void store_dtor_shared_bitmap();
+    std::pair<uint32_t, uint32_t> dtor_cache_key() const;
+    void release_dtor_hold_if_expired(uint32_t path_space);
+    void init_ndp_paths(uint32_t path_space);
+    uint32_t choose_ndp_path(uint32_t path_space);
+    void grant_ndp_credit(uint32_t credits = 1);
+
+    struct RepsBufferEntry {
+        uint32_t cached_ev;
+        bool valid;
+        RepsBufferEntry() : cached_ev(0), valid(false) {}
+    };
+    void ensure_reps_buffer();
+    void reset_reps_buffer();
+
+    std::vector<RepsBufferEntry> _reps_buffer;
+    uint32_t _reps_head;
+    uint32_t _reps_valid_count;
+    static std::map<std::pair<uint32_t, uint32_t>, DtorBitmap> _dtor_shared_bitmaps;
+    static std::map<std::pair<uint32_t, uint32_t>, simtime_picosec> _dtor_shared_hold_until;
+    DtorBitmap _dtor_path_bitmap;
+    simtime_picosec _dtor_hold_until;
+    std::vector<uint32_t> _ndp_path_ids;
+    uint32_t _ndp_cursor;
+    uint32_t _ndp_pull_credit;
+    bool _ndp_paths_ready;
+    simtime_picosec _conweave_last_reroute;
+    std::array<uint32_t, 3> _dtor_cursor;
+    std::array<uint32_t, 3> _dtor_stride;
+    std::array<bool, 3> _dtor_cursor_ready;
 };
 
 class RoceSink : public PacketSink, public DataReceiver {
@@ -184,12 +306,12 @@ private:
     //packet in the connection (or 0 if not known)
     uint64_t _total_received;
     RocePacket::seq_t _highest_seqno;
+    map<RocePacket::seq_t, int> _ooo_packets;
  
     // Mechanism
-    void send_ack(simtime_picosec ts);
-    void send_nack(simtime_picosec ts, RocePacket::seq_t ackno);
+    void send_ack(const RocePacket& pkt, simtime_picosec ts);
+    void send_nack(simtime_picosec ts, RocePacket::seq_t ackno, uint32_t path_id = 0);
 };
 
 
 #endif
-

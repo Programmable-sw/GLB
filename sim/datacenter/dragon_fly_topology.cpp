@@ -117,8 +117,11 @@ Queue* DragonFlyTopology::alloc_queue(QueueLogger* queueLogger, uint64_t speed, 
         return new LosslessQueue(speedFromMbps(speed), memFromPkt(50), *_eventlist, queueLogger, NULL);
     else if (qt==LOSSLESS_INPUT)
         return new LosslessOutputQueue(speedFromMbps(speed), memFromPkt(200), *_eventlist, queueLogger);    
-    else if (qt==LOSSLESS_INPUT_ECN)
-        return new LosslessOutputQueue(speedFromMbps(speed), memFromPkt(10000), *_eventlist, queueLogger,1,memFromPkt(16));
+    else if (qt==LOSSLESS_INPUT_ECN) {
+        mem_b qsize = memFromPkt(queuesize);
+        return new LosslessOutputQueue(speedFromMbps(speed), qsize, *_eventlist, queueLogger,
+                                       1, qsize / 5, qsize * 4 / 5);
+    }
     else if (qt==COMPOSITE_ECN){
         if (tor) 
             return new CompositeQueue(speedFromMbps(speed), queuesize, *_eventlist, queueLogger);

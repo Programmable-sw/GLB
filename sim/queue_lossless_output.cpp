@@ -1,5 +1,6 @@
 // -*- c-basic-offset: 4; indent-tabs-mode: nil -*-        
 #include <math.h>
+#include <stdlib.h>
 #include <iostream>
 #include <sstream>
 #include "switch.h"
@@ -7,9 +8,9 @@
 #include "queue_lossless_output.h"
 #include "queue_lossless_input.h"
 
-LosslessOutputQueue::LosslessOutputQueue(linkspeed_bps bitrate, mem_b maxsize, 
-                                         EventList& eventlist, QueueLogger* logger, int ECN, int K)
-    : Queue(bitrate,maxsize,eventlist,logger), 
+LosslessOutputQueue::LosslessOutputQueue(linkspeed_bps bitrate, mem_b maxsize,
+                                         EventList& eventlist, QueueLogger* logger, int ECN, mem_b Kmin, mem_b Kmax)
+    : Queue(bitrate,maxsize,eventlist,logger),
       _state_send(READY)
 {
     //assume worst case: PAUSE frame waits for one MSS packet to be sent to other switch, and there is 
@@ -19,12 +20,30 @@ LosslessOutputQueue::LosslessOutputQueue(linkspeed_bps bitrate, mem_b maxsize,
     _sending = 0;
 
     _ecn_enabled = ECN;
-    _K = K;
+    _ecn_minthresh = Kmin;
+    _ecn_maxthresh = Kmax ? Kmax : Kmin;
+    if (_ecn_maxthresh < _ecn_minthresh)
+        _ecn_maxthresh = _ecn_minthresh;
     _txbytes = 0;
 
     stringstream ss;
     ss << "queue lossless output(" << bitrate/1000000 << "Mb/s," << maxsize << "bytes)";
     _nodename = ss.str();
+}
+
+bool LosslessOutputQueue::should_mark_ecn() const {
+    if (!_ecn_enabled)
+        return false;
+    if (_queuesize <= _ecn_minthresh)
+        return false;
+    if (_ecn_maxthresh <= _ecn_minthresh)
+        return true;
+    if (_queuesize >= _ecn_maxthresh)
+        return true;
+
+    uint64_t p = (0x7FFFFFFFULL * (uint64_t)(_queuesize - _ecn_minthresh)) /
+                 (uint64_t)(_ecn_maxthresh - _ecn_minthresh);
+    return (uint64_t)random() < p;
 }
 
 
@@ -117,9 +136,9 @@ void LosslessOutputQueue::completeService(){
     //_enqueued.pop_back();
     _vq.pop_back();
 
-    //mark on deque
-    if (_ecn_enabled && _queuesize > _K)
-        pkt->set_flags(pkt->flags() | ECN_CE); 
+    // RED-style ECN marking on dequeue.
+    if (should_mark_ecn())
+        pkt->set_flags(pkt->flags() | ECN_CE);
 
     if (pkt->type()==HPCC){
         //HPPC INT information adding to packet

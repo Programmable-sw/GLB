@@ -5,6 +5,7 @@
 #include <iostream>
 #include <string.h>
 #include <math.h>
+#include <algorithm>
 #include <unistd.h>
 #include "network.h"
 #include "randomqueue.h"
@@ -33,9 +34,13 @@
 #define PERIODIC 0
 #include "main.h"
 
-uint32_t RTT = 1; // this is per link delay in us; identical RTT microseconds = 0.02 ms
+uint32_t RTT = 1; // retained for legacy logfile metadata
 int DEFAULT_NODES = 432;
-#define DEFAULT_QUEUE_SIZE 15
+#define DEFAULT_QUEUE_SIZE 100
+#define REPS_LINKSPEED_MBPS 400000
+#define REPS_MTU_BYTES 4096
+#define REPS_HOP_LATENCY_US 0.5
+#define REPS_SWITCH_LATENCY_US 0.5
 
 //#define SWITCH_BUFFER (SERVICE * RTT / 1000)
 #define USE_FIRST_FIT 0
@@ -44,29 +49,51 @@ int DEFAULT_NODES = 432;
 EventList eventlist;
 
 void exit_error(char* progr) {
-    cout << "Usage " << progr << " [-nodes N]\n\t[-conns C]\n\t[-q queue_size]\n\t[-queue_type composite|random|lossless|lossless_input|]\n\t[-tm traffic_matrix_file]\n\t[-strat route_strategy (single,\n\tecmp_host,ecmp_ar,\n\tecmp_host_ar ar_thresh)]\n\t[-log log_level]\n\t[-seed random_seed]\n\t[-end end_time_in_usec]\n\t[-mtu MTU]\n\t[-hop_latency x] per hop wire latency in us,default 1\n\t[-switch_latency x] switching latency in us, default 0\n\t[-start_delta] time in us to randomly delay the start of connections\n\t[-pfc_thresholds low high]" << endl;
+    cout << "Usage " << progr << " [-nodes N]\n\t[-conns C]\n\t[-q queue_size]\n\t[-queue_type composite|random|lossless|lossless_input|lossless_input_ecn]\n\t[-tm traffic_matrix_file]\n\t[-lb ecmp|ecmp_rr|adaptive-routing|glb|drill|reps|dtor|spray|ops|conweave|ndp]\n\t[-cc none|dcqcn|dcqcn_variant|mprdma]\n\t[-cc_iw_pkts pkts]\n\t[-cc_min_cwnd_pkts pkts]\n\t[-cc_max_cwnd_pkts pkts]\n\t[-dcqcn_g x]\n\t[-dcqcn_initial_alpha x]\n\t[-dcqcn_ai_mbps x]\n\t[-dcqcn_min_rate_mbps x]\n\t[-dcqcn_alpha_us x]\n\t[-dcqcn_rate_us x]\n\t[-dcqcn_cnp_us x]\n\t[-dcqcn_byte_counter bytes]\n\t[-dcqcn_fast_recovery_steps N]\n\t[-strat route_strategy (single,\n\tecmp_host,ecmp_ar,\n\tecmp_host_ar ar_thresh)]\n\t[-log log_level]\n\t[-seed random_seed]\n\t[-end end_time_in_usec]\n\t[-mtu MTU] default 4096\n\t[-linkspeed Mbps] default 400000\n\t[-hop_latency x] per hop wire latency in us, default 0.5\n\t[-switch_latency x] switching latency in us, default 0.5\n\t[-start_delta] time in us to randomly delay the start of connections\n\t[-slow_core_downlinks N]\n\t[-slow_core_downlink_divisor N]\n\t[-slow_tor_uplinks N]\n\t[-slow_tor_uplink_divisor N]\n\t[-dtor_bad_hold_down_us x]\n\t[-dtor_state_mode binary|2bit-observed|2bit-ecn01]\n\t[-dtor_weak_sample_pkts N]\n\t[-dtor_ecn_degrade aggressive|graded]\n\t[-glb_update_us x]\n\t[-glb_weights q_weight util_weight remote_busy_weight]\n\t[-glb_factors local_q local_util remote_q remote_util remote_busy]\n\t[-glb_normalize]\n\t[-glb_downstream_weight x]\n\t[-glb_quality_bucket x]\n\t[-conweave_rtt_us x]\n\t[-ndp_cwnd pkts]\n\t[-pfc_thresholds low high]" << endl;
+    cout << "\t[-dtor_unknown_reopen]" << endl;
     exit(1);
 }
 
 int main(int argc, char **argv) {
     Clock c(timeFromSec(5 / 100.), eventlist);
     mem_b queuesize = DEFAULT_QUEUE_SIZE;
-    linkspeed_bps linkspeed = speedFromMbps((double)HOST_NIC);
-    int packet_size = 9000;
+    linkspeed_bps linkspeed = speedFromMbps((double)REPS_LINKSPEED_MBPS);
+    int packet_size = REPS_MTU_BYTES;
     uint32_t path_entropy_size = 10000000;
     uint32_t no_of_conns = 0, no_of_nodes = DEFAULT_NODES;
     uint32_t tiers = 3; // we support 2 and 3 tier fattrees     
     double logtime = 0.25; // ms;
     stringstream filename(ios_base::out);
-    simtime_picosec hop_latency = timeFromUs((uint32_t)1);
-    simtime_picosec switch_latency = timeFromUs((uint32_t)0);
+    simtime_picosec hop_latency = timeFromUs(REPS_HOP_LATENCY_US);
+    simtime_picosec switch_latency = timeFromUs(REPS_SWITCH_LATENCY_US);
     simtime_picosec start_delta = 0;
-    queue_type qt = LOSSLESS_INPUT;
+    queue_type qt = LOSSLESS_INPUT_ECN;
     float ar_sticky_delta = 10;
+    uint32_t ar_granularity = FatTreeSwitch::PER_FLOWLET;
+    RoceSrc::lb_mode_t roce_lb_mode = RoceSrc::LB_ECMP;
+    RoceSrc::cc_mode_t roce_cc_mode = RoceSrc::CC_DCQCN_VARIANT;
 
     queue_type snd_type = FAIR_PRIO;
 
-    uint64_t high_pfc = 15, low_pfc = 12;
+    uint64_t high_pfc = 80, low_pfc = 20;
+    uint32_t reps_buffer = 8;
+    double conweave_rtt_us = 16.0;
+    double conweave_min_reroute_us = 4.0;
+    uint32_t ndp_cwnd = 256;
+    uint32_t cc_iw_pkts = 0;
+    uint32_t cc_min_cwnd_pkts = 1;
+    uint32_t cc_max_cwnd_pkts = 0;
+    uint32_t slow_core_downlinks = 0;
+    uint32_t slow_core_downlink_divisor = 10;
+    uint32_t slow_tor_uplinks = 0;
+    uint32_t slow_tor_uplink_divisor = 2;
+    double dtor_bad_hold_down_us = 0.0;
+    uint32_t dtor_state_mode = 0;
+    uint32_t dtor_weak_sample_pkts = 0;
+    uint32_t dtor_ecn_degrade_mode = 0;
+    bool dtor_unknown_reopen = false;
+    double dtor_feedback_min_us = 5.0;
+    double dtor_feedback_max_us = 20.0;
 
     bool log_sink = false;
     bool log_tor_downqueue = false;
@@ -117,6 +144,9 @@ int main(int argc, char **argv) {
             }
             else if (!strcmp(argv[i+1], "lossless_input")) {
                 qt = LOSSLESS_INPUT;
+            }
+            else if (!strcmp(argv[i+1], "lossless_input_ecn")) {
+                qt = LOSSLESS_INPUT_ECN;
             }
             else {
                 cout << "Unknown queue type " << argv[i+1] << endl;
@@ -176,6 +206,74 @@ int main(int argc, char **argv) {
         } else if (!strcmp(argv[i],"-q")){
             queuesize = atoi(argv[i+1]);
             i++;
+        } else if (!strcmp(argv[i],"-lb")){
+            if (!strcmp(argv[i+1], "ecmp")) {
+                route_strategy = ECMP_FIB;
+                FatTreeSwitch::set_strategy(FatTreeSwitch::ECMP);
+                roce_lb_mode = RoceSrc::LB_ECMP;
+            } else if (!strcmp(argv[i+1], "ecmp_rr")) {
+                route_strategy = ECMP_FIB;
+                path_entropy_size = 1;
+                FatTreeSwitch::set_strategy(FatTreeSwitch::RR);
+                roce_lb_mode = RoceSrc::LB_ECMP;
+            } else if (!strcmp(argv[i+1], "glb")) {
+                route_strategy = ECMP_FIB;
+                FatTreeSwitch::set_strategy(FatTreeSwitch::GLB);
+                roce_lb_mode = RoceSrc::LB_ECMP;
+            } else if (!strcmp(argv[i+1], "reps")) {
+                route_strategy = ECMP_FIB;
+                FatTreeSwitch::set_strategy(FatTreeSwitch::ECMP);
+                roce_lb_mode = RoceSrc::LB_REPS;
+            } else if (!strcmp(argv[i+1], "dtor")) {
+                route_strategy = ECMP_FIB;
+                FatTreeSwitch::set_strategy(FatTreeSwitch::ECMP);
+                roce_lb_mode = RoceSrc::LB_DTOR;
+            } else if (!strcmp(argv[i+1], "spray")) {
+                route_strategy = ECMP_FIB;
+                FatTreeSwitch::set_strategy(FatTreeSwitch::ECMP);
+                roce_lb_mode = RoceSrc::LB_SPRAY;
+            } else if (!strcmp(argv[i+1], "ops")) {
+                route_strategy = ECMP_FIB;
+                FatTreeSwitch::set_strategy(FatTreeSwitch::ECMP);
+                roce_lb_mode = RoceSrc::LB_OPS;
+            } else if (!strcmp(argv[i+1], "conweave")) {
+                route_strategy = ECMP_FIB;
+                FatTreeSwitch::set_strategy(FatTreeSwitch::ECMP);
+                roce_lb_mode = RoceSrc::LB_CONWEAVE;
+            } else if (!strcmp(argv[i+1], "ndp")) {
+                route_strategy = ECMP_FIB;
+                FatTreeSwitch::set_strategy(FatTreeSwitch::ECMP);
+                roce_lb_mode = RoceSrc::LB_NDP;
+            } else if (!strcmp(argv[i+1], "adaptive-routing")) {
+                route_strategy = ECMP_FIB;
+                FatTreeSwitch::set_strategy(FatTreeSwitch::ADAPTIVE_ROUTING);
+                roce_lb_mode = RoceSrc::LB_ECMP;
+            } else if (!strcmp(argv[i+1], "drill")) {
+                route_strategy = ECMP_FIB;
+                FatTreeSwitch::set_strategy(FatTreeSwitch::DRILL);
+                roce_lb_mode = RoceSrc::LB_ECMP;
+            } else {
+                cout << "Unknown lb mode " << argv[i+1] << endl;
+                exit_error(argv[0]);
+            }
+            cout << "lb mode " << argv[i+1] << endl;
+            i++;
+        } else if (!strcmp(argv[i],"-cc")){
+            if (!strcmp(argv[i+1], "none")) {
+                roce_cc_mode = RoceSrc::CC_NONE;
+            } else if (!strcmp(argv[i+1], "dcqcn")) {
+                roce_cc_mode = RoceSrc::CC_DCQCN;
+            } else if (!strcmp(argv[i+1], "dcqcn_variant") ||
+                       !strcmp(argv[i+1], "dcqcn-variant") ||
+                       !strcmp(argv[i+1], "mprdma") ||
+                       !strcmp(argv[i+1], "dctcp")) {
+                roce_cc_mode = RoceSrc::CC_DCQCN_VARIANT;
+            } else {
+                cout << "Unknown cc mode " << argv[i+1] << endl;
+                exit_error(argv[0]);
+            }
+            cout << "cc mode " << argv[i+1] << endl;
+            i++;
         } else if (!strcmp(argv[i],"-logtime")){
             logtime = atof(argv[i+1]);            
             cout << "logtime "<< logtime << " ms" << endl;
@@ -210,6 +308,251 @@ int main(int argc, char **argv) {
         } else if (!strcmp(argv[i],"-ar_sticky_delta")){
             ar_sticky_delta = atof(argv[i+1]);
             cout << "Adaptive routing sticky delta " << ar_sticky_delta << "us" << endl;
+            i++;
+        } else if (!strcmp(argv[i],"-ar_granularity")){
+            if (!strcmp(argv[i+1], "packet")) {
+                ar_granularity = FatTreeSwitch::PER_PACKET;
+            } else if (!strcmp(argv[i+1], "flowlet")) {
+                ar_granularity = FatTreeSwitch::PER_FLOWLET;
+            } else {
+                cout << "Unknown AR granularity expecting packet or flowlet" << endl;
+                exit(1);
+            }
+            cout << "Adaptive routing granularity " << argv[i+1] << endl;
+            i++;
+        } else if (!strcmp(argv[i],"-reps_buffer")){
+            reps_buffer = atoi(argv[i+1]);
+            cout << "REPS buffer size " << reps_buffer << endl;
+            i++;
+        } else if (!strcmp(argv[i],"-conweave_rtt_us")){
+            conweave_rtt_us = atof(argv[i+1]);
+            cout << "ConWeave RTT reroute threshold " << conweave_rtt_us << "us" << endl;
+            i++;
+        } else if (!strcmp(argv[i],"-conweave_min_reroute_us")){
+            conweave_min_reroute_us = atof(argv[i+1]);
+            cout << "ConWeave minimum reroute gap " << conweave_min_reroute_us << "us" << endl;
+            i++;
+        } else if (!strcmp(argv[i],"-ndp_cwnd")){
+            ndp_cwnd = atoi(argv[i+1]);
+            if (!ndp_cwnd)
+                ndp_cwnd = 1;
+            cout << "NDP initial receiver-pull window " << ndp_cwnd << " packets" << endl;
+            i++;
+        } else if (!strcmp(argv[i],"-cc_iw_pkts")){
+            cc_iw_pkts = atoi(argv[i+1]);
+            if (!cc_iw_pkts)
+                cc_iw_pkts = 1;
+            cout << "CC initial window " << cc_iw_pkts << " packets" << endl;
+            i++;
+        } else if (!strcmp(argv[i],"-cc_min_cwnd_pkts")){
+            cc_min_cwnd_pkts = atoi(argv[i+1]);
+            if (!cc_min_cwnd_pkts)
+                cc_min_cwnd_pkts = 1;
+            cout << "CC minimum window " << cc_min_cwnd_pkts << " packets" << endl;
+            i++;
+        } else if (!strcmp(argv[i],"-cc_max_cwnd_pkts")){
+            cc_max_cwnd_pkts = atoi(argv[i+1]);
+            cout << "CC maximum window " << cc_max_cwnd_pkts << " packets" << endl;
+            i++;
+        } else if (!strcmp(argv[i],"-dcqcn_g")){
+            double g = atof(argv[i+1]);
+            if (g < 0)
+                g = 0;
+            RoceSrc::setDcqcnG(g);
+            cout << "DCQCN g " << g << endl;
+            i++;
+        } else if (!strcmp(argv[i],"-dcqcn_initial_alpha")){
+            double alpha = atof(argv[i+1]);
+            if (alpha < 0)
+                alpha = 0;
+            if (alpha > 1)
+                alpha = 1;
+            RoceSrc::setDcqcnInitialAlpha(alpha);
+            cout << "DCQCN initial alpha " << alpha << endl;
+            i++;
+        } else if (!strcmp(argv[i],"-dcqcn_ai_mbps")){
+            double ai_mbps = atof(argv[i+1]);
+            if (ai_mbps < 0)
+                ai_mbps = 0;
+            RoceSrc::setDcqcnAiRate(speedFromMbps(ai_mbps));
+            cout << "DCQCN additive increase " << ai_mbps << "Mbps" << endl;
+            i++;
+        } else if (!strcmp(argv[i],"-dcqcn_min_rate_mbps")){
+            double min_mbps = atof(argv[i+1]);
+            if (min_mbps < 0)
+                min_mbps = 0;
+            RoceSrc::setDcqcnMinRate(speedFromMbps(min_mbps));
+            cout << "DCQCN minimum rate " << min_mbps << "Mbps" << endl;
+            i++;
+        } else if (!strcmp(argv[i],"-dcqcn_alpha_us")){
+            double alpha_us = atof(argv[i+1]);
+            if (alpha_us < 0)
+                alpha_us = 0;
+            RoceSrc::setDcqcnAlphaInterval(timeFromUs(alpha_us));
+            cout << "DCQCN alpha interval " << alpha_us << "us" << endl;
+            i++;
+        } else if (!strcmp(argv[i],"-dcqcn_rate_us")){
+            double rate_us = atof(argv[i+1]);
+            if (rate_us < 0)
+                rate_us = 0;
+            RoceSrc::setDcqcnRateIncreaseInterval(timeFromUs(rate_us));
+            cout << "DCQCN rate increase interval " << rate_us << "us" << endl;
+            i++;
+        } else if (!strcmp(argv[i],"-dcqcn_cnp_us")){
+            double cnp_us = atof(argv[i+1]);
+            if (cnp_us < 0)
+                cnp_us = 0;
+            RoceSrc::setDcqcnCnpInterval(timeFromUs(cnp_us));
+            cout << "DCQCN CNP interval " << cnp_us << "us" << endl;
+            i++;
+        } else if (!strcmp(argv[i],"-dcqcn_byte_counter")){
+            mem_b bytes = atoll(argv[i+1]);
+            if (bytes < 0)
+                bytes = 0;
+            RoceSrc::setDcqcnByteCounter(bytes);
+            cout << "DCQCN byte counter " << bytes << " bytes" << endl;
+            i++;
+        } else if (!strcmp(argv[i],"-dcqcn_fast_recovery_steps")){
+            uint32_t steps = atoi(argv[i+1]);
+            RoceSrc::setDcqcnFastRecoverySteps(steps);
+            cout << "DCQCN fast recovery steps " << steps << endl;
+            i++;
+        } else if (!strcmp(argv[i],"-slow_core_downlinks")){
+            slow_core_downlinks = atoi(argv[i+1]);
+            cout << "Slow core-to-agg downlinks " << slow_core_downlinks << endl;
+            i++;
+        } else if (!strcmp(argv[i],"-slow_core_downlink_divisor")){
+            slow_core_downlink_divisor = atoi(argv[i+1]);
+            if (!slow_core_downlink_divisor)
+                slow_core_downlink_divisor = 1;
+            cout << "Slow core-to-agg downlink divisor " << slow_core_downlink_divisor << endl;
+            i++;
+        } else if (!strcmp(argv[i],"-slow_tor_uplinks")){
+            slow_tor_uplinks = atoi(argv[i+1]);
+            cout << "Slow ToR-to-agg uplinks " << slow_tor_uplinks << endl;
+            i++;
+        } else if (!strcmp(argv[i],"-slow_tor_uplink_divisor")){
+            slow_tor_uplink_divisor = atoi(argv[i+1]);
+            if (!slow_tor_uplink_divisor)
+                slow_tor_uplink_divisor = 1;
+            cout << "Slow ToR-to-agg uplink divisor " << slow_tor_uplink_divisor << endl;
+            i++;
+        } else if (!strcmp(argv[i],"-glb_update_us")){
+            double glb_update_us = atof(argv[i+1]);
+            if (glb_update_us < 0)
+                glb_update_us = 0;
+            FatTreeSwitch::_glb_update_interval = timeFromUs(glb_update_us);
+            cout << "GLB remote quality update interval " << glb_update_us << "us" << endl;
+            i++;
+        } else if (!strcmp(argv[i],"-glb_weights")){
+            FatTreeSwitch::_glb_queue_weight = atof(argv[i+1]);
+            FatTreeSwitch::_glb_util_weight = atof(argv[i+2]);
+            FatTreeSwitch::_glb_remote_queue_weight = FatTreeSwitch::_glb_queue_weight;
+            FatTreeSwitch::_glb_remote_util_weight = FatTreeSwitch::_glb_util_weight;
+            FatTreeSwitch::_glb_remote_busy_weight = atof(argv[i+3]);
+            cout << "GLB weights queue " << FatTreeSwitch::_glb_queue_weight
+                 << " util " << FatTreeSwitch::_glb_util_weight
+                 << " remote_busy " << FatTreeSwitch::_glb_remote_busy_weight << endl;
+            i += 3;
+        } else if (!strcmp(argv[i],"-glb_factors")){
+            FatTreeSwitch::_glb_queue_weight = atof(argv[i+1]);
+            FatTreeSwitch::_glb_util_weight = atof(argv[i+2]);
+            FatTreeSwitch::_glb_remote_queue_weight = atof(argv[i+3]);
+            FatTreeSwitch::_glb_remote_util_weight = atof(argv[i+4]);
+            FatTreeSwitch::_glb_remote_busy_weight = atof(argv[i+5]);
+            cout << "GLB factors local_q " << FatTreeSwitch::_glb_queue_weight
+                 << " local_util " << FatTreeSwitch::_glb_util_weight
+                 << " remote_q " << FatTreeSwitch::_glb_remote_queue_weight
+                 << " remote_util " << FatTreeSwitch::_glb_remote_util_weight
+                 << " remote_busy " << FatTreeSwitch::_glb_remote_busy_weight << endl;
+            i += 5;
+        } else if (!strcmp(argv[i],"-glb_normalize")){
+            FatTreeSwitch::_glb_normalize_scores = true;
+            cout << "GLB normalized queue/util factors enabled" << endl;
+        } else if (!strcmp(argv[i],"-glb_downstream_weight")){
+            FatTreeSwitch::_glb_downstream_weight = atof(argv[i+1]);
+            cout << "GLB downstream weight " << FatTreeSwitch::_glb_downstream_weight << endl;
+            i++;
+        } else if (!strcmp(argv[i],"-glb_quality_bucket")){
+            FatTreeSwitch::_glb_quality_bucket = atof(argv[i+1]);
+            if (FatTreeSwitch::_glb_quality_bucket <= 0.0)
+                FatTreeSwitch::_glb_quality_bucket = 1.0;
+            cout << "GLB quality bucket " << FatTreeSwitch::_glb_quality_bucket << endl;
+            i++;
+        } else if (!strcmp(argv[i],"-dtor_feedback_pkts")){
+            cout << "dToR feedback packet threshold is canonical auto(path_count); ignoring deprecated value " << argv[i+1] << endl;
+            i++;
+        } else if (!strcmp(argv[i],"-dtor_feedback_hot_path_pkts")){
+            cout << "dToR hot-path feedback threshold is disabled; ignoring deprecated value " << argv[i+1] << endl;
+            i++;
+        } else if (!strcmp(argv[i],"-dtor_feedback_min_us")){
+            dtor_feedback_min_us = atof(argv[i+1]);
+            if (dtor_feedback_min_us < 0)
+                dtor_feedback_min_us = 0;
+            cout << "dToR minimum feedback interval " << dtor_feedback_min_us << "us" << endl;
+            i++;
+        } else if (!strcmp(argv[i],"-dtor_feedback_max_us")){
+            dtor_feedback_max_us = atof(argv[i+1]);
+            if (dtor_feedback_max_us < 0)
+                dtor_feedback_max_us = 0;
+            cout << "dToR maximum feedback interval " << dtor_feedback_max_us << "us" << endl;
+            i++;
+        } else if (!strcmp(argv[i],"-dtor_min_good_paths")){
+            cout << "dToR minimum confirmed good paths is canonical min(16,path_count/2); ignoring deprecated value " << argv[i+1] << endl;
+            i++;
+        } else if (!strcmp(argv[i],"-dtor_bad_hold_down_us")){
+            dtor_bad_hold_down_us = atof(argv[i+1]);
+            if (dtor_bad_hold_down_us < 0)
+                dtor_bad_hold_down_us = 0;
+            cout << "dToR bad path keeping window " << dtor_bad_hold_down_us << "us" << endl;
+            i++;
+        } else if (!strcmp(argv[i],"-dtor_state_mode")){
+            if (!strcmp(argv[i+1], "binary"))
+                dtor_state_mode = 0;
+            else if (!strcmp(argv[i+1], "2bit-observed"))
+                dtor_state_mode = 1;
+            else if (!strcmp(argv[i+1], "2bit-ecn01"))
+                dtor_state_mode = 2;
+            else {
+                cout << "Unknown dToR state mode " << argv[i+1] << endl;
+                exit_error(argv[0]);
+            }
+            cout << "dToR endpoint state mode " << argv[i+1] << endl;
+            i++;
+        } else if (!strcmp(argv[i],"-dtor_weak_sample_pkts")){
+            dtor_weak_sample_pkts = atoi(argv[i+1]);
+            cout << "dToR weak path sampling interval " << dtor_weak_sample_pkts << " packets" << endl;
+            i++;
+        } else if (!strcmp(argv[i],"-dtor_ecn_degrade")){
+            if (!strcmp(argv[i+1], "aggressive"))
+                dtor_ecn_degrade_mode = 0;
+            else if (!strcmp(argv[i+1], "graded"))
+                dtor_ecn_degrade_mode = 1;
+            else {
+                cout << "Unknown dToR ECN degrade mode " << argv[i+1] << endl;
+                exit_error(argv[0]);
+            }
+            cout << "dToR ECN degrade mode " << argv[i+1] << endl;
+            i++;
+        } else if (!strcmp(argv[i],"-dtor_unknown_reopen")){
+            dtor_unknown_reopen = true;
+            cout << "dToR unknown low-state reopen enabled" << endl;
+        } else if (!strcmp(argv[i],"-dtor_select")){
+            if (strcmp(argv[i+1], "random") && strcmp(argv[i+1], "rr")) {
+                cout << "Unknown dToR select mode " << argv[i+1] << endl;
+                exit_error(argv[0]);
+            }
+            cout << "dToR select mode is canonical rr; ignoring deprecated value " << argv[i+1] << endl;
+            i++;
+        } else if (!strcmp(argv[i],"-dtor_ack_update")){
+            cout << "dToR per-ACK path update is disabled in canonical mode; ignoring deprecated value " << argv[i+1] << endl;
+            i++;
+        } else if (!strcmp(argv[i],"-dtor_path_hash")){
+            if (strcmp(argv[i+1], "hash") && strcmp(argv[i+1], "direct") && strcmp(argv[i+1], "tier")) {
+                cout << "Unknown dToR path hash mode " << argv[i+1] << endl;
+                exit_error(argv[0]);
+            }
+            cout << "dToR path hash is canonical tier EV mapping; ignoring deprecated value " << argv[i+1] << endl;
             i++;
         }
          else if (!strcmp(argv[i],"-pfc_thresholds")){
@@ -298,8 +641,31 @@ int main(int argc, char **argv) {
     cout << "Parsed args\n";
     Packet::set_packet_size(packet_size);
 
-    FatTreeSwitch::_ar_sticky = FatTreeSwitch::PER_FLOWLET;
+    if (dtor_feedback_max_us < dtor_feedback_min_us)
+        dtor_feedback_max_us = dtor_feedback_min_us;
+
+    FatTreeSwitch::_ar_sticky = ar_granularity;
     FatTreeSwitch::_sticky_delta = timeFromUs(ar_sticky_delta);
+    FatTreeSwitch::_dtor_feedback_min_interval = timeFromUs(dtor_feedback_min_us);
+    FatTreeSwitch::_dtor_feedback_max_interval = timeFromUs(dtor_feedback_max_us);
+    bool source_pathid_lb = (roce_lb_mode == RoceSrc::LB_DTOR ||
+                             roce_lb_mode == RoceSrc::LB_SPRAY ||
+                             roce_lb_mode == RoceSrc::LB_CONWEAVE ||
+                             roce_lb_mode == RoceSrc::LB_NDP);
+    FatTreeSwitch::_pathid_only_hash = source_pathid_lb;
+
+    RoceSrc::setLoadBalancing(roce_lb_mode);
+    RoceSrc::setPathEntropySize(path_entropy_size);
+    RoceSrc::setRepsBufferSize(reps_buffer);
+    RoceSrc::setConweaveRttThreshold(timeFromUs(conweave_rtt_us));
+    RoceSrc::setConweaveMinRerouteGap(timeFromUs(conweave_min_reroute_us));
+    RoceSrc::setNdpInitialWindow(ndp_cwnd);
+    if (!cc_iw_pkts)
+        cc_iw_pkts = queuesize ? queuesize : 1;
+    RoceSrc::setCongestionControl(roce_cc_mode);
+    RoceSrc::setCcInitialWindow(cc_iw_pkts);
+    RoceSrc::setCcMinWindow(cc_min_cwnd_pkts);
+    RoceSrc::setCcMaxWindow(cc_max_cwnd_pkts);
 
     LosslessInputQueue::_high_threshold = Packet::data_packet_size()*high_pfc;
     LosslessInputQueue::_low_threshold = Packet::data_packet_size()*low_pfc;
@@ -345,7 +711,7 @@ int main(int argc, char **argv) {
         logfile.addLogger(traffic_logger);
     }
 
-    RoceSrc::setMinRTO(1000); //increase RTO to avoid spurious retransmits
+    RoceSrc::setMinRTO(1000);
 
     RoceSrc* roceSrc;
     RoceSink* roceSnk;
@@ -363,11 +729,22 @@ int main(int argc, char **argv) {
 #ifdef FAT_TREE
     FatTreeTopology* top;
     if (topo_file) {
+        if (slow_core_downlinks) {
+            cerr << "-slow_core_downlinks is only supported with generated fat-tree topologies\n";
+            exit(1);
+        }
+        if (slow_tor_uplinks) {
+            cerr << "-slow_tor_uplinks is only supported with generated fat-tree topologies\n";
+            exit(1);
+        }
         top = FatTreeTopology::load(topo_file, qlf, eventlist, queuesize, qt, snd_type);
     } else {
         FatTreeTopology::set_tiers(tiers);
+        FatTreeTopology::set_slow_link_divisor(slow_core_downlink_divisor);
+        FatTreeTopology::set_slow_tor_uplinks(slow_tor_uplinks);
+        FatTreeTopology::set_slow_tor_uplink_divisor(slow_tor_uplink_divisor);
         top = new FatTreeTopology(no_of_nodes, linkspeed, queuesize, qlf, 
-                                               &eventlist,NULL,qt,hop_latency,switch_latency,snd_type);
+                                               &eventlist,NULL,qt,hop_latency,switch_latency,snd_type,slow_core_downlinks);
     }
 #endif
 
@@ -395,6 +772,61 @@ int main(int argc, char **argv) {
     if (log_switches) {
         top->add_switch_loggers(logfile, timeFromUs(20.0));
     }
+
+    if (source_pathid_lb) {
+        uint32_t path_combo = top->radix_up(TOR_TIER);
+        if (top->get_tiers() == 3) {
+            path_combo *= top->radix_up(AGG_TIER);
+            path_combo *= top->bundlesize(CORE_TIER);
+            path_combo *= top->bundlesize(AGG_TIER);
+        } else {
+            path_combo *= top->bundlesize(AGG_TIER);
+        }
+
+        if (path_combo > 0 && path_combo != path_entropy_size) {
+            cout << "source-controlled tier path count adjusted from " << path_entropy_size
+                 << " to " << path_combo
+                 << " to match topology path combinations" << endl;
+            path_entropy_size = path_combo;
+            RoceSrc::setPathEntropySize(path_entropy_size);
+        }
+    }
+    RoceSrc::setDtorHostsPerTor(top->radix_down(TOR_TIER));
+
+    uint32_t dtor_path_space = path_entropy_size ? path_entropy_size : 1;
+    FatTreeSwitch::_dtor_path_count = dtor_path_space;
+    uint32_t auto_dtor_feedback_pkts = dtor_path_space / 2;
+    if (auto_dtor_feedback_pkts < 32)
+        auto_dtor_feedback_pkts = 32;
+    if (auto_dtor_feedback_pkts > 128)
+        auto_dtor_feedback_pkts = 128;
+
+    FatTreeSwitch::_dtor_feedback_pkts = auto_dtor_feedback_pkts;
+    FatTreeSwitch::_dtor_feedback_observed_values = dtor_state_mode == 1 || dtor_state_mode == 2;
+    uint32_t effective_dtor_min_good_paths = dtor_path_space / 2;
+    if (effective_dtor_min_good_paths < 1)
+        effective_dtor_min_good_paths = 1;
+    if (effective_dtor_min_good_paths > 16)
+        effective_dtor_min_good_paths = 16;
+    if (roce_lb_mode == RoceSrc::LB_DTOR) {
+        cout << "dToR canonical: paths " << dtor_path_space
+             << ", feedback_pkts " << FatTreeSwitch::_dtor_feedback_pkts
+             << ", min_interval_us " << dtor_feedback_min_us
+             << ", max_interval_us " << dtor_feedback_max_us
+             << ", min_good_paths " << effective_dtor_min_good_paths
+             << ", bad_hold_down_us " << dtor_bad_hold_down_us
+             << ", state_mode " << dtor_state_mode
+             << ", weak_sample_pkts " << dtor_weak_sample_pkts
+             << ", ecn_degrade_mode " << dtor_ecn_degrade_mode
+             << ", unknown_reopen " << dtor_unknown_reopen << endl;
+    }
+    RoceSrc::setDtorMinGoodPaths(effective_dtor_min_good_paths);
+    RoceSrc::setDtorBadHoldDown(timeFromUs(dtor_bad_hold_down_us));
+    RoceSrc::setDtorStateMode(dtor_state_mode);
+    RoceSrc::setDtorWeakSamplePkts(dtor_weak_sample_pkts);
+    RoceSrc::setDtorEcnDegradeMode(dtor_ecn_degrade_mode);
+    RoceSrc::setDtorUnknownReopen(dtor_unknown_reopen);
+    RoceSrc::setPathEntropySize(path_entropy_size);
 
     vector<const Route*>*** net_paths;
     net_paths = new vector<const Route*>**[no_of_nodes];
@@ -473,6 +905,7 @@ int main(int argc, char **argv) {
         roceSrc = new RoceSrc(NULL, NULL, eventlist,linkspeed);
 
         roce_srcs.push_back(roceSrc);
+        roceSrc->set_src(src);
         roceSrc->set_dst(dest);
                         
         if (crt->size>0){

@@ -64,6 +64,9 @@ public:
     FatTreeTopology(uint32_t no_of_nodes, linkspeed_bps linkspeed, mem_b queuesize, QueueLoggerFactory* logger_factory,
                     EventList* ev,FirstFit* f, queue_type qt, simtime_picosec latency, simtime_picosec switch_latency, queue_type snd = FAIR_PRIO);
     FatTreeTopology(uint32_t no_of_nodes, linkspeed_bps linkspeed, mem_b queuesize, QueueLoggerFactory* logger_factory,
+                    EventList* ev,FirstFit* f, queue_type qt, simtime_picosec latency, simtime_picosec switch_latency,
+                    queue_type snd, uint32_t fail);
+    FatTreeTopology(uint32_t no_of_nodes, linkspeed_bps linkspeed, mem_b queuesize, QueueLoggerFactory* logger_factory,
                     EventList* ev,FirstFit* f, queue_type qt);      
     FatTreeTopology(uint32_t no_of_nodes, linkspeed_bps linkspeed, mem_b queuesize, QueueLoggerFactory* logger_factory,
                     EventList* ev,FirstFit* f, queue_type qt, uint32_t fail);
@@ -71,6 +74,15 @@ public:
                     EventList* ev,FirstFit* f, queue_type qt, queue_type sender_qt, uint32_t fail);
 
     static void set_tier_parameters(int tier, int radix_up, int radix_down, mem_b queue_up, mem_b queue_down, int bundlesize, linkspeed_bps downlink_speed, int oversub);
+    static void set_slow_link_divisor(uint32_t divisor) {
+        _slow_link_divisor = divisor ? divisor : 1;
+    }
+    static void set_slow_tor_uplinks(uint32_t links) {
+        _slow_tor_uplinks = links;
+    }
+    static void set_slow_tor_uplink_divisor(uint32_t divisor) {
+        _slow_tor_uplink_divisor = divisor ? divisor : 1;
+    }
 
     void init_network();
     virtual vector<const Route*>* get_bidir_paths(uint32_t src, uint32_t dest, bool reverse);
@@ -202,6 +214,9 @@ private:
     // Eg. _downlink_speeds[0] = 400Gbps indicates 400Gbps links from hosts
     // to ToRs.
     static linkspeed_bps _downlink_speeds[3];
+    static uint32_t _slow_link_divisor;
+    static uint32_t _slow_tor_uplinks;
+    static uint32_t _slow_tor_uplink_divisor;
 
     // degree of oversubscription at tier.  Eg _oversub[TOR_TIER] = 3 implies 3x more bw to hosts than to agg switches.
     static uint32_t _oversub[3];
