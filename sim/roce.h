@@ -10,6 +10,7 @@
 
 #include <list>
 #include <map>
+#include <set>
 #include <vector>
 #include <array>
 //#include "util.h"
@@ -27,6 +28,7 @@
 //min RTO bound in us
 // *** don't change this default - override it by calling RoceSrc::setMinRTO()
 #define DEFAULT_RTO_MIN 5000
+#define ROCE_SACK_BITMAP_BITS 64
 
 class RoceSink;
 class Switch;
@@ -34,8 +36,9 @@ class Switch;
 class RoceSrc : public BaseQueue, public TriggerTarget {
     friend class RoceSink;
 public:
-    typedef enum {LB_ECMP = 0, LB_REPS = 1, LB_NMRC = 2, LB_CONWEAVE = 3, LB_NDP = 4, LB_SPRAY = 5, LB_OPS = 6} lb_mode_t;
+    typedef enum {LB_ECMP = 0, LB_REPS = 1, LB_NMRC = 2, LB_CONWEAVE = 3, LB_NDP = 4, LB_RR = 5, LB_OPS = 6} lb_mode_t;
     typedef enum {CC_NONE = 0, CC_DCQCN_VARIANT = 1, CC_MPRDMA = 1, CC_DCQCN = 2} cc_mode_t;
+    typedef enum {RX_GBN = 0, RX_SP_RETX_QUEUE = 1} rx_mode_t;
 
     RoceSrc(RoceLogger* logger, TrafficLogger* pktlogger, EventList &eventlist, linkspeed_bps rate);
 
@@ -51,6 +54,11 @@ public:
 
 
     static void setMinRTO(uint32_t min_rto_in_us) {_min_rto = timeFromUs((uint32_t)min_rto_in_us);}
+    static void setHighRTO(uint32_t high_rto_in_us) {_rto_high = high_rto_in_us ? timeFromUs((uint32_t)high_rto_in_us) : 0;}
+    static void setReceiveMode(rx_mode_t mode) {_rx_mode = mode;}
+    static void setOooTolerance(simtime_picosec interval) {_ooo_tolerance = interval;}
+    static void setOooWindowPkts(uint32_t pkts) {_ooo_window_pkts = pkts ? pkts : 1;}
+    static void setNackInterval(simtime_picosec interval) {_nack_interval = interval;}
     static void setLoadBalancing(lb_mode_t mode) {_lb_mode = mode;}
     static void setPathEntropySize(uint32_t paths) {_path_entropy_size = paths ? paths : 1;}
     static void setRepsBufferSize(uint32_t size) {_reps_buffer_size = size ? size : 1;}
@@ -61,6 +69,7 @@ public:
     static void setNmrcWeakSamplePkts(uint32_t pkts) {_nmrc_weak_sample_pkts = pkts;}
     static void setNmrcEcnDegradeMode(uint32_t mode) {_nmrc_ecn_degrade_mode = mode;}
     static void setNmrcUnknownReopen(bool enable) {_nmrc_unknown_reopen = enable;}
+    static void setNmrcBadCacheWindows(uint32_t windows) {_nmrc_bad_cache_windows = windows ? windows : 1;}
     static void setConweaveRttThreshold(simtime_picosec threshold) {_conweave_rtt_threshold = threshold;}
     static void setConweaveMinRerouteGap(simtime_picosec gap) {_conweave_min_reroute_gap = gap;}
     static void setNdpInitialWindow(uint32_t pkts) {_ndp_initial_window = pkts ? pkts : 1;}
@@ -103,6 +112,7 @@ public:
     virtual void processPause(const EthPausePacket& pkt);
     virtual void processAck(const RoceAck& ack);
     virtual void processNack(const RoceNack& nack);
+    virtual void rtx_timer_hook(simtime_picosec now, simtime_picosec period);
 
     virtual mem_b queuesize() const { return 0;};
     virtual mem_b maxsize() const { return 0;}; 
@@ -137,7 +147,7 @@ public:
     bool _flow_started;
     uint16_t _state_send;
 
-    void send_packet();
+    bool send_packet();
 
     virtual const string& nodename() { return _nodename; }
     inline uint32_t flow_id() const { return _flow.flow_id();}
@@ -149,6 +159,11 @@ public:
     static uint32_t _global_node_count; 
     static uint32_t _global_rto_count;  // keep track of the total number of timeouts across all srcs
     static simtime_picosec _min_rto;
+    static simtime_picosec _rto_high;
+    static rx_mode_t _rx_mode;
+    static simtime_picosec _ooo_tolerance;
+    static uint32_t _ooo_window_pkts;
+    static simtime_picosec _nack_interval;
     static lb_mode_t _lb_mode;
     static uint32_t _path_entropy_size;
     static uint32_t _reps_buffer_size;
@@ -159,6 +174,7 @@ public:
     static uint32_t _nmrc_weak_sample_pkts;
     static uint32_t _nmrc_ecn_degrade_mode;
     static bool _nmrc_unknown_reopen;
+    static uint32_t _nmrc_bad_cache_windows;
     static simtime_picosec _conweave_rtt_threshold;
     static simtime_picosec _conweave_min_reroute_gap;
     static uint32_t _ndp_initial_window;
@@ -197,12 +213,21 @@ private:
     simtime_picosec _stop_time;
     simtime_picosec _packet_spacing;
     simtime_picosec _time_last_sent;
+    simtime_picosec _send_event_time;
+    simtime_picosec _rtx_timeout;
+    bool _send_event_pending;
     bool _done;
 
+    void schedule_send(simtime_picosec when);
+    void schedule_send_now();
     void update_packet_spacing();
     void reset_congestion_control();
+    void reset_rtx_timeout();
+    simtime_picosec current_rto_interval() const;
     void update_congestion_control_on_ack(const RoceAck& ack, double newly_acked_pkts);
     void update_congestion_control_on_nack();
+    bool has_retransmit_work() const;
+    void clean_retransmit_queue();
     bool congestion_window_allows_send() const;
     double congestion_window_available() const;
     void clamp_congestion_window();
@@ -234,6 +259,9 @@ private:
     void store_nmrc_shared_bitmap();
     std::pair<uint32_t, uint32_t> nmrc_cache_key() const;
     void release_nmrc_hold_if_expired(uint32_t path_space);
+    void ensure_nmrc_bad_cache(uint32_t path_space);
+    void rebuild_nmrc_bad_cache_bitmap(uint32_t path_space);
+    void apply_nmrc_bad_cache_feedback(const NmrcBitmap& feedback, uint32_t path_space);
     void init_ndp_paths(uint32_t path_space);
     uint32_t choose_ndp_path(uint32_t path_space);
     void grant_ndp_credit(uint32_t credits = 1);
@@ -251,8 +279,12 @@ private:
     uint32_t _reps_valid_count;
     static std::map<std::pair<uint32_t, uint32_t>, NmrcBitmap> _nmrc_shared_bitmaps;
     static std::map<std::pair<uint32_t, uint32_t>, simtime_picosec> _nmrc_shared_hold_until;
+    static std::map<std::pair<uint32_t, uint32_t>, std::vector<NmrcBitmap> > _nmrc_shared_bad_epochs;
+    static std::map<std::pair<uint32_t, uint32_t>, uint32_t> _nmrc_shared_bad_epoch_cursor;
     NmrcBitmap _nmrc_path_bitmap;
     simtime_picosec _nmrc_hold_until;
+    std::vector<NmrcBitmap> _nmrc_bad_epochs;
+    uint32_t _nmrc_bad_epoch_cursor;
     std::vector<uint32_t> _ndp_path_ids;
     uint32_t _ndp_cursor;
     uint32_t _ndp_pull_credit;
@@ -261,6 +293,7 @@ private:
     std::array<uint32_t, 3> _nmrc_cursor;
     std::array<uint32_t, 3> _nmrc_stride;
     std::array<bool, 3> _nmrc_cursor_ready;
+    std::set<RocePacket::seq_t> _rtx_queue;
 };
 
 class RoceSink : public PacketSink, public DataReceiver {
@@ -307,11 +340,27 @@ private:
     uint64_t _total_received;
     RocePacket::seq_t _highest_seqno;
     map<RocePacket::seq_t, int> _ooo_packets;
+    simtime_picosec _ooo_first_time;
+    simtime_picosec _nack_silent_until;
  
     // Mechanism
     void send_ack(const RocePacket& pkt, simtime_picosec ts);
-    void send_nack(simtime_picosec ts, RocePacket::seq_t ackno, uint32_t path_id = 0);
+    void send_nack(simtime_picosec ts, RocePacket::seq_t ackno, uint32_t path_id = 0,
+                   uint64_t sack_bitmap = 0, uint16_t sack_offset = 0,
+                   bool has_sack = false);
+    uint64_t build_sack_bitmap(RocePacket::seq_t ackno, uint16_t& sack_offset) const;
+    bool should_send_sp_nack() const;
 };
 
+class RoceRtxTimerScanner : public EventSource {
+public:
+    RoceRtxTimerScanner(simtime_picosec scanPeriod, EventList& eventlist);
+    void doNextEvent();
+    void registerRoce(RoceSrc& src);
+private:
+    simtime_picosec _scanPeriod;
+    typedef list<RoceSrc*> roces_t;
+    roces_t _roces;
+};
 
 #endif

@@ -747,6 +747,7 @@ bool ConnectionMatrix::load(istream& file){
             c->src = stoi(tokens[0]);
             c->dst = stoi(tokens[0].substr(dstix));
             c->priority = 2000000;
+            c->rate_mbps = 0;
             c->start = NO_START;
 
             c->addOnTriggerSignal=false; // 
@@ -796,6 +797,9 @@ bool ConnectionMatrix::load(istream& file){
                 } else if (tokens[i] == "prio") {
                     i++;
                     c->priority = stoi(tokens[i]);
+                } else if (tokens[i] == "rate_mbps") {
+                    i++;
+                    c->rate_mbps = stoi(tokens[i]);
                 } else {
                     cerr << "Error: unknown token: " << tokens[i] << " at line "
                          << linecount << endl;
@@ -963,4 +967,3 @@ ConnectionMatrix::getTrigger(triggerid_t id, EventList& eventlist) {
     }
     return t->trigger;
 }
-

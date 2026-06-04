@@ -45,7 +45,7 @@ simtime_picosec NdpSrc::_min_rto = timeFromUs((uint32_t)DEFAULT_RTO_MIN);
 RouteStrategy NdpSrc::_route_strategy = NOT_SET;
 RouteStrategy NdpSink::_route_strategy = NOT_SET;
 
-// _path_entropy_size is the number of paths we spray across.  If you don't set it, it will default to all paths.
+// _path_entropy_size is the number of paths we spread across.  If you don't set it, it will default to all paths.
 uint32_t NdpSrc::_path_entropy_size = 10000000;
 
 int ooo_distance = 0;

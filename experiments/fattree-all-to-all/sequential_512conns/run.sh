@@ -12,7 +12,7 @@ SIM=perm
 N=1024
 FLOWS=512
 TMFILE=a2a-${N}-${FLOWS}-${PARALLEL}.cm
-echo "Running all-to-all experiment with $N nodes, $CONNS flows, flowsize $FLOWSIZE, spray strategy ${SIM}, parallel conns ${PARALLEL}"
+echo "Running all-to-all experiment with $N nodes, $CONNS flows, flowsize $FLOWSIZE, path strategy ${SIM}, parallel conns ${PARALLEL}"
 CMD="python $SIMPATH/connection_matrices/gen_serialn_alltoall.py ${TMFILE} $N $FLOWS $FLOWS $PARALLEL $FLOWSIZE ${EXTRA} ${SEED} > /dev/null"
 echo ${CMD}
 eval ${CMD}

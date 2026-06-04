@@ -25,7 +25,6 @@ OUT = Path(os.environ.get(
 NODES = int(os.environ.get("GLB_FACTOR_NODES", "128"))
 TIERS = int(os.environ.get("GLB_FACTOR_TIERS", "3"))
 LINKSPEED_MBPS = int(os.environ.get("GLB_FACTOR_LINKSPEED_MBPS", "400000"))
-QUEUE_PKTS = int(os.environ.get("GLB_FACTOR_QUEUE_PKTS", "100"))
 MTU = int(os.environ.get("GLB_FACTOR_MTU", "4096"))
 PATHS = int(os.environ.get("GLB_FACTOR_PATHS", str(NODES)))
 SEED = int(os.environ.get("GLB_FACTOR_SEED", "13"))
@@ -185,7 +184,6 @@ def command_for(item, tm, dat_file, flow_count):
         "-linkspeed", str(LINKSPEED_MBPS),
         "-queue_type", "lossless_input_ecn",
         "-host_queue_type", "prio",
-        "-q", str(QUEUE_PKTS),
         "-mtu", str(MTU),
         "-end", str(END_US),
         "-paths", str(PATHS),
@@ -194,7 +192,6 @@ def command_for(item, tm, dat_file, flow_count):
         "-cc", CC_MODE,
         "-hop_latency", "0.5",
         "-switch_latency", "0.5",
-        "-pfc_thresholds", "20", "80",
         "-slow_tor_uplinks", str(slow_tor_uplinks()),
         "-slow_tor_uplink_divisor", "2",
         "-glb_update_us", "5",
@@ -236,9 +233,9 @@ def plot_summary(rows, path):
         ax.bar_label(bars, fmt="%.0f", padding=3, fontsize=8)
 
     ax.set_ylabel("FCT (us)")
-    ax.set_xlabel("GLB five-factor coefficient set")
+    ax.set_xlabel("glb five-factor coefficient set")
     mode = "normalized" if NORMALIZE_GLB else "raw"
-    ax.set_title(f"GLB FCT under different quality coefficients ({SCENARIO}, {CC_MODE}, {mode})", pad=14)
+    ax.set_title(f"glb FCT under different quality coefficients ({SCENARIO}, {CC_MODE}, {mode})", pad=14)
     ax.set_xticks(x)
     ax.set_xticklabels(labels, rotation=12, ha="right")
     ax.grid(axis="y", linestyle="--", linewidth=0.6, alpha=0.45)
@@ -253,12 +250,12 @@ def plot_summary(rows, path):
 
 def write_report(rows, path, chart_name):
     lines = [
-        "# GLB Five-Factor Sweep",
+        "# glb Five-Factor Sweep",
         "",
         f"Scenario: `{SCENARIO}`, CC: `{CC_MODE}`, nodes: `{NODES}`, flow size: `{FLOW_SIZE}` bytes.",
-        f"GLB score mode: `{'normalized' if NORMALIZE_GLB else 'raw'}`, quality bucket: `{QUALITY_BUCKET}`.",
+        f"glb score mode: `{'normalized' if NORMALIZE_GLB else 'raw'}`, quality bucket: `{QUALITY_BUCKET}`.",
         "",
-        f"![GLB factor FCT bars]({chart_name})",
+        f"![glb factor FCT bars]({chart_name})",
         "",
         "| label | Q(L) | L(L) | Q(R) | L(R) | B(R) | avg FCT us | p99 FCT us | p99.9 FCT us |",
         "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",

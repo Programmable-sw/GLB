@@ -14,13 +14,19 @@
 
 class ECNQueue : public Queue {
 public:
-    ECNQueue(linkspeed_bps bitrate, mem_b maxsize, EventList &eventlist, 
+    ECNQueue(linkspeed_bps bitrate, mem_b maxsize, EventList &eventlist,
              QueueLogger* logger, mem_b drop);
+    ECNQueue(linkspeed_bps bitrate, mem_b maxsize, EventList &eventlist,
+             QueueLogger* logger, mem_b Kmin, mem_b Kmax);
     void receivePacket(Packet & pkt);
     void completeService();
 private:
     mem_b _K;
+    mem_b _ecn_minthresh;
+    mem_b _ecn_maxthresh;
+    bool _use_red;
     int _state_send;
+    bool should_mark_ecn() const;
 };
 
 #endif

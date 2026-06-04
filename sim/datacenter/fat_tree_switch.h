@@ -148,6 +148,7 @@ public:
     static simtime_picosec _nmrc_feedback_max_interval;
     static uint32_t _nmrc_path_count;
     static bool _nmrc_feedback_observed_values;
+    static bool _nmrc_feedback_bad_only;
     static bool _pathid_only_hash;
 private:
     struct NmrcState {

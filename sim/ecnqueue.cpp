@@ -5,12 +5,44 @@
 #include "queue_lossless.h"
 #include <iostream>
 
-ECNQueue::ECNQueue(linkspeed_bps bitrate, mem_b maxsize, 
+ECNQueue::ECNQueue(linkspeed_bps bitrate, mem_b maxsize,
                    EventList& eventlist, QueueLogger* logger, mem_b  K)
-    : Queue(bitrate,maxsize,eventlist,logger), 
-      _K(K)
+    : Queue(bitrate,maxsize,eventlist,logger),
+      _K(K),
+      _ecn_minthresh(K),
+      _ecn_maxthresh(K),
+      _use_red(false)
 {
     _state_send = LosslessQueue::READY;
+}
+
+ECNQueue::ECNQueue(linkspeed_bps bitrate, mem_b maxsize,
+                   EventList& eventlist, QueueLogger* logger,
+                   mem_b Kmin, mem_b Kmax)
+    : Queue(bitrate,maxsize,eventlist,logger),
+      _K(Kmin),
+      _ecn_minthresh(Kmin),
+      _ecn_maxthresh(Kmax ? Kmax : Kmin),
+      _use_red(true)
+{
+    if (_ecn_maxthresh < _ecn_minthresh)
+        _ecn_maxthresh = _ecn_minthresh;
+    _state_send = LosslessQueue::READY;
+}
+
+bool ECNQueue::should_mark_ecn() const {
+    if (!_use_red)
+        return _queuesize > _K;
+    if (_queuesize <= _ecn_minthresh)
+        return false;
+    if (_ecn_maxthresh <= _ecn_minthresh)
+        return true;
+    if (_queuesize >= _ecn_maxthresh)
+        return true;
+
+    uint64_t p = (0x7FFFFFFFULL * (uint64_t)(_queuesize - _ecn_minthresh)) /
+                 (uint64_t)(_ecn_maxthresh - _ecn_minthresh);
+    return (uint64_t)random() < p;
 }
 
 
@@ -88,7 +120,7 @@ ECNQueue::completeService()
         _state_send = LosslessQueue::PAUSED;
     
     //mark on deque
-    if (_queuesize > _K)
+    if (should_mark_ecn())
         pkt->set_flags(pkt->flags() | ECN_CE);
 
     _queuesize -= pkt->size();

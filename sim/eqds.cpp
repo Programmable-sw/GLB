@@ -8,7 +8,7 @@ using namespace std;
 
 // Static stuff
 
-// _path_entropy_size is the number of paths we spray across.  If you don't set it, it will default to all paths.
+// _path_entropy_size is the number of paths we spread across.  If you don't set it, it will default to all paths.
 uint32_t EqdsSrc::_path_entropy_size = 256;
 int EqdsSrc::_global_node_count = 0;
 

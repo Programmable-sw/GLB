@@ -334,6 +334,7 @@ simtime_picosec FatTreeSwitch::_nmrc_feedback_min_interval = timeFromUs(5.0);
 simtime_picosec FatTreeSwitch::_nmrc_feedback_max_interval = timeFromUs(20.0);
 uint32_t FatTreeSwitch::_nmrc_path_count = 1;
 bool FatTreeSwitch::_nmrc_feedback_observed_values = false;
+bool FatTreeSwitch::_nmrc_feedback_bad_only = false;
 bool FatTreeSwitch::_pathid_only_hash = false;
 int8_t (*FatTreeSwitch::fn)(FibEntry*,FibEntry*)= &FatTreeSwitch::compare_queuesize;
 
@@ -638,7 +639,7 @@ void FatTreeSwitch::maybe_update_nmrc_feedback(Packet& pkt) {
     state.packets++;
     if (ecn)
         state.bitmap[path] = 0;
-    else
+    else if (!_nmrc_feedback_bad_only)
         state.bitmap[path] = _nmrc_feedback_observed_values ? 2 : 1;
 
     simtime_picosec now = eventlist().now();

@@ -20,11 +20,13 @@ ASYM_TOPOLOGIES = os.environ.get("SCENARIO_ASYM_TOPOLOGIES", TOPOLOGIES or "1024
 FLOW_SIZE_MIBS = os.environ.get("SCENARIO_FLOW_SIZE_MIBS", "4,8,16,32")
 TRAFFIC = os.environ.get("SCENARIO_TRAFFIC", "tornado")
 LINKSPEED_MBPS = int(os.environ.get("SCENARIO_LINKSPEED_MBPS", "400000"))
-QUEUE_PKTS = int(os.environ.get("SCENARIO_QUEUE_PKTS", "100"))
 MTU = int(os.environ.get("SCENARIO_MTU", "4096"))
 SEED = int(os.environ.get("SCENARIO_SEED", "13"))
 END_US = int(os.environ.get("SCENARIO_END_US", "10000"))
 CC_MODE = os.environ.get("SCENARIO_CC", "dcqcn_variant")
+RX_MODE = os.environ.get("SCENARIO_RX_MODE", "gbn")
+INCLUDE_NMRC_4STATE = os.environ.get("SCENARIO_INCLUDE_NMRC_4STATE") == "1"
+INCLUDE_STATELESS = os.environ.get("SCENARIO_INCLUDE_STATELESS") == "1"
 
 FINISH_RE = re.compile(r"Flow Roce_(\d+)_(\d+) \d+ finished at ([0-9.]+)")
 KEEP_RAW = os.environ.get("KEEP_RAW_OUTPUT") == "1"
@@ -60,12 +62,22 @@ VARIANTS = [
     ("reps", "reps", []),
     ("n-mrc", "n-mrc", []),
 ]
+if INCLUDE_NMRC_4STATE:
+    VARIANTS += [
+        ("n-mrc-4state", "n-mrc", ["-nmrc_state_mode", "4-state"]),
+    ]
+if INCLUDE_STATELESS:
+    VARIANTS += [
+        ("rr", "rr", []),
+    ]
 
 VARIANT_DISPLAY = {
-    "ecmp": "ECMP",
-    "ops": "OPS",
-    "reps": "REPS",
-    "n-mrc": "N-MRC",
+    "ecmp": "ecmp",
+    "ops": "ops",
+    "reps": "reps",
+    "n-mrc": "n-mrc",
+    "n-mrc-4state": "n-mrc 4-state",
+    "rr": "rr",
 }
 
 
@@ -304,8 +316,6 @@ def command_for(scenario, variant, tm, dat_file, flow_count, slow_tor_uplinks):
         "lossless_input_ecn",
         "-host_queue_type",
         "prio",
-        "-q",
-        str(QUEUE_PKTS),
         "-mtu",
         str(MTU),
         "-end",
@@ -318,13 +328,12 @@ def command_for(scenario, variant, tm, dat_file, flow_count, slow_tor_uplinks):
         lb_mode,
         "-cc",
         CC_MODE,
+        "-roce_rx_mode",
+        RX_MODE,
         "-hop_latency",
         "0.5",
         "-switch_latency",
         "0.5",
-        "-pfc_thresholds",
-        "20",
-        "80",
     ]
     if slow_tor_uplinks:
         cmd += [
@@ -487,7 +496,7 @@ def write_report(summary_rows, path):
             scenarios.append((row["scenario"], row["category"], row["description"]))
 
     lines = [
-        "# OPS / REPS / N-MRC Scenario Comparison",
+        "# ecmp / ops / reps / n-mrc Scenario Comparison",
         "",
         "当前脚本覆盖健康网络和非对称带宽两类主线场景；背景流/热点、链路故障场景暂不展开。",
         "",

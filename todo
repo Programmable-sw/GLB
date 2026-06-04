@@ -1,0 +1,48 @@
+继续分析 csg-htsim 里的 RoCE 队列、DCQCN、dcqcn_variant 和 SP bitmap 重传机制。请先保持 lossless_input_ecn 无损模式作为主线，再逐步回到 lossy_input_ecn。
+
+背景和参考：
+- DCQCN 来自 "Congestion Control for Large-Scale RDMA Deployments"。它是 RoCEv2 的端到端、rate-based 拥塞控制：交换机 RED/ECN 标记，接收端生成 CNP，发送端维护 alpha、current rate、target rate；收到 CNP 后按 alpha 降 rate，再通过 timer/byte counter 做 fast recovery 和 active increase。论文也强调 DCQCN 依赖 PFC 防止启动/反馈延迟期间丢包，且需要 ECN 在 PFC 前触发。
+- dcqcn_variant 更接近 MP-RDMA 里的 cwnd/ACK-clocking 机制。"Multi-Path Transport for RDMA in Datacenters" 说 MP-RDMA 用一个全局 cwnd 做多路径 ACK-clocking，基于 ECN 反馈逐 ACK 调整：非 ECN ACK 时 cwnd += 1/cwnd，ECN ACK 时 cwnd -= 1/2 segment。它不是标准 DCQCN 的 rate/current-target-rate 模型，而是 DCTCP-like per-ACK window 模型。
+- 当前代码里的 dcqcn_variant 基本就是上述 MP-RDMA 风格：ACK 无 ECN 增加 1/cwnd，有 ECN 减 0.5，NACK 减 1，并用 ACK clock/窗口控制发送。
+
+详细调速机制：
+- 标准 DCQCN:
+  - 交换机按队列 RED/ECN 标记数据包；接收端把拥塞反馈回发送端。在当前 htsim 代码中，这个反馈被简化成 ACK 携带 ECN_ECHO 后直接调用 dcqcn_on_cnp()。
+  - 发送端维护 _dcqcn_current_rate、_dcqcn_target_rate、_dcqcn_alpha、_dcqcn_bytes_since_increase、_dcqcn_recovery_count。
+  - 发送节奏由 rate 决定：packet_spacing = packet_bits / current_rate。ACK 本身不直接增加 cwnd，也不直接 clock 每个新包。
+  - 收到 ECN/CNP：target_rate = current_rate；current_rate *= (1 - alpha / 2)；alpha = (1 - g) * alpha + g；清空 byte counter，重置 recovery_count 和 rate increase timer。
+  - 没有新 CNP 的 alpha timer 到期时，alpha *= (1 - g)，拥塞记忆逐步衰减。
+  - rate increase 由 timer 或 byte counter 触发：fast recovery 阶段 current_rate = (target_rate + current_rate) / 2；超过 fast_recovery_steps 后 target_rate += ai_rate，然后 current_rate = (target_rate + current_rate) / 2。
+  - 当前 htsim 额外加了 flight cap，避免纯 rate pacing 在反馈回来前无限发送；这不是 DCQCN 论文的核心 rate 公式，但在离散事件仿真和短 flow 下很关键。
+- dcqcn_variant / MP-RDMA-like:
+  - 交换机和接收端反馈仍然基于 ECN ACK，但发送端不维护 current_rate/target_rate/alpha。
+  - 发送端维护 _cc_cwnd_pkts 和 _cc_inflate_pkts；可发送量约等于 cwnd + inflate - outstanding。
+  - 非 ECN ACK：cwnd += 1 / cwnd，近似每 RTT 加 1 个包。
+  - ECN ACK：cwnd -= 0.5 个包，然后 clamp 到最小窗口。
+  - NACK/loss：cwnd -= 1 个包，并清空 inflate。
+  - 发送是 ACK-clock/window-driven：没有 ACK 打开窗口时不会像 rate-based DCQCN 那样继续按时间间隔推进一大批包。
+  - 因此两者都吃 ECN 信号，但动态完全不同：DCQCN 是速率状态机，variant 是窗口/ACK-clock 状态机。
+
+当前问题：
+1. dcqcn 和 dcqcn_variant 机制很相似，都是 ECN 驱动的 RoCE CC，但实现层面一个是 rate-based pacing + flight cap，另一个是 ACK-clock/cwnd。实验必须把队列维度 lossless/lossy 和 CC 维度 dcqcn/variant 分开做 2x2，不能混成三条线。
+2. 如果 lossy + dcqcn 相比 lossy + variant 极度恶化，说明标准 DCQCN 的实现或参数仍有问题。重点检查：
+   - DCQCN 是否仍在反馈前发送过多 in-flight 包；
+   - rate decrease / rate increase timer / byte counter / alpha 参数是否和论文及 htsim 时延尺度匹配；
+   - NACK 是否不应该直接等价为 CNP，或者 NACK 对 rate 降速是否过重；
+   - lossy 队列 RED ECN Kmin/Kmax/Pmax 是否太晚，导致先 drop 后反馈；
+   - RTO、OOO tolerance、loss trace window 是否与当前 RTT/BDP 匹配。
+3. 当前 lossy 两种机制在压力下仍不如 lossless，不能直接得出方案不好。需要先确认：
+   - lossless_input_ecn 的 PFC/队列模型是否真实，尤其 LosslessOutputQueue 超过 maxsize 只 warning 不 drop；
+   - lossy_input_ecn 是否缺少与 lossless 相同的 ECN/PFC 前置保护；
+   - SP bitmap 重传是否有不必要重传、重复 NACK、尾部 RTO 等微观问题。
+
+已知烟测口径：
+- 54-flow permutation, ECMP 4 paths, 4KiB MTU, 400G, queue 1BDP=135 pkts, RED ECN Kmin/Kmax=0.2/0.8 queue, PFC low/high=0.2/0.8 queue, SP rx, RTO 70us, OOO tolerance about 19.8us, loss trace 0.4BDP=54 pkts。
+- 默认已把 dcqcn 和 dcqcn_variant 的初始 flight cap 对齐为 0.4BDP=54 pkts。
+- 默认 2x2 下 lossless/lossy 都基本不触发关键机制，结果接近；把 cc_iw_pkts 放大到 135 pkts 后机制差异才明显。
+
+下一步优先任务：
+1. 后续先用 lossless_input_ecn 无损模式，比较 -cc none / dcqcn / dcqcn_variant。
+2. none 不是可靠最优基线：它可能让 lossless 队列产生大量 "LOSSLESS not working" warning，因此需要同时看 FCT 和 warning/PFC 行为。
+3. 在 lossless 模式下扫 cc_iw_pkts、DCQCN timer/byte counter/alpha、RED Kmin/Kmax，找一个既不触发大量 PFC warning、又 FCT 较好的参数区间。
+4. 回到 lossy 模式后，再用同样参数比较 dcqcn vs variant，观察重传数、tail、NACK/RTO 次数和每个洞的恢复路径。

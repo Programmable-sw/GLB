@@ -1,13 +1,13 @@
-# N-MRC 实验目录
+# n-mrc 实验目录
 
-本目录存放 N-MRC 的标准仿真实验脚本、辅助对比脚本、PPT 材料和本地输出。完整项目说明、方案机制和运行方法见仓库根目录 [README.md](../../README.md)。
+本目录存放 n-mrc 的标准仿真实验脚本、辅助对比脚本、PPT 材料和本地输出。完整项目说明、方案机制和运行方法见仓库根目录 [README.md](../../README.md)。
 
 ## 主要文件
 
-- `run_literature_metric_compare.py`：标准两场景对比脚本，默认比较 `ecmp`、`ops`、`reps`、`N-MRC`。
-- `run_glb_factor_compare.py`：GLB 参数对比辅助脚本，不属于当前标准主测试。
-- `DESIGN_POINTS.md`：N-MRC 机制设计记录。
-- `n-mrc_htsim_overview.pptx`：N-MRC 仿真实验汇报 PPT。
+- `run_literature_metric_compare.py`：标准两场景对比脚本，默认比较 `ecmp`、`ops`、`reps`、`n-mrc`。
+- `run_glb_factor_compare.py`：glb 参数对比辅助脚本，不属于当前标准主测试。
+- `DESIGN_POINTS.md`：n-mrc 机制设计记录。
+- `n-mrc_htsim_overview.pptx`：n-mrc 仿真实验汇报 PPT。
 - `n-mrc_ppt_prompt.md`：生成上述 PPT 使用的 prompt。
 - `output/`：本地实验结果目录，默认不提交。
 
@@ -17,8 +17,8 @@
 
 | 场景 | 拓扑 | 链路条件 | 对比方案 |
 | --- | --- | --- | --- |
-| 健康网络 | 2048 nodes / 2-tier | 全链路 400Gbps | `ecmp`、`ops`、`reps`、`N-MRC` |
-| 非对称带宽 | 1024 nodes / 3-tier | 3% ToR 上行半带宽 | `ecmp`、`ops`、`reps`、`N-MRC` |
+| 健康网络 | 2048 nodes / 2-tier | 全链路 400Gbps | `ecmp`、`ops`、`reps`、`n-mrc` |
+| 非对称带宽 | 1024 nodes / 3-tier | 3% ToR 上行半带宽 | `ecmp`、`ops`、`reps`、`n-mrc` |
 
 运行完整标准测试：
 
@@ -37,6 +37,13 @@ python3 experiments/n-mrc/run_literature_metric_compare.py
 
 ```bash
 KEEP_RAW_OUTPUT=1 \
+python3 experiments/n-mrc/run_literature_metric_compare.py
+```
+
+额外比较旧版 4-state n-mrc，并使用 RoCE SP/SACK bitmap 重传：
+
+```bash
+SCENARIO_INCLUDE_NMRC_4STATE=1 SCENARIO_RX_MODE=sp \
 python3 experiments/n-mrc/run_literature_metric_compare.py
 ```
 

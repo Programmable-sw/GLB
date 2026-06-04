@@ -21,6 +21,7 @@ struct connection{
     triggerid_t trigger;
     simtime_picosec start;
     int priority;
+    uint32_t rate_mbps;
     bool addOnTriggerSignal; // 
 };
 

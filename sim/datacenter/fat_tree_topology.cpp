@@ -729,6 +729,9 @@ FatTreeTopology::alloc_queue(QueueLogger* queueLogger, linkspeed_bps speed, mem_
     case LOSSLESS_INPUT_ECN:
         return new LosslessOutputQueue(speed, queuesize, *_eventlist, queueLogger,
                                        1, queuesize / 5, queuesize * 4 / 5);
+    case LOSSY_INPUT_ECN:
+        return new ECNQueue(speed, queuesize, *_eventlist, queueLogger,
+                            queuesize / 5, queuesize * 4 / 5);
     case COMPOSITE_ECN:
         if (tor && dir == DOWNLINK) 
             return new CompositeQueue(speed, queuesize, *_eventlist, queueLogger);
