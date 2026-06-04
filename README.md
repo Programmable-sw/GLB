@@ -52,7 +52,7 @@ n-mrc 把一个 EV 看作完整的端到端路径组合。2-tier 拓扑中，EV 
 | 场景 | 拓扑 | 链路条件 | Flow size | 对比方案 |
 | --- | --- | --- | --- | --- |
 | 健康网络 | 2048 nodes / 2-tier | 全链路 400Gbps | 4/32MiB | ecmp / ops / reps / n-mrc |
-| 非对称带宽 | 1024 nodes / 3-tier | 3% ToR 上行半带宽，即 200Gbps | 4/32MiB | ecmp / ops / reps / n-mrc |
+| 非对称带宽 | 1024 nodes / 3-tier | 3% ToR 上行半带宽，即 200Gbps | 8/32MiB | ecmp / ops / reps / n-mrc |
 
 通用参数：
 
