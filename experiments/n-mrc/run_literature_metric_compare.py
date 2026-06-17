@@ -1,86 +1,213 @@
 #!/usr/bin/env python3
-# 运行健康/非对称 n-mrc 主线场景，覆盖 4/8/16/32MiB tornado 流和 ECMP/OPS/REPS/n-mrc。
+"""运行 README 中的逐包负载均衡标准验证场景。
+
+这是当前唯一的 README 场景入口脚本，负责展开健康网络、非对称带宽1
+和非对称带宽2等场景，运行逐包方案仿真，并生成 CSV、报告和对比图。
+"""
+
 import csv
+import concurrent.futures
 import math
 import os
 import random
 import re
 import shutil
-import statistics
 import subprocess
 from pathlib import Path
+
+import matplotlib
+
+matplotlib.use("Agg")
+import matplotlib.font_manager as fm
+import matplotlib.pyplot as plt
 
 
 ROOT = Path(__file__).resolve().parents[2]
 SIM = ROOT / "sim" / "datacenter" / "htsim_roce"
 EXP_DIR = Path(__file__).resolve().parent
 
-TOPOLOGIES = os.environ.get("SCENARIO_TOPOLOGIES")
-HEALTHY_TOPOLOGIES = os.environ.get("SCENARIO_HEALTHY_TOPOLOGIES", TOPOLOGIES or "2048:2")
-ASYM_TOPOLOGIES = os.environ.get("SCENARIO_ASYM_TOPOLOGIES", TOPOLOGIES or "1024:3")
-FLOW_SIZE_MIBS = os.environ.get("SCENARIO_FLOW_SIZE_MIBS", "4,8,16,32")
-TRAFFIC = os.environ.get("SCENARIO_TRAFFIC", "tornado")
-LINKSPEED_MBPS = int(os.environ.get("SCENARIO_LINKSPEED_MBPS", "400000"))
-MTU = int(os.environ.get("SCENARIO_MTU", "4096"))
-SEED = int(os.environ.get("SCENARIO_SEED", "13"))
-END_US = int(os.environ.get("SCENARIO_END_US", "10000"))
-CC_MODE = os.environ.get("SCENARIO_CC", "dcqcn_variant")
-RX_MODE = os.environ.get("SCENARIO_RX_MODE", "gbn")
-SACK_BITMAP_BITS = int(os.environ.get("SCENARIO_SACK_BITMAP_BITS", "64"))
-INCLUDE_NMRC_4STATE = os.environ.get("SCENARIO_INCLUDE_NMRC_4STATE") == "1"
-INCLUDE_STATELESS = os.environ.get("SCENARIO_INCLUDE_STATELESS") == "1"
+
+def env_value(name, default=None, aliases=()):
+    for key in (name, *aliases):
+        value = os.environ.get(key)
+        if value is not None:
+            return value
+    return default
+
+
+def parse_csv_list(raw):
+    return [item.strip() for item in raw.split(",") if item.strip()]
+
+
+def parse_int_list(raw):
+    return [int(item) for item in parse_csv_list(raw)]
+
+
+LINKSPEED_MBPS = int(env_value("SCENARIO_LINKSPEED_MBPS", "400000"))
+MTU = int(env_value("SCENARIO_MTU", "4096"))
+SEED = int(env_value("SCENARIO_SEED", "13", aliases=("README_ALL_LB_SEED",)))
+END_US = int(env_value("SCENARIO_END_US", "10000", aliases=("README_ALL_LB_END_US",)))
+CC_MODE = env_value("SCENARIO_CC", "dcqcn_variant")
+RX_MODE = env_value("SCENARIO_RX_MODE", "sp")
+SACK_BITMAP_BITS = int(
+    env_value("SCENARIO_SACK_BITMAP_BITS", "64", aliases=("README_ALL_LB_SACK_BITMAP_BITS",))
+)
+
+# The full README matrix is 4/8/16/32MiB, but the default enabled subset is 4/32MiB.
+ALL_FLOW_SIZE_MIBS = [4, 8, 16, 32]
+FLOW_SIZE_MIBS = parse_int_list(
+    env_value("SCENARIO_FLOW_SIZE_MIBS", "4,32", aliases=("README_ALL_LB_FLOW_SIZES",))
+)
+TRAFFICS = parse_csv_list(
+    env_value(
+        "SCENARIO_TRAFFICS",
+        env_value("SCENARIO_TRAFFIC", "tornado,permutation"),
+    )
+)
+SCENARIO_SET = parse_csv_list(
+    env_value(
+        "SCENARIO_SET",
+        "healthy,asym_tor3pct,asym2_tor10pct_sparse",
+        aliases=("SCENARIO_SCENARIOS",),
+    )
+)
+SCHEME_SCOPE = env_value("SCENARIO_SCHEMES", "packet", aliases=("README_ALL_LB_SCHEME_SCOPE",)).strip()
+MAX_WORKERS = int(env_value("SCENARIO_WORKERS", "4", aliases=("README_ALL_LB_WORKERS",)))
+KEEP_RAW = env_value("KEEP_RAW_OUTPUT", "1") != "0"
+FORCE = env_value("FORCE_RERUN", "0") == "1"
+CJK_FONT = None
 
 FINISH_RE = re.compile(r"Flow Roce_(\d+)_(\d+) \d+ finished at ([0-9.]+)")
-KEEP_RAW = os.environ.get("KEEP_RAW_OUTPUT") == "1"
-
-
-def topology_slug(raw):
-    parts = []
-    for nodes, tiers in parse_topologies(raw):
-        parts.append(f"{nodes}n{tiers}t")
-    return "-".join(parts)
-
-
-def flow_size_slug(raw):
-    sizes = parse_flow_sizes(raw)
-    if not sizes:
-        return "none"
-    if len(sizes) == 1:
-        return f"{sizes[0]}m"
-    return f"{min(sizes)}-{max(sizes)}m"
 
 
 def default_output_dir():
-    name = (
-        f"topo-healthy{topology_slug(HEALTHY_TOPOLOGIES)}-asym{topology_slug(ASYM_TOPOLOGIES)}"
-        f"_traffic-{TRAFFIC}_flow-{flow_size_slug(FLOW_SIZE_MIBS)}"
-        "_scene-healthy-asym3pct_schemes-ecmp-ops-reps-n-mrc"
+    scenario_slug = "-".join(SCENARIO_SET)
+    traffic_slug = "-".join(TRAFFICS)
+    size_slug = "-".join(str(size) for size in FLOW_SIZE_MIBS)
+    return EXP_DIR / "output" / (
+        f"readme_packet_lb_scenarios-{scenario_slug}_traffic-{traffic_slug}_flow-{size_slug}m"
     )
-    return EXP_DIR / "output" / name
 
-VARIANTS = [
-    ("ecmp", "ecmp", []),
-    ("ops", "ops", []),
-    ("reps", "reps", []),
-    ("n-mrc", "n-mrc", []),
+
+OUT = Path(env_value("SCENARIO_OUT", str(default_output_dir()), aliases=("README_ALL_LB_OUT",))).resolve()
+
+SCENARIO_DEFINITIONS = [
+    {
+        "key": "healthy",
+        "title": "健康网络",
+        "nodes": 2048,
+        "tiers": 2,
+        "description": "2048 nodes / 2-tier, all links 400Gbps",
+    },
+    {
+        "key": "asym_tor3pct",
+        "title": "非对称带宽",
+        "nodes": 1024,
+        "tiers": 3,
+        "slow_tor_uplink_fraction": 0.03,
+        "slow_tor_uplink_rounding": "ceil",
+        "slow_tor_uplink_divisor": 2,
+        "description": "1024 nodes / 3-tier, 3% ToR uplinks at half bandwidth",
+    },
+    {
+        "key": "asym2_tor10pct_sparse",
+        "title": "非对称带宽2",
+        "nodes": 2048,
+        "tiers": 2,
+        "slow_tor_uplink_fraction": 0.10,
+        "slow_tor_uplink_rounding": "floor",
+        "slow_tor_uplink_divisor": 2,
+        "slow_tor_uplink_select": "random-sparse",
+        "description": (
+            "2048 nodes / 2-tier, floor(10%) sparse random ToR uplinks at half bandwidth"
+        ),
+    },
 ]
-if INCLUDE_NMRC_4STATE:
-    VARIANTS += [
-        ("n-mrc-4state", "n-mrc", ["-nmrc_state_mode", "4-state"]),
-    ]
-if INCLUDE_STATELESS:
-    VARIANTS += [
-        ("rr", "rr", []),
-    ]
 
-VARIANT_DISPLAY = {
-    "ecmp": "ecmp",
-    "ops": "ops",
-    "reps": "reps",
-    "n-mrc": "n-mrc",
-    "n-mrc-4state": "n-mrc 4-state",
-    "rr": "rr",
+ALL_SCHEMES = [
+    ("ecmp", "ECMP", "ecmp", []),
+    ("ecmp_rr", "ECMP-RR", "ecmp_rr", []),
+    ("ops", "OPS", "ops", []),
+    ("rr", "RR", "rr", []),
+    ("reps", "REPS", "reps", []),
+    ("n-mrc", "N-MRC", "n-mrc", []),
+    ("mrc", "MRC", "mrc", []),
+    ("conweave", "CONWEAVE", "conweave", []),
+    ("adaptive-routing", "AR", "adaptive-routing", ["-ar_granularity", "packet"]),
+    ("drill", "DRILL", "drill", []),
+    ("glb", "GLB", "glb", []),
+]
+
+PACKET_SCHEME_LABELS = [
+    "ecmp_rr",
+    "ops",
+    "rr",
+    "reps",
+    "n-mrc",
+    "mrc",
+    "adaptive-routing",
+    "drill",
+    "glb",
+]
+
+METRICS = [
+    ("avg_fct_us", "平均FCT"),
+    ("p99_fct_us", "p99 FCT"),
+    ("p999_fct_us", "p99.9 FCT"),
+    ("cct_us", "CCT"),
+]
+PLOT_METRICS = METRICS[:3]
+
+COLORS = {
+    "ecmp": "#6b7280",
+    "ecmp_rr": "#9ca3af",
+    "ops": "#2563eb",
+    "rr": "#38bdf8",
+    "reps": "#059669",
+    "n-mrc": "#dc2626",
+    "mrc": "#ea580c",
+    "conweave": "#f59e0b",
+    "adaptive-routing": "#7c3aed",
+    "drill": "#db2777",
+    "glb": "#111827",
 }
+
+
+def selected_schemes():
+    if SCHEME_SCOPE == "packet":
+        wanted = PACKET_SCHEME_LABELS
+    elif SCHEME_SCOPE == "all":
+        wanted = [scheme[0] for scheme in ALL_SCHEMES]
+    else:
+        wanted = parse_csv_list(SCHEME_SCOPE)
+
+    by_label = {scheme[0]: scheme for scheme in ALL_SCHEMES}
+    missing = [label for label in wanted if label not in by_label]
+    if missing:
+        raise ValueError(f"unknown SCENARIO_SCHEMES labels: {', '.join(missing)}")
+    return [by_label[label] for label in wanted]
+
+
+SCHEMES = selected_schemes()
+
+
+def configure_fonts():
+    global CJK_FONT
+    candidates = [
+        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+        "/usr/share/fonts/opentype/noto/NotoSansCJK-Medium.ttc",
+    ]
+    for path in candidates:
+        if Path(path).exists():
+            fm.fontManager.addfont(path)
+            CJK_FONT = fm.FontProperties(fname=path)
+            break
+    plt.rcParams["font.family"] = "DejaVu Sans"
+    plt.rcParams["axes.unicode_minus"] = False
+
+
+def cjk_text_kwargs():
+    return {"fontproperties": CJK_FONT} if CJK_FONT else {}
 
 
 def pct(values, p):
@@ -106,7 +233,7 @@ def validate_generated_fattree(nodes, tiers):
         raise ValueError(f"unsupported tiers={tiers}")
 
     if generated != nodes:
-        raise ValueError(f"{nodes} nodes is not supported by the generated {tiers}-tier fat-tree")
+        raise ValueError(f"{nodes} nodes is not supported by generated {tiers}-tier fat-tree")
     return k
 
 
@@ -115,14 +242,13 @@ def default_total_tor_uplinks(nodes, tiers):
     return nodes
 
 
-def flow(src, dst, size, start_us=0.0, role="foreground"):
+def flow(src, dst, size, start_us=0.0):
     return {
         "src": src,
         "dst": dst,
         "size": size,
         "start_us": start_us,
         "start_ps": int(start_us * 1_000_000),
-        "role": role,
     }
 
 
@@ -131,7 +257,7 @@ def tornado_flows(nodes, size):
     return [flow(src, (src + shift) % nodes, size) for src in range(nodes)]
 
 
-def permutation_flows(nodes, conns, size, seed):
+def permutation_flows(nodes, size, seed):
     rng = random.Random(seed)
     srcs = list(range(nodes))
     dsts = list(range(nodes))
@@ -141,91 +267,49 @@ def permutation_flows(nodes, conns, size, seed):
         if srcs[i] == dsts[i]:
             j = (i + 1) % nodes
             dsts[i], dsts[j] = dsts[j], dsts[i]
-    return [flow(srcs[i], dsts[i], size) for i in range(conns)]
+    return [flow(srcs[i], dsts[i], size) for i in range(nodes)]
 
 
-def parse_topologies(raw):
-    topologies = []
-    for item in raw.split(","):
-        item = item.strip()
-        if not item:
-            continue
-        nodes, tiers = item.split(":", 1)
-        topologies.append((int(nodes), int(tiers)))
-    return topologies
-
-
-def parse_flow_sizes(raw):
-    return [int(item.strip()) for item in raw.split(",") if item.strip()]
-
-
-OUT = Path(os.environ.get("SCENARIO_OUT", str(default_output_dir()))).resolve()
-
-
-def build_flow_builder():
-    if TRAFFIC == "tornado":
-        return lambda scenario: tornado_flows(scenario["nodes"], scenario["flow_size"])
-    if TRAFFIC == "permutation":
-        return lambda scenario: permutation_flows(
-            scenario["nodes"], scenario["nodes"], scenario["flow_size"], SEED
-        )
-    raise ValueError(f"unsupported SCENARIO_TRAFFIC={TRAFFIC}")
+def flows_for(scenario):
+    size = scenario["flow_size_mib"] * 1024 * 1024
+    if scenario["traffic"] == "tornado":
+        return tornado_flows(scenario["nodes"], size)
+    if scenario["traffic"] == "permutation":
+        return permutation_flows(scenario["nodes"], size, SEED)
+    raise ValueError(f"unsupported traffic={scenario['traffic']}")
 
 
 def build_scenarios():
-    scenarios = []
-    flow_builder = build_flow_builder()
-    for nodes, tiers in parse_topologies(HEALTHY_TOPOLOGIES):
-        validate_generated_fattree(nodes, tiers)
-        paths = int(os.environ.get("SCENARIO_PATHS", str(nodes)))
-        for size_mib in parse_flow_sizes(FLOW_SIZE_MIBS):
-            flow_size = size_mib * 1024 * 1024
-            base = {
-                "nodes": nodes,
-                "tiers": tiers,
-                "paths": paths,
-                "flow_size": flow_size,
-                "flow_size_mib": size_mib,
-                "traffic": TRAFFIC,
-                "flow_builder": flow_builder,
-                "end_us": END_US,
-            }
-            scenarios.append({
-                **base,
-                "name": f"healthy_{nodes}n_{tiers}tier_{size_mib}m",
-                "category": "健康网络场景",
-                "description": (
-                    f"{nodes} nodes, {tiers}-tier fat-tree, {TRAFFIC}, "
-                    f"{size_mib}MiB flows, all links 400Gbps."
-                ),
-            })
+    by_key = {scenario["key"]: scenario for scenario in SCENARIO_DEFINITIONS}
+    missing = [key for key in SCENARIO_SET if key not in by_key]
+    if missing:
+        raise ValueError(f"unknown SCENARIO_SET labels: {', '.join(missing)}")
 
-    for nodes, tiers in parse_topologies(ASYM_TOPOLOGIES):
-        validate_generated_fattree(nodes, tiers)
-        paths = int(os.environ.get("SCENARIO_PATHS", str(nodes)))
-        for size_mib in parse_flow_sizes(FLOW_SIZE_MIBS):
-            flow_size = size_mib * 1024 * 1024
-            base = {
-                "nodes": nodes,
-                "tiers": tiers,
-                "paths": paths,
-                "flow_size": flow_size,
-                "flow_size_mib": size_mib,
-                "traffic": TRAFFIC,
-                "flow_builder": flow_builder,
-                "end_us": END_US,
-            }
-            scenarios.append({
-                **base,
-                "name": f"asym_tor3pct_{nodes}n_{tiers}tier_{size_mib}m",
-                "category": "非对称带宽场景",
-                "description": (
-                    f"{nodes} nodes, {tiers}-tier fat-tree, {TRAFFIC}, "
-                    f"{size_mib}MiB flows, 3% ToR uplinks at half bandwidth."
-                ),
-                "slow_tor_uplink_fraction": 0.03,
-                "slow_tor_uplink_divisor": 2,
-            })
+    scenarios = []
+    for key in SCENARIO_SET:
+        definition = by_key[key]
+        validate_generated_fattree(definition["nodes"], definition["tiers"])
+        for traffic in TRAFFICS:
+            if traffic not in {"tornado", "permutation"}:
+                raise ValueError(f"unsupported traffic={traffic}")
+            for size_mib in FLOW_SIZE_MIBS:
+                if size_mib not in ALL_FLOW_SIZE_MIBS:
+                    raise ValueError(
+                        f"flow size {size_mib}MiB is not in supported set {ALL_FLOW_SIZE_MIBS}"
+                    )
+                scenarios.append(
+                    {
+                        **definition,
+                        "traffic": traffic,
+                        "flow_size_mib": size_mib,
+                        "paths": definition.get("paths", definition["nodes"]),
+                        "end_us": END_US,
+                        "name": (
+                            f"{definition['key']}_{traffic}_"
+                            f"{definition['nodes']}n_{definition['tiers']}tier_{size_mib}m"
+                        ),
+                    }
+                )
     return scenarios
 
 
@@ -244,31 +328,10 @@ def write_tm(path, nodes, flows):
             )
 
 
-def metrics_for_rows(rows, total):
-    fcts = [row["fct_us"] for row in rows]
-    completion_pct = 100.0 * len(rows) / total if total else 0.0
-    cct = 0.0
-    if rows:
-        cct = max(row["finish_us"] for row in rows) - min(row["start_us"] for row in rows)
-    return {
-        "completed": len(rows),
-        "completion_pct": completion_pct,
-        "avg_fct_us": statistics.mean(fcts) if fcts else 0.0,
-        "p50_fct_us": pct(fcts, 0.50),
-        "p95_fct_us": pct(fcts, 0.95),
-        "p99_fct_us": pct(fcts, 0.99),
-        "p999_fct_us": pct(fcts, 0.999),
-        "max_fct_us": max(fcts) if fcts else 0.0,
-        "cct_us": cct,
-    }
-
-
-def prefixed(prefix, metrics):
-    return {f"{prefix}_{key}": value for key, value in metrics.items()}
-
-
 def parse_stdout(stdout_file, flow_map):
     rows = []
+    if not stdout_file.exists():
+        return rows
     for line in stdout_file.read_text(errors="ignore").splitlines():
         match = FINISH_RE.search(line)
         if not match:
@@ -281,7 +344,6 @@ def parse_stdout(stdout_file, flow_map):
             continue
         rows.append(
             {
-                "role": meta["role"],
                 "src": src,
                 "dst": dst,
                 "start_us": meta["start_us"],
@@ -292,14 +354,47 @@ def parse_stdout(stdout_file, flow_map):
     return rows
 
 
+def metrics_for(rows, total):
+    fcts = [row["fct_us"] for row in rows]
+    cct = 0.0
+    if rows:
+        cct = max(row["finish_us"] for row in rows) - min(row["start_us"] for row in rows)
+    return {
+        "completed": len(rows),
+        "completion_pct": 100.0 * len(rows) / total if total else 0.0,
+        "avg_fct_us": sum(fcts) / len(fcts) if fcts else 0.0,
+        "p50_fct_us": pct(fcts, 0.50),
+        "p95_fct_us": pct(fcts, 0.95),
+        "p99_fct_us": pct(fcts, 0.99),
+        "p999_fct_us": pct(fcts, 0.999),
+        "max_fct_us": max(fcts) if fcts else 0.0,
+        "cct_us": cct,
+    }
+
+
 def slow_tor_uplinks_for(scenario):
     total = default_total_tor_uplinks(scenario["nodes"], scenario["tiers"])
     fraction = scenario.get("slow_tor_uplink_fraction", 0.0)
-    return total, max(1, math.ceil(total * fraction)) if fraction else 0
+    if not fraction:
+        return total, 0
+
+    raw = total * fraction
+    rounding = scenario.get("slow_tor_uplink_rounding", "ceil")
+    if rounding == "floor":
+        slow = math.floor(raw)
+    elif rounding == "round":
+        slow = int(round(raw))
+    else:
+        slow = math.ceil(raw)
+    return total, max(1, min(total, slow))
 
 
-def command_for(scenario, variant, tm, dat_file, flow_count, slow_tor_uplinks):
-    _label, lb_mode, extra = variant
+def scenario_run_name(scenario):
+    return scenario["name"]
+
+
+def command_for(scenario, scheme, tm, dat_file, flow_count, slow_tor_uplinks):
+    _label, _display, lb_mode, extra = scheme
     cmd = [
         str(SIM),
         "-o",
@@ -344,114 +439,149 @@ def command_for(scenario, variant, tm, dat_file, flow_count, slow_tor_uplinks):
             "-slow_tor_uplinks",
             str(slow_tor_uplinks),
             "-slow_tor_uplink_divisor",
-            str(scenario["slow_tor_uplink_divisor"]),
+            str(scenario.get("slow_tor_uplink_divisor", 2)),
         ]
+        if scenario.get("slow_tor_uplink_select"):
+            cmd += ["-slow_tor_uplink_select", scenario["slow_tor_uplink_select"]]
     return cmd + extra
 
 
-def run_scenario(scenario):
-    flows = scenario["flow_builder"](scenario)
-    role_totals = {
-        "all": len(flows),
-        "foreground": sum(1 for item in flows if item["role"] == "foreground"),
-        "background": sum(1 for item in flows if item["role"] == "background"),
-    }
-    total_tor_uplinks, slow_tor_uplinks = slow_tor_uplinks_for(scenario)
+def run_scheme(scenario, flows, flow_map, case_dir, tm, scheme, total_tor_uplinks, slow_tor_uplinks):
+    label = scheme[0]
+    stdout_file = case_dir / f"{label}.stdout"
+    dat_file = case_dir / f"{label}.dat"
+    cmd_file = case_dir / f"{label}.cmd"
+    cmd = command_for(scenario, scheme, tm, dat_file, len(flows), slow_tor_uplinks)
+    cmd_text = " ".join(cmd) + "\n"
+    cached_cmd_text = cmd_file.read_text() if cmd_file.exists() else ""
 
-    scenario_dir = OUT / scenario["name"]
-    if scenario_dir.exists() and not KEEP_RAW:
-        shutil.rmtree(scenario_dir)
-    scenario_dir.mkdir(parents=True, exist_ok=True)
-    tm = scenario_dir / f"{scenario['name']}.cm"
-    write_tm(tm, scenario["nodes"], flows)
-    flow_map = {(item["src"], item["dst"]): item for item in flows}
-
-    summary_rows = []
-    per_flow_rows = []
-    for variant in VARIANTS:
-        label = variant[0]
-        stdout_file = scenario_dir / f"{label}.stdout"
-        dat_file = scenario_dir / f"{label}.dat"
-        cmd = command_for(scenario, variant, tm, dat_file, len(flows), slow_tor_uplinks)
-        (scenario_dir / f"{label}.cmd").write_text(" ".join(cmd) + "\n")
-
-        with stdout_file.open("w") as fh:
-            subprocess.run(cmd, cwd=scenario_dir, stdout=fh, stderr=subprocess.STDOUT, check=True)
-
-        parsed = parse_stdout(stdout_file, flow_map)
-        for row in parsed:
-            per_flow_rows.append({"scenario": scenario["name"], "variant": label, **row})
-
-        foreground = [row for row in parsed if row["role"] == "foreground"]
-        background = [row for row in parsed if row["role"] == "background"]
-        summary = {
-            "scenario": scenario["name"],
-            "category": scenario["category"],
-            "description": scenario["description"],
-            "variant": label,
-            "nodes": scenario["nodes"],
-            "tiers": scenario["tiers"],
-            "traffic": scenario["traffic"],
-            "flow_size_mib": scenario["flow_size_mib"],
-            "cc": CC_MODE,
-            "rx_mode": RX_MODE,
-            "sack_bitmap_bits": SACK_BITMAP_BITS,
-            "total_flows": len(flows),
-            "total_tor_uplinks": total_tor_uplinks,
-            "slow_tor_uplinks": slow_tor_uplinks,
-            "slow_tor_uplink_fraction": slow_tor_uplinks / total_tor_uplinks if total_tor_uplinks else 0.0,
-            "slow_tor_uplink_divisor": scenario.get("slow_tor_uplink_divisor", 1),
-            **prefixed("all", metrics_for_rows(parsed, role_totals["all"])),
-            **prefixed("fg", metrics_for_rows(foreground, role_totals["foreground"])),
-            **prefixed("bg", metrics_for_rows(background, role_totals["background"])),
-        }
-        summary_rows.append(summary)
+    parsed = parse_stdout(stdout_file, flow_map)
+    if FORCE or len(parsed) != len(flows) or cached_cmd_text != cmd_text:
+        cmd_file.write_text(cmd_text)
         print(
-            "{scenario:32s} {variant:5s} done={all_completed:4d}/{total_flows:<4d} "
-            "avg={all_avg_fct_us:8.3f} p99={all_p99_fct_us:8.3f} "
-            "p99.9={all_p999_fct_us:8.3f} cct={all_cct_us:8.3f}".format(**summary),
+            f"run {scenario['title']} {scenario['traffic']} {scenario['flow_size_mib']}MiB "
+            f"{label} ({len(parsed)}/{len(flows)} cached)",
+            flush=True,
+        )
+        with stdout_file.open("w") as fh:
+            subprocess.run(cmd, cwd=case_dir, stdout=fh, stderr=subprocess.STDOUT, check=True)
+        parsed = parse_stdout(stdout_file, flow_map)
+    else:
+        print(
+            f"skip {scenario['title']} {scenario['traffic']} {scenario['flow_size_mib']}MiB "
+            f"{label} cached",
             flush=True,
         )
 
-    if not KEEP_RAW:
-        shutil.rmtree(scenario_dir)
-
-    return summary_rows, per_flow_rows
-
-
-def build_normalized(summary_rows):
-    rows = []
-    by_scenario = {}
-    metrics = [
-        "all_avg_fct_us",
-        "all_p99_fct_us",
-        "all_p999_fct_us",
-        "all_max_fct_us",
-        "all_cct_us",
-        "fg_p99_fct_us",
-        "fg_cct_us",
+    summary = {
+        "case": scenario["name"],
+        "scenario": scenario["key"],
+        "scenario_title": scenario["title"],
+        "description": scenario["description"],
+        "nodes": scenario["nodes"],
+        "tiers": scenario["tiers"],
+        "traffic": scenario["traffic"],
+        "flow_size_mib": scenario["flow_size_mib"],
+        "scheme": label,
+        "scheme_display": scheme[1],
+        "cc": CC_MODE,
+        "rx_mode": RX_MODE,
+        "sack_bitmap_bits": SACK_BITMAP_BITS,
+        "queue_type": "lossless_input_ecn",
+        "linkspeed_mbps": LINKSPEED_MBPS,
+        "mtu": MTU,
+        "end_us": scenario["end_us"],
+        "total_tor_uplinks": total_tor_uplinks,
+        "slow_tor_uplinks": slow_tor_uplinks,
+        "slow_tor_uplink_fraction": slow_tor_uplinks / total_tor_uplinks if total_tor_uplinks else 0.0,
+        "slow_tor_uplink_divisor": scenario.get("slow_tor_uplink_divisor", 1),
+        "slow_tor_uplink_select": scenario.get("slow_tor_uplink_select", "spaced"),
+        **metrics_for(parsed, len(flows)),
+    }
+    print(
+        "{scenario_title} {traffic:11s} {flow_size_mib:>2}MiB {scheme:16s} "
+        "done={completed:4d}/{total:<4d} avg={avg_fct_us:8.3f} "
+        "p99={p99_fct_us:8.3f} p99.9={p999_fct_us:8.3f} cct={cct_us:8.3f}".format(
+            total=len(flows), **summary
+        ),
+        flush=True,
+    )
+    per_flow = [
+        {
+            "case": scenario["name"],
+            "scenario": scenario["key"],
+            "traffic": scenario["traffic"],
+            "flow_size_mib": scenario["flow_size_mib"],
+            "scheme": label,
+            **row,
+        }
+        for row in parsed
     ]
-    for row in summary_rows:
-        by_scenario.setdefault(row["scenario"], []).append(row)
+    return summary, per_flow
 
-    for scenario, scenario_rows in by_scenario.items():
+
+def run_case(scenario):
+    flows = flows_for(scenario)
+    flow_map = {(item["src"], item["dst"]): item for item in flows}
+    total_tor_uplinks, slow_tor_uplinks = slow_tor_uplinks_for(scenario)
+
+    case_dir = OUT / "raw" / scenario_run_name(scenario)
+    if case_dir.exists() and not KEEP_RAW:
+        shutil.rmtree(case_dir)
+    case_dir.mkdir(parents=True, exist_ok=True)
+    tm = case_dir / f"{scenario_run_name(scenario)}.cm"
+    write_tm(tm, scenario["nodes"], flows)
+
+    rows = []
+    per_flow = []
+    workers = max(1, min(MAX_WORKERS, len(SCHEMES)))
+    with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
+        futures = [
+            executor.submit(
+                run_scheme,
+                scenario,
+                flows,
+                flow_map,
+                case_dir,
+                tm,
+                scheme,
+                total_tor_uplinks,
+                slow_tor_uplinks,
+            )
+            for scheme in SCHEMES
+        ]
+        for future in concurrent.futures.as_completed(futures):
+            summary, flows_rows = future.result()
+            rows.append(summary)
+            per_flow.extend(flows_rows)
+
+    order = [scheme[0] for scheme in SCHEMES]
+    rows.sort(key=lambda row: order.index(row["scheme"]))
+    per_flow.sort(key=lambda row: (row["scheme"], row["src"], row["dst"]))
+
+    if not KEEP_RAW:
+        shutil.rmtree(case_dir)
+    return rows, per_flow
+
+
+def normalize_rows(rows):
+    out = []
+    grouped = {}
+    for row in rows:
+        grouped.setdefault(row["case"], []).append(row)
+
+    for _case, group in grouped.items():
         best = {}
-        for metric in metrics:
-            values = [row[metric] for row in scenario_rows if row[metric] > 0.0]
+        for metric, _label in METRICS:
+            values = [row[metric] for row in group if row[metric] > 0]
             best[metric] = min(values) if values else 0.0
-        for row in scenario_rows:
-            out = {
-                "scenario": scenario,
-                "category": row["category"],
-                "variant": row["variant"],
-                "completed": row["all_completed"],
-                "completion_pct": row["all_completion_pct"],
-            }
-            for metric in metrics:
+        for row in group:
+            normed = dict(row)
+            for metric, _label in METRICS:
                 denom = best[metric]
-                out[f"norm_{metric}"] = row[metric] / denom if denom else 0.0
-            rows.append(out)
-    return rows
+                normed[f"norm_{metric}"] = row[metric] / denom if denom else 0.0
+            out.append(normed)
+    return out
 
 
 def write_csv(path, rows):
@@ -463,12 +593,120 @@ def write_csv(path, rows):
         writer.writerows(rows)
 
 
-def best_variant(rows, scenario, metric):
-    candidates = [row for row in rows if row["scenario"] == scenario and row[metric] > 0.0]
-    if not candidates:
-        return ""
-    best = min(candidates, key=lambda row: row[metric])
-    return f"{VARIANT_DISPLAY.get(best['variant'], best['variant'])} ({best[metric]:.3f} us)"
+def chart_label_for(traffic):
+    return f"{traffic} 图"
+
+
+def chart_filename(scenario_key, traffic):
+    return f"{scenario_key}_{traffic}_packet_lb_slowdown.png"
+
+
+def bar_label_offset(_scheme_idx):
+    return (0, 4)
+
+
+def plot_scenario_traffic(
+    scenario_key,
+    traffic,
+    rows,
+    schemes=SCHEMES,
+    metrics=PLOT_METRICS,
+):
+    scenario_rows = [
+        row for row in rows if row["scenario"] == scenario_key and row["traffic"] == traffic
+    ]
+    if not scenario_rows:
+        return None
+
+    sizes = sorted({row["flow_size_mib"] for row in scenario_rows})
+    title = scenario_rows[0]["scenario_title"]
+    figsize = (20.0, 6.4)
+    fig, axes = plt.subplots(1, len(sizes), figsize=figsize, sharey=True)
+    if len(sizes) == 1:
+        axes = [axes]
+
+    scheme_labels = [scheme[0] for scheme in schemes]
+    scheme_display = {scheme[0]: scheme[1] for scheme in schemes}
+    x_step = 1.0
+    x_positions = [idx * x_step for idx in range(len(metrics))]
+    group_width = 0.78
+    width = group_width / len(scheme_labels)
+
+    max_y = 1.0
+    for ax, size_mib in zip(axes, sizes):
+        group = [row for row in scenario_rows if row["flow_size_mib"] == size_mib]
+        by_scheme = {row["scheme"]: row for row in group}
+        for scheme_idx, scheme in enumerate(scheme_labels):
+            row = by_scheme.get(scheme)
+            values = [row[f"norm_{metric}"] if row else 0.0 for metric, _label in metrics]
+            max_y = max(max_y, *values)
+            offset = (scheme_idx - (len(scheme_labels) - 1) / 2) * width
+            xs = [x + offset for x in x_positions]
+            bars = ax.bar(
+                xs,
+                values,
+                width,
+                label=scheme_display[scheme],
+                color=COLORS[scheme],
+                edgecolor="white",
+                linewidth=0.35,
+            )
+            for bar, value in zip(bars, values):
+                if value <= 0:
+                    continue
+                ax.annotate(
+                    f"{value:.3f}",
+                    xy=(bar.get_x() + bar.get_width() / 2, value),
+                    xytext=bar_label_offset(scheme_idx),
+                    textcoords="offset points",
+                    ha="center",
+                    va="bottom",
+                    fontsize=5.8,
+                    color="#374151",
+                    clip_on=False,
+                )
+        ax.set_title(
+            f"{title} | {traffic} | {size_mib}MiB",
+            fontsize=12,
+            pad=12,
+            **cjk_text_kwargs(),
+        )
+        ax.set_xticks(x_positions)
+        ax.set_xticklabels([label for _metric, label in metrics], fontsize=9, **cjk_text_kwargs())
+        ax.grid(axis="y", color="#d1d5db", linestyle="-", linewidth=0.7, alpha=0.7)
+        ax.set_axisbelow(True)
+        ax.spines["top"].set_visible(False)
+        ax.spines["right"].set_visible(False)
+
+    axes[0].set_ylabel("FCT slowdown", fontsize=11)
+    y_limit = max(max_y * 1.35, max_y + 0.20, 1.25)
+    for ax in axes:
+        ax.set_ylim(0, y_limit)
+
+    handles, labels = axes[0].get_legend_handles_labels()
+    fig.legend(
+        handles,
+        labels,
+        loc="upper center",
+        bbox_to_anchor=(0.5, 1.0),
+        ncol=min(10, len(scheme_labels)),
+        frameon=False,
+        fontsize=8,
+    )
+    fig.suptitle(
+        f"{title} {traffic} FCT slowdown",
+        y=0.93,
+        fontsize=13,
+        **cjk_text_kwargs(),
+    )
+    fig.tight_layout(rect=[0.02, 0.05, 1.0, 0.88])
+
+    png = OUT / chart_filename(scenario_key, traffic)
+    pdf = png.with_suffix(".pdf")
+    fig.savefig(png, dpi=220)
+    fig.savefig(pdf)
+    plt.close(fig)
+    return png, pdf
 
 
 def write_plan(path):
@@ -477,89 +715,91 @@ def write_plan(path):
         "",
         f"RoCE: `rx_mode={RX_MODE}`, `sack_bitmap_bits={SACK_BITMAP_BITS}`, `cc={CC_MODE}`.",
         "",
-        "| scenario | category | topology | flow size | traffic | description |",
-        "| --- | --- | --- | --- | --- | --- |",
+        "| case | scenario | topology | traffic | flow size | slow ToR uplinks | description |",
+        "| --- | --- | --- | --- | ---: | ---: | --- |",
     ]
     for scenario in SCENARIOS:
+        total, slow = slow_tor_uplinks_for(scenario)
         lines.append(
-            "| {name} | {category} | {nodes}n/{tiers}-tier | {size}MiB | {traffic} | {description} |".format(
-                name=scenario["name"],
-                category=scenario["category"],
+            "| {case} | {title} | {nodes}n/{tiers}-tier | {traffic} | {size} | "
+            "{slow}/{total} | {description} |".format(
+                case=scenario["name"],
+                title=scenario["title"],
                 nodes=scenario["nodes"],
                 tiers=scenario["tiers"],
-                size=scenario["flow_size_mib"],
                 traffic=scenario["traffic"],
+                size=scenario["flow_size_mib"],
+                slow=slow,
+                total=total,
                 description=scenario["description"],
             )
         )
     path.write_text("\n".join(lines) + "\n")
 
 
-def write_report(summary_rows, path):
-    scenarios = []
-    seen = set()
-    for row in summary_rows:
-        if row["scenario"] not in seen:
-            seen.add(row["scenario"])
-            scenarios.append((row["scenario"], row["category"], row["description"]))
+def best_scheme(rows, case, metric):
+    candidates = [row for row in rows if row["case"] == case and row[metric] > 0.0]
+    if not candidates:
+        return ""
+    best = min(candidates, key=lambda row: row[metric])
+    return f"{best['scheme_display']} ({best[metric]:.3f} us)"
 
+
+def write_report(rows, chart_paths):
     lines = [
-        "# ecmp / ops / reps / n-mrc Scenario Comparison",
+        "# README Packet-Level Scenario Comparison",
         "",
-        "当前脚本覆盖健康网络和非对称带宽两类主线场景；背景流/热点、链路故障场景暂不展开。",
+        "Parameters: `lossless_input_ecn`, dequeue ECN marking, "
+        f"`roce_rx_mode={RX_MODE}`, `sack_bitmap_bits={SACK_BITMAP_BITS}`, "
+        "`queue=1BDP`, ECN/PFC `0.2/0.8 * queue`, RTO `70us`, "
+        f"CC `{CC_MODE}`.",
         "",
-        f"RoCE: `rx_mode={RX_MODE}`, `sack_bitmap_bits={SACK_BITMAP_BITS}`, `cc={CC_MODE}`.",
+        "## Charts",
         "",
-        "## Best Variant By Scenario",
-        "",
-        "| scenario | category | best avg FCT | best p99 FCT | best p99.9 FCT | best CCT |",
-        "| --- | --- | --- | --- | --- | --- |",
     ]
-    for scenario, category, _description in scenarios:
+    for traffic, path in chart_paths:
+        lines.append(f"- {chart_label_for(traffic)}: ![]({path.name})")
+
+    lines += [
+        "",
+        "## Best Scheme By Case",
+        "",
+        "| case | best avg FCT | best p99 FCT | best p99.9 FCT | best CCT |",
+        "| --- | --- | --- | --- | --- |",
+    ]
+    seen_cases = []
+    for row in rows:
+        if row["case"] not in seen_cases:
+            seen_cases.append(row["case"])
+    for case in seen_cases:
         lines.append(
-            "| {scenario} | {category} | {avg} | {p99} | {p999} | {cct} |".format(
-                scenario=scenario,
-                category=category,
-                avg=best_variant(summary_rows, scenario, "all_avg_fct_us"),
-                p99=best_variant(summary_rows, scenario, "all_p99_fct_us"),
-                p999=best_variant(summary_rows, scenario, "all_p999_fct_us"),
-                cct=best_variant(summary_rows, scenario, "all_cct_us"),
+            "| {case} | {avg} | {p99} | {p999} | {cct} |".format(
+                case=case,
+                avg=best_scheme(rows, case, "avg_fct_us"),
+                p99=best_scheme(rows, case, "p99_fct_us"),
+                p999=best_scheme(rows, case, "p999_fct_us"),
+                cct=best_scheme(rows, case, "cct_us"),
             )
         )
 
     lines += [
         "",
-        "## Per-Scenario Summary",
+        "## Completion",
         "",
+        "| case | scheme | completed | avg FCT us | p99 FCT us | p99.9 FCT us | CCT us |",
+        "| --- | --- | ---: | ---: | ---: | ---: | ---: |",
     ]
-    for scenario, _category, description in scenarios:
-        lines += [
-            f"### {scenario}",
-            "",
-            description,
-            "",
-            "| variant | completed | avg FCT us | p99 FCT us | p99.9 FCT us | max FCT us | CCT us |",
-            "| --- | ---: | ---: | ---: | ---: | ---: | ---: |",
-        ]
-        for row in [row for row in summary_rows if row["scenario"] == scenario]:
-            lines.append(
-                "| {variant} | {completed}/{total} | {avg:.3f} | {p99:.3f} | {p999:.3f} | {maxf:.3f} | {cct:.3f} |".format(
-                    variant=VARIANT_DISPLAY.get(row["variant"], row["variant"]),
-                    completed=row["all_completed"],
-                    total=row["total_flows"],
-                    avg=row["all_avg_fct_us"],
-                    p99=row["all_p99_fct_us"],
-                    p999=row["all_p999_fct_us"],
-                    maxf=row["all_max_fct_us"],
-                    cct=row["all_cct_us"],
-                )
-            )
-        lines.append("")
+    for row in rows:
+        lines.append(
+            "| {case} | {scheme_display} | {completed}/{nodes} | {avg_fct_us:.3f} | "
+            "{p99_fct_us:.3f} | {p999_fct_us:.3f} | {cct_us:.3f} |".format(**row)
+        )
 
-    path.write_text("\n".join(lines) + "\n")
+    (OUT / "comparison_report.md").write_text("\n".join(lines) + "\n")
 
 
 def main():
+    configure_fonts()
     if not SIM.exists():
         raise SystemExit(f"missing simulator binary: {SIM}")
 
@@ -571,25 +811,34 @@ def main():
     summary_rows = []
     per_flow_rows = []
     for scenario in SCENARIOS:
-        rows, flows = run_scenario(scenario)
+        rows, flows = run_case(scenario)
         summary_rows.extend(rows)
         per_flow_rows.extend(flows)
 
-    normalized_rows = build_normalized(summary_rows)
-    summary_csv = OUT / "summary.csv"
-    normalized_csv = OUT / "normalized.csv"
-    per_flow_csv = OUT / "per_flow.csv"
-    report_md = OUT / "comparison_report.md"
+    normalized_rows = normalize_rows(summary_rows)
+    write_csv(OUT / "summary.csv", summary_rows)
+    write_csv(OUT / "normalized.csv", normalized_rows)
+    write_csv(OUT / "per_flow.csv", per_flow_rows)
 
-    write_csv(summary_csv, summary_rows)
-    write_csv(normalized_csv, normalized_rows)
-    write_csv(per_flow_csv, per_flow_rows)
-    write_report(summary_rows, report_md)
+    chart_paths = []
+    for scenario_key in SCENARIO_SET:
+        for traffic in TRAFFICS:
+            chart = plot_scenario_traffic(
+                scenario_key,
+                traffic,
+                normalized_rows,
+                schemes=SCHEMES,
+            )
+            if chart:
+                chart_paths.append((traffic, chart[0]))
+                print(chart[0], flush=True)
 
-    print(summary_csv)
-    print(normalized_csv)
-    print(per_flow_csv)
-    print(report_md)
+    write_report(summary_rows, chart_paths)
+
+    print(OUT / "summary.csv", flush=True)
+    print(OUT / "normalized.csv", flush=True)
+    print(OUT / "per_flow.csv", flush=True)
+    print(OUT / "comparison_report.md", flush=True)
 
 
 if __name__ == "__main__":

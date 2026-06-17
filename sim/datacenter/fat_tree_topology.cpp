@@ -1,5 +1,7 @@
 // -*- c-basic-offset: 4; indent-tabs-mode: nil -*-
 #include "fat_tree_topology.h"
+#include <algorithm>
+#include <utility>
 #include <vector>
 #include "string.h"
 #include <sstream>
@@ -36,6 +38,66 @@ linkspeed_bps FatTreeTopology::_downlink_speeds[] = {0,0,0};
 uint32_t FatTreeTopology::_slow_link_divisor = 10;
 uint32_t FatTreeTopology::_slow_tor_uplinks = 0;
 uint32_t FatTreeTopology::_slow_tor_uplink_divisor = 2;
+bool FatTreeTopology::_slow_tor_uplink_random_sparse = false;
+uint32_t FatTreeTopology::_slow_tor_uplink_seed = 1;
+
+static uint64_t slow_tor_uplink_hash(uint32_t seed, uint32_t value) {
+    uint64_t x = ((uint64_t)seed << 32) ^ value;
+    x += 0x9e3779b97f4a7c15ULL;
+    x = (x ^ (x >> 30)) * 0xbf58476d1ce4e5b9ULL;
+    x = (x ^ (x >> 27)) * 0x94d049bb133111ebULL;
+    return x ^ (x >> 31);
+}
+
+static vector<bool> build_random_sparse_slow_tor_uplinks(uint32_t total_links,
+                                                         uint32_t slow_links,
+                                                         uint32_t tor_count,
+                                                         uint32_t seed) {
+    vector<bool> selected(total_links, false);
+    if (total_links == 0 || slow_links == 0)
+        return selected;
+
+    if (total_links % tor_count == 0) {
+        uint32_t links_per_tor = total_links / tor_count;
+        vector<pair<uint64_t, uint32_t> > tor_scores;
+        tor_scores.reserve(tor_count);
+        for (uint32_t tor = 0; tor < tor_count; tor++) {
+            tor_scores.push_back(make_pair(slow_tor_uplink_hash(seed, tor), tor));
+        }
+        sort(tor_scores.begin(), tor_scores.end());
+        vector<uint32_t> selected_per_tor(tor_count, slow_links / tor_count);
+        for (uint32_t i = 0; i < slow_links % tor_count; i++) {
+            selected_per_tor[tor_scores[i].second]++;
+        }
+        for (uint32_t tor = 0; tor < tor_count; tor++) {
+            vector<pair<uint64_t, uint32_t> > link_scores;
+            link_scores.reserve(links_per_tor);
+            for (uint32_t offset = 0; offset < links_per_tor; offset++) {
+                uint32_t value = tor * links_per_tor + offset;
+                link_scores.push_back(make_pair(slow_tor_uplink_hash(seed ^ 0x5bd1e995U, value), offset));
+            }
+            sort(link_scores.begin(), link_scores.end());
+            uint32_t link_count = selected_per_tor[tor];
+            if (link_count > links_per_tor)
+                link_count = links_per_tor;
+            for (uint32_t i = 0; i < link_count; i++) {
+                selected[tor * links_per_tor + link_scores[i].second] = true;
+            }
+        }
+        return selected;
+    }
+
+    vector<pair<uint64_t, uint32_t> > link_scores;
+    link_scores.reserve(total_links);
+    for (uint32_t index = 0; index < total_links; index++) {
+        link_scores.push_back(make_pair(slow_tor_uplink_hash(seed, index), index));
+    }
+    sort(link_scores.begin(), link_scores.end());
+    for (uint32_t i = 0; i < slow_links && i < total_links; i++) {
+        selected[link_scores[i].second] = true;
+    }
+    return selected;
+}
 
 void
 FatTreeTopology::set_tier_parameters(int tier, int radix_up, int radix_down, mem_b queue_up, mem_b queue_down, int bundlesize, linkspeed_bps linkspeed, int oversub) {
@@ -862,6 +924,11 @@ void FatTreeTopology::init_network(){
         NTOR * ((_tiers == 3) ? _agg_switches_per_pod : NAGG) * _bundlesize[AGG_TIER];
     uint32_t slow_tor_uplinks =
         (_slow_tor_uplinks > tor_uplink_total) ? tor_uplink_total : _slow_tor_uplinks;
+    vector<bool> random_sparse_slow_tor_uplinks;
+    if (slow_tor_uplinks && _slow_tor_uplink_random_sparse) {
+        random_sparse_slow_tor_uplinks = build_random_sparse_slow_tor_uplinks(
+            tor_uplink_total, slow_tor_uplinks, NTOR, _slow_tor_uplink_seed);
+    }
     uint32_t tor_uplink_index = 0;
     for (uint32_t tor = 0; tor < NTOR; tor++) {
         uint32_t podid = tor/_tor_switches_per_pod;
@@ -899,9 +966,14 @@ void FatTreeTopology::init_network(){
                 } else {
                     queueLogger = NULL;
                 }
-                bool slow_tor_uplink = slow_tor_uplinks != 0 &&
-                    (((uint64_t)(tor_uplink_index + 1) * slow_tor_uplinks) / tor_uplink_total >
-                     ((uint64_t)tor_uplink_index * slow_tor_uplinks) / tor_uplink_total);
+                bool slow_tor_uplink = false;
+                if (slow_tor_uplinks != 0 && _slow_tor_uplink_random_sparse) {
+                    slow_tor_uplink = random_sparse_slow_tor_uplinks[tor_uplink_index];
+                } else if (slow_tor_uplinks != 0) {
+                    slow_tor_uplink =
+                        (((uint64_t)(tor_uplink_index + 1) * slow_tor_uplinks) / tor_uplink_total >
+                         ((uint64_t)tor_uplink_index * slow_tor_uplinks) / tor_uplink_total);
+                }
                 if (slow_tor_uplink) {
                     queues_nlp_nup[tor][agg][b] =
                         alloc_queue(queueLogger, _downlink_speeds[AGG_TIER] / _slow_tor_uplink_divisor,

@@ -84,6 +84,12 @@ public:
     static void set_slow_tor_uplink_divisor(uint32_t divisor) {
         _slow_tor_uplink_divisor = divisor ? divisor : 1;
     }
+    static void set_slow_tor_uplink_random_sparse(bool enabled) {
+        _slow_tor_uplink_random_sparse = enabled;
+    }
+    static void set_slow_tor_uplink_seed(uint32_t seed) {
+        _slow_tor_uplink_seed = seed;
+    }
 
     void init_network();
     virtual vector<const Route*>* get_bidir_paths(uint32_t src, uint32_t dest, bool reverse);
@@ -218,6 +224,8 @@ private:
     static uint32_t _slow_link_divisor;
     static uint32_t _slow_tor_uplinks;
     static uint32_t _slow_tor_uplink_divisor;
+    static bool _slow_tor_uplink_random_sparse;
+    static uint32_t _slow_tor_uplink_seed;
 
     // degree of oversubscription at tier.  Eg _oversub[TOR_TIER] = 3 implies 3x more bw to hosts than to agg switches.
     static uint32_t _oversub[3];

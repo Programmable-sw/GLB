@@ -4,8 +4,7 @@
 
 ## 主要文件
 
-- `run_literature_metric_compare.py`：主线标准场景脚本，默认比较 `ecmp`、`ops`、`reps`、`n-mrc`。
-- `run_readme_all_lb_figures.py`：README 图表辅助脚本，可作为多方案画图模板；根 README 的 8 方案口径需要把 scheme/flow size 显式设成对应集合。
+- `run_literature_metric_compare.py`：README 标准场景统一验证脚本，默认跑逐包方案集合并输出 CSV/report/图表。
 - `run_glb_factor_compare.py`：GLB 参数对比辅助脚本。
 - `run_packet_background_300g50.py`：packet-level LB 背景流压力场景脚本。
 - `run_hash_entropy_demo.py`：hash/path entropy 小实验脚本。
@@ -13,16 +12,19 @@
 
 ## 根 README 标准场景
 
-仓库根目录 README 的标准表当前定义两类场景：
+仓库根目录 README 的标准表当前定义三类场景：
 
-| 场景 | 拓扑 | 链路条件 | Flow size | 对比方案 |
-| --- | --- | --- | --- | --- |
-| 健康网络 | 2048 nodes / 2-tier | 全链路 400Gbps | 4/32MiB | `ecmp` / `ops` / `reps` / `n-mrc` / `mrc` / `glb` / `adaptive-routing` / `drill` |
-| 非对称带宽 | 1024 nodes / 3-tier | 3% ToR 上行半带宽 | 8/32MiB | `ecmp` / `ops` / `reps` / `n-mrc` / `mrc` / `glb` / `adaptive-routing` / `drill` |
+| 场景 | 拓扑 | 链路条件 | Traffic | Flow size | 对比方案 |
+| --- | --- | --- | --- | --- | --- |
+| 健康网络 | 2048 nodes / 2-tier | 全链路 400Gbps | `tornado` / `permutation` | 支持 4/8/16/32MiB，默认启用 4/32MiB | `ecmp_rr` / `ops` / `rr` / `reps` / `n-mrc` / `mrc` / `adaptive-routing` / `drill` / `glb` |
+| 非对称带宽 | 1024 nodes / 3-tier | `ceil(1024 * 3%) = 31` 条 ToR 上行半带宽 | `tornado` / `permutation` | 支持 4/8/16/32MiB，默认启用 4/32MiB | `ecmp_rr` / `ops` / `rr` / `reps` / `n-mrc` / `mrc` / `adaptive-routing` / `drill` / `glb` |
+| 非对称带宽2 | 2048 nodes / 2-tier | `floor(2048 * 10%) = 204` 条 ToR 上行随机稀疏半带宽 | `tornado` / `permutation` | 支持 4/8/16/32MiB，默认启用 4/32MiB | `ecmp_rr` / `ops` / `rr` / `reps` / `n-mrc` / `mrc` / `adaptive-routing` / `drill` / `glb` |
 
-通用口径为 `lossless_input_ecn` 队列、host `prio` 队列、MTU 4096B、400Gbps、hop/switch latency 0.5us、ECN/PFC 阈值 0.2/0.8 queue、RoCE RTO 70us、`DCQCN_variant`、`tornado` 流量。
+通用口径为 `lossless_input_ecn` 队列、host `prio` 队列、MTU 4096B、400Gbps、hop/switch latency 0.5us、ECN/PFC 阈值 0.2/0.8 queue、RoCE RTO 70us、`DCQCN_variant`。
 
-`run_literature_metric_compare.py` 的默认展开仍是论文式主线四方案对比：两个场景、4/8/16/32MiB、`ecmp`/`ops`/`reps`/`n-mrc`。如果要复现根 README 表里的 8 方案图，需要在画图脚本或包装脚本中显式指定方案集合和 flow size。
+`run_literature_metric_compare.py` 是当前唯一主入口。默认展开 README 逐包方案集合、三类场景、两种 traffic 和 4/32MiB；也可以通过环境变量只开启某个场景、traffic 或 flow size。
+
+非对称带宽2的 random-sparse 慢链路选择会先按 ToR 均匀分配慢链路数量，再在每个 ToR 内随机选具体上行；2048-node / 2-tier 的 204 条慢上行会分散到 64 个 ToR 上，每个 ToR 3 或 4 条。
 
 ## 已实现方案机制
 
@@ -98,15 +100,17 @@ n-mrc 把 EV/pathid 当作完整端到端路径组合的索引。2-tier 中主�
 make -C sim -j"$(nproc)"
 ```
 
-运行主线四方案标准测试：
+运行 README 标准逐包方案测试：
 
 ```bash
 python3 experiments/n-mrc/run_literature_metric_compare.py
 ```
 
-只跑 8MiB 快速检查：
+只跑非对称带宽2的 8MiB 快速检查：
 
 ```bash
+SCENARIO_SET=asym2_tor10pct_sparse \
+SCENARIO_TRAFFICS=tornado \
 SCENARIO_FLOW_SIZE_MIBS=8 \
 python3 experiments/n-mrc/run_literature_metric_compare.py
 ```
@@ -128,10 +132,13 @@ SCENARIO_RX_MODE=sp SCENARIO_SACK_BITMAP_BITS=128 \
 python3 experiments/n-mrc/run_literature_metric_compare.py
 ```
 
-额外比较旧版 4-state n-mrc，并使用 RoCE SP/SACK bitmap 重传：
+选择性开启场景、traffic、flow size 或方案：
 
 ```bash
-SCENARIO_INCLUDE_NMRC_4STATE=1 SCENARIO_RX_MODE=sp \
+SCENARIO_SET=healthy,asym2_tor10pct_sparse \
+SCENARIO_TRAFFICS=permutation \
+SCENARIO_FLOW_SIZE_MIBS=4,8,32 \
+SCENARIO_SCHEMES=ops,reps,mrc,adaptive-routing,drill,glb \
 python3 experiments/n-mrc/run_literature_metric_compare.py
 ```
 
@@ -144,5 +151,6 @@ python3 experiments/n-mrc/run_literature_metric_compare.py
 - `per_flow.csv`：逐流 FCT 明细。
 - `comparison_report.md`：自动生成的 Markdown 汇总报告。
 - `scenario_plan.md`：脚本本次展开的场景列表。
+- `*_packet_lb_slowdown.png/pdf`：README 风格归一化对比图，指标为 avg FCT、p99 FCT、p99.9 FCT。
 
 使用 `KEEP_RAW_OUTPUT=1` 时，还会保留每个 scenario 的 `.cmd`、`.stdout`、`.dat` 和 `.cm` 文件。

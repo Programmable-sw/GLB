@@ -367,7 +367,7 @@ static uint32_t install_sglb_background(FatTreeTopology* top,
 }
 
 void exit_error(char* progr) {
-    cout << "Usage " << progr << " [-nodes N]\n\t[-conns C]\n\t[-q queue_size]\n\t[-queue_type composite|composite_ecn|composite_ecn_lb|lossless|lossless_input|lossless_input_ecn|lossy_input_ecn|lossy_ecn]\n\t[-tm traffic_matrix_file]\n\t[-lb ecmp|ecmp_rr|adaptive-routing|glb|drill|reps|n-mrc|mrc|rr|ops|conweave|ndp]\n\t[-cc none|dcqcn|dcqcn_variant|mprdma]\n\t[-cc_iw_pkts pkts]\n\t[-cc_min_cwnd_pkts pkts]\n\t[-cc_max_cwnd_pkts pkts]\n\t[-dcqcn_g x]\n\t[-dcqcn_initial_alpha x]\n\t[-dcqcn_ai_mbps x]\n\t[-dcqcn_min_rate_mbps x]\n\t[-dcqcn_alpha_us x]\n\t[-dcqcn_rate_us x]\n\t[-dcqcn_cnp_us x]\n\t[-dcqcn_byte_counter bytes]\n\t[-dcqcn_fast_recovery_steps N]\n\t[-roce_rx_mode gbn|sp]\n\t[-roce_ooo_us x]\n\t[-roce_loss_trace_window_pkts N]\n\t[-roce_loss_trace_window_ratio x]\n\t[-roce_ooo_window_pkts N]\n\t[-roce_ooo_window_ratio x]\n\t[-roce_bdp_bytes bytes]\n\t[-roce_nack_interval_us x]\n\t[-roce_rto_us x]\n\t[-roce_rto_high_us x]\n\t[-strat route_strategy (single,\n\tecmp_host,ecmp_ar,\n\tecmp_host_ar ar_thresh)]\n\t[-log log_level]\n\t[-seed random_seed]\n\t[-end end_time_in_usec]\n\t[-mtu MTU] default 4096\n\t[-linkspeed Mbps] default 400000\n\t[-hop_latency x] per hop wire latency in us, default 0.5\n\t[-switch_latency x] switching latency in us, default 0.5\n\t[-start_delta] time in us to randomly delay the start of connections\n\t[-slow_core_downlinks N]\n\t[-slow_core_downlink_divisor N]\n\t[-slow_tor_uplinks N]\n\t[-slow_tor_uplink_divisor N]\n\t[-ecn_thresh fraction]\n\t[-nmrc_bad_hold_down_us x]\n\t[-nmrc_state_mode default|4-state]\n\t[-nmrc_weak_sample_pkts N]\n\t[-nmrc_ecn_degrade aggressive|graded]\n\t[-mrc_active_paths N]\n\t[-mrc_backup_paths N]\n\t[-mrc_min_active_paths N]\n\t[-mrc_ecn_cooldown_us x]\n\t[-mrc_failed_retry_us x]\n\t[-mrc_probe_interval_pkts N]\n\t[-glb_update_us x]\n\t[-glb_gcn_update_us x]\n\t[-glb_gcn_aging_us x]\n\t[-glb_weights q_weight util_weight remote_busy_weight]\n\t[-glb_factors local_q local_util remote_q remote_util remote_busy]\n\t[-glb_normalize]\n\t[-glb_downstream_weight x]\n\t[-glb_quality_bucket x]\n\t[-glb_quality_levels N]\n\t[-glb_min_choices N]\n\t[-conweave_rtt_us x]\n\t[-ndp_cwnd pkts]\n\t[-pfc_thresholds low high]" << endl;
+    cout << "Usage " << progr << " [-nodes N]\n\t[-conns C]\n\t[-q queue_size]\n\t[-queue_type composite|composite_ecn|composite_ecn_lb|lossless|lossless_input|lossless_input_ecn|lossy_input_ecn|lossy_ecn]\n\t[-tm traffic_matrix_file]\n\t[-lb ecmp|ecmp_rr|adaptive-routing|glb|drill|reps|n-mrc|mrc|rr|ops|conweave|ndp]\n\t[-cc none|dcqcn|dcqcn_variant|mprdma]\n\t[-cc_iw_pkts pkts]\n\t[-cc_min_cwnd_pkts pkts]\n\t[-cc_max_cwnd_pkts pkts]\n\t[-dcqcn_g x]\n\t[-dcqcn_initial_alpha x]\n\t[-dcqcn_ai_mbps x]\n\t[-dcqcn_min_rate_mbps x]\n\t[-dcqcn_alpha_us x]\n\t[-dcqcn_rate_us x]\n\t[-dcqcn_cnp_us x]\n\t[-dcqcn_byte_counter bytes]\n\t[-dcqcn_fast_recovery_steps N]\n\t[-roce_rx_mode gbn|sp]\n\t[-roce_ooo_us x]\n\t[-roce_loss_trace_window_pkts N]\n\t[-roce_loss_trace_window_ratio x]\n\t[-roce_ooo_window_pkts N]\n\t[-roce_ooo_window_ratio x]\n\t[-roce_bdp_bytes bytes]\n\t[-roce_nack_interval_us x]\n\t[-roce_rto_us x]\n\t[-roce_rto_high_us x]\n\t[-strat route_strategy (single,\n\tecmp_host,ecmp_ar,\n\tecmp_host_ar ar_thresh)]\n\t[-log log_level]\n\t[-seed random_seed]\n\t[-end end_time_in_usec]\n\t[-mtu MTU] default 4096\n\t[-linkspeed Mbps] default 400000\n\t[-hop_latency x] per hop wire latency in us, default 0.5\n\t[-switch_latency x] switching latency in us, default 0.5\n\t[-start_delta] time in us to randomly delay the start of connections\n\t[-slow_core_downlinks N]\n\t[-slow_core_downlink_divisor N]\n\t[-slow_tor_uplinks N]\n\t[-slow_tor_uplink_divisor N]\n\t[-slow_tor_uplink_select spaced|random-sparse]\n\t[-ecn_thresh fraction]\n\t[-nmrc_bad_hold_down_us x]\n\t[-nmrc_state_mode default|4-state]\n\t[-nmrc_weak_sample_pkts N]\n\t[-nmrc_ecn_degrade aggressive|graded]\n\t[-mrc_active_paths N]\n\t[-mrc_backup_paths N]\n\t[-mrc_min_active_paths N]\n\t[-mrc_ecn_cooldown_us x]\n\t[-mrc_failed_retry_us x]\n\t[-mrc_probe_interval_pkts N]\n\t[-glb_update_us x]\n\t[-glb_gcn_update_us x]\n\t[-glb_gcn_aging_us x]\n\t[-glb_weights q_weight util_weight remote_busy_weight]\n\t[-glb_factors local_q local_util remote_q remote_util remote_busy]\n\t[-glb_normalize]\n\t[-glb_downstream_weight x]\n\t[-glb_quality_bucket x]\n\t[-glb_quality_levels N]\n\t[-glb_min_choices N]\n\t[-conweave_rtt_us x]\n\t[-ndp_cwnd pkts]\n\t[-pfc_thresholds low high]" << endl;
     cout << "\t[-roce_sack_bitmap_bits 64|128]" << endl;
     cout << "\t[-dcqcn_nack_reaction cnp|ignore|rate_cut]" << endl;
     cout << "\t[-nmrc_unknown_reopen]" << endl;
@@ -433,6 +433,7 @@ int main(int argc, char **argv) {
     uint32_t slow_core_downlink_divisor = 10;
     uint32_t slow_tor_uplinks = 0;
     uint32_t slow_tor_uplink_divisor = 2;
+    bool slow_tor_uplink_random_sparse = false;
     bool sglb_background = false;
     double sglb_bg_rate_gbps = 350.0;
     double sglb_bg_on_us = 200.0;
@@ -945,6 +946,17 @@ int main(int argc, char **argv) {
             if (!slow_tor_uplink_divisor)
                 slow_tor_uplink_divisor = 1;
             cout << "Slow ToR-to-agg uplink divisor " << slow_tor_uplink_divisor << endl;
+            i++;
+        } else if (!strcmp(argv[i],"-slow_tor_uplink_select")){
+            if (!strcmp(argv[i+1], "spaced")) {
+                slow_tor_uplink_random_sparse = false;
+            } else if (!strcmp(argv[i+1], "random-sparse")) {
+                slow_tor_uplink_random_sparse = true;
+            } else {
+                cout << "Unknown slow ToR uplink selection mode " << argv[i+1] << endl;
+                exit_error(argv[0]);
+            }
+            cout << "Slow ToR-to-agg uplink selection " << argv[i+1] << endl;
             i++;
         } else if (!strcmp(argv[i],"-sglb_background")){
             sglb_background = true;
@@ -1481,6 +1493,8 @@ int main(int argc, char **argv) {
         FatTreeTopology::set_slow_link_divisor(slow_core_downlink_divisor);
         FatTreeTopology::set_slow_tor_uplinks(slow_tor_uplinks);
         FatTreeTopology::set_slow_tor_uplink_divisor(slow_tor_uplink_divisor);
+        FatTreeTopology::set_slow_tor_uplink_random_sparse(slow_tor_uplink_random_sparse);
+        FatTreeTopology::set_slow_tor_uplink_seed(seed);
         top = new FatTreeTopology(no_of_nodes, linkspeed, queuesize, qlf, 
                                                &eventlist,NULL,qt,hop_latency,switch_latency,snd_type,slow_core_downlinks);
     }

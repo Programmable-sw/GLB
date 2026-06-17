@@ -10,7 +10,7 @@ n-mrc 是一种 tor-feedback source-controlled packet-level 负载均衡方案�
 
 - `sim/`：htsim C++ 离散事件仿真器。
 - `sim/datacenter/htsim_roce`：编译后的 RoCE 仿真程序。
-- `experiments/n-mrc/run_literature_metric_compare.py`：n-mrc 对比实验脚本。
+- `experiments/n-mrc/run_literature_metric_compare.py`：README 标准场景统一验证脚本，负责逐包方案仿真、CSV/report 和图表输出。
 - `experiments/n-mrc/run_glb_factor_compare.py`：glb 参数对比脚本。
 
 ## n-mrc 机制简介
@@ -52,10 +52,11 @@ n-mrc 把一个 EV 看作完整的端到端路径组合。2-tier 拓扑中，EV 
 
 ## 标准测试场景
 
-| 场景 | 拓扑 | 链路条件 | Flow size | 对比方案 |
-| --- | --- | --- | --- | --- |
-| 健康网络 | 2048 nodes / 2-tier | 全链路 400Gbps | 4/32MiB | ecmp / ops / reps / n-mrc / mrc / glb / adaptive-routing / drill |
-| 非对称带宽 | 1024 nodes / 3-tier | 3% ToR 上行半带宽，即 200Gbps | 8/32MiB | ecmp / ops / reps / n-mrc / mrc / glb / adaptive-routing / drill |
+| 场景 | 拓扑 | 链路条件 | Traffic | Flow size | 对比方案 |
+| --- | --- | --- | --- | --- | --- |
+| 健康网络 | 2048 nodes / 2-tier | 全链路 400Gbps | tornado / permutation | 4/8/16/32MiB，默认启用 4/32MiB | ecmp_rr / ops / rr / adaptive-routing / drill / glb / reps / mrc / n-mrc |
+| 非对称带宽1 | 1024 nodes / 3-tier | 3% ToR 上行半带宽，即 200Gbps | tornado / permutation | 4/8/16/32MiB，默认启用 4/32MiB | ecmp_rr / ops / rr / adaptive-routing / drill / glb / reps / mrc / n-mrc |
+| 非对称带宽2 | 2048 nodes / 2-tier | `floor(2048 * 10%) = 204` 条 ToR 上行随机稀疏半带宽，按 ToR 均匀分散 | tornado / permutation | 4/8/16/32MiB，默认启用 4/32MiB | ecmp_rr / ops / rr / adaptive-routing / drill / glb / reps / mrc / n-mrc |
 
 通用参数：
 
@@ -69,12 +70,12 @@ n-mrc 把一个 EV 看作完整的端到端路径组合。2-tier 拓扑中，EV 
 - MTU：4096 bytes。
 - RoCE RTO：70us。
 - 拥塞控制：`DCQCN_variant`。
-- 流量：`tornado`，每个 host 一个 foreground flow，目的端为 `(src + nodes/2) % nodes`。
-- 指标：avg FCT、p99 FCT、p99.9 FCT、max FCT、CCT。
+- 流量：`tornado` 或 `permutation`，每个 host 一个 foreground flow；`tornado` 目的端为 `(src + nodes/2) % nodes`，`permutation` 使用固定 seed 的随机一一映射。
+- 图表指标：avg FCT、p99 FCT、p99.9 FCT。
 
 标准实验使用 lossless + ECN + bitmap重传，lossy 版本正在改进。
 
-非对称带宽场景按所有 ToR-to-aggregation uplink 计算慢链路数量。1024-node / 3-tier generated fat-tree 的 ToR 上行总数为 1024 条，因此默认慢链路数量为 `ceil(1024 * 0.03) = 31`。
+非对称带宽场景按所有 ToR-to-aggregation uplink 计算慢链路数量。1024-node / 3-tier generated fat-tree 的 ToR 上行总数为 1024 条，因此默认慢链路数量为 `ceil(1024 * 0.03) = 31`。非对称带宽2使用 2048-node / 2-tier，慢链路数量为 `floor(2048 * 0.10) = 204`，并通过 `-slow_tor_uplink_select random-sparse` 按 seed 随机稀疏选择；该模式先把慢链路数量按 ToR 均匀分配，再在每个 ToR 内随机选具体上行。因此 2048-node / 2-tier 下的 204 条慢上行会分散到 64 个 ToR 上，每个 ToR 3 或 4 条。
 
 ## 环境准备
 
@@ -105,14 +106,14 @@ make -C sim -j"$(nproc)"
 
 ```bash
 ./sim/datacenter/htsim_roce -h | head -n 40
-python3 -m py_compile \
+ python3 -m py_compile \
   experiments/n-mrc/run_literature_metric_compare.py \
   experiments/n-mrc/run_glb_factor_compare.py
 ```
 
 ## 运行实验
 
-运行标准两场景主测试：
+运行 README 标准逐包方案测试：
 
 ```bash
 python3 experiments/n-mrc/run_literature_metric_compare.py
@@ -120,13 +121,16 @@ python3 experiments/n-mrc/run_literature_metric_compare.py
 
 默认会展开：
 
-- 健康网络：2048 nodes / 2-tier，4/8/16/32MiB。
-- 非对称带宽：1024 nodes / 3-tier，4/8/16/32MiB。
-- 每个 scenario 跑 `ecmp`、`ops`、`reps`、`n-mrc`，共 `2 * 4 * 4 = 32` 次仿真。
+- 场景：健康网络、非对称带宽、非对称带宽2。
+- Traffic：`tornado`、`permutation`。
+- Flow size：默认启用 `4,32`MiB；脚本支持 `4,8,16,32`MiB。
+- 每个 case 默认跑逐包方案 `ecmp_rr`、`ops`、`rr`、`reps`、`n-mrc`、`mrc`、`adaptive-routing`、`drill`、`glb`。
 
-只跑 8MiB 快速检查：
+只跑非对称带宽2的 8MiB 快速检查：
 
 ```bash
+SCENARIO_SET=asym2_tor10pct_sparse \
+SCENARIO_TRAFFICS=tornado \
 SCENARIO_FLOW_SIZE_MIBS=8 \
 python3 experiments/n-mrc/run_literature_metric_compare.py
 ```
@@ -142,16 +146,16 @@ python3 experiments/n-mrc/run_literature_metric_compare.py
 
 | 环境变量 | 默认值 | 含义 |
 | --- | --- | --- |
-| `SCENARIO_HEALTHY_TOPOLOGIES` | `2048:2` | 健康网络拓扑列表，格式为 `nodes:tiers`。 |
-| `SCENARIO_ASYM_TOPOLOGIES` | `1024:3` | 非对称带宽拓扑列表。 |
-| `SCENARIO_FLOW_SIZE_MIBS` | `4,8,16,32` | flow size 列表。 |
-| `SCENARIO_TRAFFIC` | `tornado` | 支持 `tornado` / `permutation`。 |
+| `SCENARIO_SET` | `healthy,asym_tor3pct,asym2_tor10pct_sparse` | 要启用的场景集合。 |
+| `SCENARIO_FLOW_SIZE_MIBS` | `4,32` | 启用的 flow size 列表；支持集合为 `4,8,16,32`。 |
+| `SCENARIO_TRAFFICS` | `tornado,permutation` | 启用的 traffic 集合；支持 `tornado` / `permutation`。 |
+| `SCENARIO_SCHEMES` | `packet` | 默认逐包方案集合；也可设为逗号分隔 scheme 列表。 |
 | `SCENARIO_CC` | `dcqcn_variant` | 可改为 `dcqcn`。 |
-| `SCENARIO_RX_MODE` | `gbn` | RoCE 接收/重传模式；设为 `sp` 使用 SACK bitmap 选择性重传。 |
+| `SCENARIO_RX_MODE` | `sp` | RoCE 接收/重传模式；默认使用 SACK bitmap 选择性重传。 |
 | `SCENARIO_SACK_BITMAP_BITS` | `64` | SACK bitmap 位宽；默认 64-bit 对齐 MRC spec，可设 `128` 做覆盖度/性能对照。 |
-| `SCENARIO_INCLUDE_NMRC_4STATE` | unset | 设为 `1` 时额外比较旧版 `n-mrc-4state`。 |
+| `SCENARIO_WORKERS` | `4` | 同一 case 内并发运行的仿真进程数。 |
 | `SCENARIO_OUT` | 自动生成 | 输出目录。 |
-| `KEEP_RAW_OUTPUT` | unset | 设为 `1` 时保留 `.cmd`、`.stdout`、`.dat` 和 `.cm` 文件。 |
+| `KEEP_RAW_OUTPUT` | `1` | 保留 `.cmd`、`.stdout`、`.dat` 和 `.cm` 文件并支持缓存；设为 `0` 时清理 raw 输出。 |
 
 ## 输出文件
 
@@ -162,6 +166,7 @@ python3 experiments/n-mrc/run_literature_metric_compare.py
 - `per_flow.csv`：逐流 FCT 明细。
 - `comparison_report.md`：自动生成的 Markdown 汇总报告。
 - `scenario_plan.md`：脚本本次展开的场景列表。
+- `*_packet_lb_slowdown.png/pdf`：README 风格归一化对比图，指标为 avg FCT、p99 FCT、p99.9 FCT。
 
 ## 辅助 glb 参数脚本
 
@@ -180,7 +185,7 @@ python3 experiments/n-mrc/run_glb_factor_compare.py
 
 ## 核心代码
 
-- `experiments/n-mrc/run_literature_metric_compare.py`：标准场景生成、命令拼接、指标解析和报告生成。
+- `experiments/n-mrc/run_literature_metric_compare.py`：README 标准场景生成、命令拼接、指标解析、报告生成和图表输出。
 - `experiments/n-mrc/run_glb_factor_compare.py`：glb 参数对比。
 - `sim/datacenter/main_roce.cpp`：RoCE CLI 参数、LB 模式选择、EV 空间按拓扑自动校准。
 - `sim/roce.cpp` / `sim/roce.h`：源端 `ecmp`、`ops`、`reps`、`n-mrc`、`mrc` 选路状态机和 ACK/NACK feedback 更新。
