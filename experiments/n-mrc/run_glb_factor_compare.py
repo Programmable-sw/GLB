@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# 测试 GLB 五因子权重在默认 128 节点 3 层拓扑、tornado/permutation 流量和 32MiB 流下的表现。
 import csv
 import math
 import os

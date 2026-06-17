@@ -8,6 +8,7 @@
 #include <vector>
 
 class FatTreeTopology;
+class GlbGcnTimer;
 
 /*
  * Copyright (C) 2013-2014 Universita` di Pisa. All rights reserved.
@@ -109,6 +110,68 @@ public:
     uint32_t glb_best_score(uint32_t dst, uint32_t depth);
     uint32_t drill_route(vector<FibEntry*>* ecmp_set, uint32_t dst);
 
+    struct GlbPathState {
+        double score;
+        double best_score;
+        double avg_busy;
+        uint32_t candidate_count;
+        uint8_t quality;
+        simtime_picosec last_update;
+        bool valid;
+        bool link_available;
+
+        GlbPathState()
+            : score(0.0), best_score(0.0), avg_busy(0.0),
+              candidate_count(0), quality(0), last_update(0),
+              valid(false), link_available(true) {}
+    };
+
+    static uint8_t glb_quality_from_score(double score, double bucket, uint32_t levels) {
+        if (levels == 0)
+            levels = 1;
+        if (bucket <= 0.0)
+            bucket = 1.0;
+        if (score <= 0.0)
+            return 0;
+
+        uint32_t max_quality = levels - 1;
+        if (max_quality == 0)
+            return 0;
+        if (score >= bucket * (double)max_quality)
+            return (uint8_t)max_quality;
+
+        uint32_t quality = (uint32_t)(score / bucket);
+        return (uint8_t)quality;
+    }
+
+    static double glb_downstream_scale_for_score(double local_score,
+                                                 double bucket,
+                                                 bool normalized) {
+        if (local_score <= 0.0)
+            return 1.0;
+        if (bucket <= 0.0)
+            bucket = 1.0;
+
+        double pressure = normalized ? local_score : local_score / bucket;
+        if (pressure <= 0.0)
+            return 1.0;
+        return 1.0 / (1.0 + pressure);
+    }
+
+    static bool glb_snapshot_usable(const GlbPathState& state,
+                                    simtime_picosec now,
+                                    simtime_picosec aging_interval) {
+        if (!state.valid || !state.link_available)
+            return false;
+        if (aging_interval == 0)
+            return true;
+        if (now < state.last_update)
+            return false;
+        return now - state.last_update <= aging_interval;
+    }
+
+    void glb_mark_neighbor_link(uint32_t neighbor_id, bool available);
+
     static int8_t compare_flow_count(FibEntry* l, FibEntry* r);
     static int8_t compare_pause(FibEntry* l, FibEntry* r);
     static int8_t compare_bandwidth(FibEntry* l, FibEntry* r);
@@ -142,7 +205,12 @@ public:
     static double _glb_quality_bucket;
     static uint32_t _glb_max_quality;
     static simtime_picosec _glb_update_interval;
+    static uint32_t _glb_quality_levels;
+    static uint32_t _glb_min_choices;
+    static simtime_picosec _glb_gcn_update_interval;
+    static simtime_picosec _glb_gcn_aging_interval;
     static bool _glb_normalize_scores;
+    static bool _glb_local_damping;
     static uint32_t _nmrc_feedback_pkts;
     static simtime_picosec _nmrc_feedback_min_interval;
     static simtime_picosec _nmrc_feedback_max_interval;
@@ -159,14 +227,6 @@ private:
         NmrcState() : packets(0), last_feedback(0) {}
     };
 
-    struct GlbRemoteCache {
-        double score;
-        simtime_picosec last_update;
-        bool valid;
-
-        GlbRemoteCache() : score(0.0), last_update(0), valid(false) {}
-    };
-
     switch_type _type;
     Pipe* _pipe;
     FatTreeTopology* _ft;
@@ -177,7 +237,10 @@ private:
     unordered_map<uint32_t,FlowletInfo*> _flowlet_maps;
     unordered_map<uint32_t,NmrcState> _nmrc_states;
     unordered_map<uint32_t,uint32_t> _drill_memory;
-    unordered_map<uint32_t,GlbRemoteCache> _glb_remote_cache;
+    unordered_map<uint32_t,GlbPathState> _glb_exported_state;
+    unordered_map<uint32_t,bool> _glb_neighbor_available;
+    GlbGcnTimer* _glb_gcn_timer;
+    bool _glb_gcn_timer_pending;
 
     static unordered_map<BaseQueue*,uint32_t> _port_flow_counts;
 
@@ -192,12 +255,19 @@ private:
     double glb_queue_fraction(BaseQueue* q);
     uint32_t glb_utilization_percent(BaseQueue* q);
     double glb_port_score(BaseQueue* q, double queue_weight, double util_weight);
-    double glb_remote_score(uint32_t dst);
-    double glb_compute_remote_score(uint32_t dst);
+    GlbPathState glb_compute_export_state(uint32_t dst);
+    void glb_maybe_refresh_export(uint32_t dst);
+    void glb_schedule_periodic_gcn();
+    void glb_periodic_refresh_exports();
+    const GlbPathState* glb_neighbor_snapshot(FibEntry* entry, uint32_t dst) const;
+    uint32_t glb_next_hop_id(FibEntry* entry) const;
+    bool glb_entry_available(FibEntry* entry) const;
     double glb_score(FibEntry* entry, uint32_t dst, uint32_t depth);
     uint8_t glb_quality(double score);
     uint32_t pathid_ecmp_choice(Packet& pkt, uint32_t hop_count, packet_direction direction);
     void maybe_update_nmrc_feedback(Packet& pkt);
+
+    friend class GlbGcnTimer;
 };
 
 #endif

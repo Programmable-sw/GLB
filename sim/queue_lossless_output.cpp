@@ -11,7 +11,8 @@
 LosslessOutputQueue::LosslessOutputQueue(linkspeed_bps bitrate, mem_b maxsize,
                                          EventList& eventlist, QueueLogger* logger, int ECN, mem_b Kmin, mem_b Kmax)
     : Queue(bitrate,maxsize,eventlist,logger),
-      _state_send(READY)
+      _state_send(READY),
+      _overflow_count(0)
 {
     //assume worst case: PAUSE frame waits for one MSS packet to be sent to other switch, and there is 
     //an MSS just beginning to be sent when PAUSE frame arrives; this means 2 packets per incoming
@@ -106,6 +107,7 @@ LosslessOutputQueue::receivePacket(Packet& pkt,VirtualQueue* prev)
     _queuesize += pkt.size();
 
     if (_queuesize > _maxsize){
+        _overflow_count++;
         cout << " Queue " << _name << " LOSSLESS not working! I should have dropped this packet" << _queuesize / Packet::data_packet_size() << endl;
     }
 

@@ -4,11 +4,12 @@
 #include <iostream>
 #include "switch.h"
 
-LosslessQueue::LosslessQueue(linkspeed_bps bitrate, mem_b maxsize, 
+LosslessQueue::LosslessQueue(linkspeed_bps bitrate, mem_b maxsize,
                              EventList& eventlist, QueueLogger* logger, Switch* sw)
-    : Queue(bitrate,maxsize,eventlist,logger), 
+    : Queue(bitrate,maxsize,eventlist,logger),
       _state_send(READY),
-      _state_recv(READY)
+      _state_recv(READY),
+      _overflow_count(0)
 {
     //assume worst case: PAUSE frame waits for one MSS packet to be sent to other switch, and there is 
     //an MSS just beginning to be sent when PAUSE frame arrives; this means 2 packets per incoming
@@ -87,6 +88,7 @@ LosslessQueue::receivePacket(Packet& pkt)
     //cout << timeAsMs(eventlist().now()) << " queue " << _name << " switch (" << _switch->_name << ") "<< " recv when paused pkt " << pkt.type() << " sz " << _queuesize << endl;        
 
     if (_queuesize > _maxsize){
+        _overflow_count++;
         cout << " Queue " << _name << " switch (" << _switch->nodename() << ") "<< " LOSSLESS not working! I should have dropped this packet" << endl;
     }
 

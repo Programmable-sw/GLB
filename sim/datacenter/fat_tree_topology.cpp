@@ -1049,13 +1049,39 @@ void FatTreeTopology::add_failed_link(uint32_t type, uint32_t switch_id, uint32_
     assert(type == FatTreeSwitch::AGG);
     assert(link_id < _radix_up[AGG_TIER]);
     assert(switch_id < NAGG);
+
+    if (queues_nup_nc.empty() || queues_nc_nup.empty() ||
+        pipes_nup_nc.empty() || pipes_nc_nup.empty()) {
+        cout << "Skipping AGG link failure switch ID " << switch_id
+             << " link ID " << link_id
+             << ": topology has no AGG-to-core tier" << endl;
+        return;
+    }
     
     uint32_t podpos = switch_id%(_agg_switches_per_pod);
     uint32_t k = podpos * _agg_switches_per_pod + link_id;
 
     // note: if bundlesize > 1, we only fail the first link in a bundle.
+
+    if (switch_id >= queues_nup_nc.size() || k >= queues_nup_nc[switch_id].size() ||
+        switch_id >= pipes_nup_nc.size() || k >= pipes_nup_nc[switch_id].size() ||
+        k >= queues_nc_nup.size() || switch_id >= queues_nc_nup[k].size() ||
+        k >= pipes_nc_nup.size() || switch_id >= pipes_nc_nup[k].size() ||
+        queues_nup_nc[switch_id][k].empty() || pipes_nup_nc[switch_id][k].empty() ||
+        queues_nc_nup[k][switch_id].empty() || pipes_nc_nup[k][switch_id].empty()) {
+        cout << "Skipping AGG link failure switch ID " << switch_id
+             << " link ID " << link_id
+             << ": link index is outside this topology" << endl;
+        return;
+    }
     
     assert(queues_nup_nc[switch_id][k][0]!=NULL && queues_nc_nup[k][switch_id][0]!=NULL );
+    FatTreeSwitch* agg_sw = dynamic_cast<FatTreeSwitch*>(queues_nup_nc[switch_id][k][0]->getSwitch());
+    FatTreeSwitch* core_sw = dynamic_cast<FatTreeSwitch*>(queues_nc_nup[k][switch_id][0]->getSwitch());
+    if (agg_sw && core_sw) {
+        agg_sw->glb_mark_neighbor_link(core_sw->getID(), false);
+        core_sw->glb_mark_neighbor_link(agg_sw->getID(), false);
+    }
     queues_nup_nc[switch_id][k][0] = NULL;
     queues_nc_nup[k][switch_id][0] = NULL;
 
@@ -1210,6 +1236,20 @@ vector<const Route*>* FatTreeTopology::get_bidir_paths(uint32_t src, uint32_t de
                                 // b2_up is link number in upgoing bundle from agg to core, b2_down is link number in downgoing bundle
                                 // note: no bundling supported between host and tor - just use link number 0
                                 //upper is nup
+                                uint32_t upper2 = MIN_POD_AGG_SWITCH(HOST_POD(dest)) + core % _agg_switches_per_pod;
+
+                                if (!queues_nup_nc[upper][core][b2_up] ||
+                                    !pipes_nup_nc[upper][core][b2_up] ||
+                                    !queues_nc_nup[core][upper2][b2_down] ||
+                                    !pipes_nc_nup[core][upper2][b2_down])
+                                    continue;
+
+                                if (reverse &&
+                                    (!queues_nup_nc[upper2][core][b2_down] ||
+                                     !pipes_nup_nc[upper2][core][b2_down] ||
+                                     !queues_nc_nup[core][upper][b2_up] ||
+                                     !pipes_nc_nup[core][upper][b2_up]))
+                                    continue;
         
                                 routeout = new Route();
                                 //routeout->push_back(pqueue);
@@ -1234,7 +1274,6 @@ vector<const Route*>* FatTreeTopology::get_bidir_paths(uint32_t src, uint32_t de
         
                                 //now take the only link down to the destination server!
         
-                                uint32_t upper2 = MIN_POD_AGG_SWITCH(HOST_POD(dest)) + core % _agg_switches_per_pod;
                                 //printf("K %d HOST_POD(%d) %d core %d upper2 %d\n",K,dest,HOST_POD(dest),core, upper2);
         
                                 routeout->push_back(queues_nc_nup[core][upper2][b2_down]);

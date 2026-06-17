@@ -20,12 +20,15 @@ public:
              QueueLogger* logger, mem_b Kmin, mem_b Kmax);
     void receivePacket(Packet & pkt);
     void completeService();
+    int drop_count() const { return _num_drops; }
+    uint64_t ecn_mark_count() const { return _ecn_marks; }
 private:
     mem_b _K;
     mem_b _ecn_minthresh;
     mem_b _ecn_maxthresh;
     bool _use_red;
     int _state_send;
+    uint64_t _ecn_marks;
     bool should_mark_ecn() const;
 };
 

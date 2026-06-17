@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# 测试 128 节点 2 层拓扑中 300Gbps、50% 占空比背景流压力下的逐包 LB，前景流为 4/32MiB。
 import csv
 import concurrent.futures
 import math
@@ -42,6 +43,7 @@ SEED = int(os.environ.get("PACKET_BG_SEED", "13"))
 END_US = int(os.environ.get("PACKET_BG_END_US", "5000"))
 CC_MODE = "dcqcn_variant"
 RX_MODE = "sp"
+SACK_BITMAP_BITS = int(os.environ.get("PACKET_BG_SACK_BITMAP_BITS", "64"))
 MAX_WORKERS = int(os.environ.get("PACKET_BG_WORKERS", "4"))
 FORCE = os.environ.get("FORCE_RERUN") == "1"
 CJK_FONT = None
@@ -221,6 +223,8 @@ def command_for(tm, dat_file, scheme, flow_count):
         CC_MODE,
         "-roce_rx_mode",
         RX_MODE,
+        "-roce_sack_bitmap_bits",
+        str(SACK_BITMAP_BITS),
         "-hop_latency",
         "0.5",
         "-switch_latency",
@@ -311,6 +315,9 @@ def run_scheme(size_mib, flows, case_dir, tm, scheme):
         "scheme_display": scheme[1],
         "nodes": NODES,
         "tiers": TIERS,
+        "cc": CC_MODE,
+        "rx_mode": RX_MODE,
+        "sack_bitmap_bits": SACK_BITMAP_BITS,
         "foreground_flows": fg_total,
         "background_flows": bg_total,
         "background_rate_mbps": BACKGROUND_RATE_MBPS,
@@ -420,7 +427,7 @@ def plot(rows):
     fig.suptitle(
         (
             "小规模背景流逐包方案 FCT slowdown | "
-            "background 300Gbps, 50% duty, lossless_input_ecn + SP bitmap重传"
+            f"background 300Gbps, 50% duty, lossless_input_ecn + SP {SACK_BITMAP_BITS}-bit SACK"
         ),
         y=0.93,
         fontsize=13,

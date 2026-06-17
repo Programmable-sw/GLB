@@ -30,8 +30,9 @@ BaseQueue::log_packet_send(simtime_picosec duration){
 
     _busy += duration;
 
+    simtime_picosec cutoff = b > _window ? b - _window : 0;
     simtime_picosec y = _busyend.back();
-    while (y < b - _window){
+    while (y < cutoff){
         simtime_picosec x = _busystart.pop();
         _busyend.pop();
 
@@ -53,7 +54,8 @@ BaseQueue::average_utilization(){
     simtime_picosec y = _busyend.back();
     simtime_picosec b = eventlist().now(); 
 
-    while (y < b - _window){
+    simtime_picosec cutoff = b > _window ? b - _window : 0;
+    while (y < cutoff){
         simtime_picosec x = _busystart.pop();
         _busyend.pop();
 

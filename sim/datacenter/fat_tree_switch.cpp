@@ -11,6 +11,22 @@
 
 unordered_map<BaseQueue*,uint32_t> FatTreeSwitch::_port_flow_counts;
 
+class GlbGcnTimer : public EventSource {
+public:
+    GlbGcnTimer(EventList& eventlist, FatTreeSwitch* sw)
+        : EventSource(eventlist, "glb_gcn_timer"), _sw(sw) {}
+
+    void doNextEvent() {
+        if (!_sw)
+            return;
+        _sw->_glb_gcn_timer_pending = false;
+        _sw->glb_periodic_refresh_exports();
+    }
+
+private:
+    FatTreeSwitch* _sw;
+};
+
 FatTreeSwitch::FatTreeSwitch(EventList& eventlist, string s, switch_type t, uint32_t id,simtime_picosec delay, FatTreeTopology* ft): Switch(eventlist, s) {
     _id = id;
     _type = t;
@@ -20,6 +36,8 @@ FatTreeSwitch::FatTreeSwitch(EventList& eventlist, string s, switch_type t, uint
     _crt_route = 0;
     _hash_salt = random();
     _last_choice = eventlist.now();
+    _glb_gcn_timer = NULL;
+    _glb_gcn_timer_pending = false;
     _fib = new RouteTable();
 }
 
@@ -45,6 +63,11 @@ void FatTreeSwitch::receivePacket(Packet& pkt){
         _packets[&pkt] = true;
 
         const Route * nh = getNextHop(pkt,NULL);
+        if (!nh) {
+            _packets.erase(&pkt);
+            pkt.free();
+            return;
+        }
         //set next hop which is peer switch.
         pkt.set_route(*nh);
 
@@ -304,6 +327,8 @@ int8_t FatTreeSwitch::compare_pb(FibEntry* left, FibEntry* right){
 }
 
 void FatTreeSwitch::permute_paths(vector<FibEntry *>* uproutes) {
+    if (!uproutes)
+        return;
     int len = uproutes->size();
     for (int i = 0; i < len; i++) {
         int ix = random() % (len - i);
@@ -319,7 +344,7 @@ uint16_t FatTreeSwitch::_ar_sticky = FatTreeSwitch::PER_PACKET;
 simtime_picosec FatTreeSwitch::_sticky_delta = timeFromUs((uint32_t)10);
 double FatTreeSwitch::_ecn_threshold_fraction = 1.0;
 double FatTreeSwitch::_speculative_threshold_fraction = 0.2;
-double FatTreeSwitch::_glb_downstream_weight = 1.0;
+double FatTreeSwitch::_glb_downstream_weight = 0.25;
 double FatTreeSwitch::_glb_queue_weight = 0.5;
 double FatTreeSwitch::_glb_util_weight = 0.05;
 double FatTreeSwitch::_glb_remote_queue_weight = 0.5;
@@ -327,8 +352,13 @@ double FatTreeSwitch::_glb_remote_util_weight = 0.05;
 double FatTreeSwitch::_glb_remote_busy_weight = 0.2;
 double FatTreeSwitch::_glb_quality_bucket = 20.0;
 uint32_t FatTreeSwitch::_glb_max_quality = 7;
-simtime_picosec FatTreeSwitch::_glb_update_interval = timeFromUs(5.0);
+simtime_picosec FatTreeSwitch::_glb_update_interval = timeFromUs(1.0);
+uint32_t FatTreeSwitch::_glb_quality_levels = 8;
+uint32_t FatTreeSwitch::_glb_min_choices = 3;
+simtime_picosec FatTreeSwitch::_glb_gcn_update_interval = timeFromUs(1.0);
+simtime_picosec FatTreeSwitch::_glb_gcn_aging_interval = timeFromUs(20.0);
 bool FatTreeSwitch::_glb_normalize_scores = false;
+bool FatTreeSwitch::_glb_local_damping = false;
 uint32_t FatTreeSwitch::_nmrc_feedback_pkts = 100;
 simtime_picosec FatTreeSwitch::_nmrc_feedback_min_interval = timeFromUs(5.0);
 simtime_picosec FatTreeSwitch::_nmrc_feedback_max_interval = timeFromUs(20.0);
@@ -458,11 +488,12 @@ void FatTreeSwitch::glb_candidate_queues(uint32_t dst, vector<BaseQueue*>& queue
     }
 }
 
-double FatTreeSwitch::glb_compute_remote_score(uint32_t dst) {
+FatTreeSwitch::GlbPathState FatTreeSwitch::glb_compute_export_state(uint32_t dst) {
+    GlbPathState state;
     vector<BaseQueue*> queues;
     glb_candidate_queues(dst, queues);
     if (queues.empty())
-        return 0.0;
+        return state;
 
     double best = std::numeric_limits<double>::max();
     double busy = 0.0;
@@ -474,48 +505,149 @@ double FatTreeSwitch::glb_compute_remote_score(uint32_t dst) {
     }
 
     double avg_busy = busy / queues.size();
-    return best + _glb_remote_busy_weight * avg_busy;
+    state.best_score = best == std::numeric_limits<double>::max() ? 0.0 : best;
+    state.avg_busy = avg_busy;
+    state.score = state.best_score + _glb_remote_busy_weight * state.avg_busy;
+    state.candidate_count = queues.size();
+    state.quality = glb_quality(state.score);
+    state.link_available = true;
+    state.valid = true;
+    return state;
 }
 
-double FatTreeSwitch::glb_remote_score(uint32_t dst) {
-    if (_glb_update_interval == 0)
-        return glb_compute_remote_score(dst);
+void FatTreeSwitch::glb_maybe_refresh_export(uint32_t dst) {
+    simtime_picosec now = eventlist().now();
+    GlbPathState& cached = _glb_exported_state[dst];
+    if (cached.valid && _glb_gcn_update_interval > 0 &&
+        now >= cached.last_update &&
+        now - cached.last_update < _glb_gcn_update_interval) {
+        glb_schedule_periodic_gcn();
+        return;
+    }
+
+    GlbPathState state = glb_compute_export_state(dst);
+    state.last_update = now;
+    cached = state;
+    glb_schedule_periodic_gcn();
+}
+
+void FatTreeSwitch::glb_schedule_periodic_gcn() {
+    if (_strategy != GLB || _glb_gcn_update_interval == 0 ||
+        _glb_gcn_timer_pending || _glb_exported_state.empty()) {
+        return;
+    }
+
+    if (!_glb_gcn_timer)
+        _glb_gcn_timer = new GlbGcnTimer(eventlist(), this);
+    eventlist().sourceIsPendingRel(*_glb_gcn_timer, _glb_gcn_update_interval);
+    _glb_gcn_timer_pending = true;
+}
+
+void FatTreeSwitch::glb_periodic_refresh_exports() {
+    if (_strategy != GLB || _glb_gcn_update_interval == 0 ||
+        _glb_exported_state.empty()) {
+        return;
+    }
 
     simtime_picosec now = eventlist().now();
-    GlbRemoteCache& cache = _glb_remote_cache[dst];
-    if (cache.valid && now - cache.last_update < _glb_update_interval)
-        return cache.score;
+    vector<uint32_t> dsts;
+    dsts.reserve(_glb_exported_state.size());
+    for (unordered_map<uint32_t,GlbPathState>::const_iterator it = _glb_exported_state.begin();
+         it != _glb_exported_state.end(); ++it) {
+        dsts.push_back(it->first);
+    }
 
-    cache.score = glb_compute_remote_score(dst);
-    cache.last_update = now;
-    cache.valid = true;
-    return cache.score;
+    for (size_t i = 0; i < dsts.size(); i++) {
+        GlbPathState state = glb_compute_export_state(dsts[i]);
+        state.last_update = now;
+        _glb_exported_state[dsts[i]] = state;
+    }
+    glb_schedule_periodic_gcn();
+}
+
+uint32_t FatTreeSwitch::glb_next_hop_id(FibEntry* entry) const {
+    if (!entry)
+        return UINT32_MAX;
+
+    Route *r = entry->getEgressPort();
+    if (!r || r->size() <= 2)
+        return UINT32_MAX;
+
+    FatTreeSwitch* next = dynamic_cast<FatTreeSwitch*>(r->at(2));
+    if (!next)
+        return UINT32_MAX;
+
+    return next->getID();
+}
+
+bool FatTreeSwitch::glb_entry_available(FibEntry* entry) const {
+    uint32_t next_id = glb_next_hop_id(entry);
+    if (next_id == UINT32_MAX)
+        return true;
+
+    unordered_map<uint32_t,bool>::const_iterator it = _glb_neighbor_available.find(next_id);
+    return it == _glb_neighbor_available.end() || it->second;
+}
+
+const FatTreeSwitch::GlbPathState* FatTreeSwitch::glb_neighbor_snapshot(FibEntry* entry,
+                                                                        uint32_t dst) const {
+    if (!glb_entry_available(entry))
+        return NULL;
+
+    Route *r = entry->getEgressPort();
+    if (!r || r->size() <= 2)
+        return NULL;
+
+    FatTreeSwitch* next = dynamic_cast<FatTreeSwitch*>(r->at(2));
+    if (!next)
+        return NULL;
+
+    unordered_map<uint32_t,GlbPathState>::const_iterator it = next->_glb_exported_state.find(dst);
+    if (it == next->_glb_exported_state.end())
+        return NULL;
+
+    simtime_picosec now = eventlist().now();
+    if (!glb_snapshot_usable(it->second, now, _glb_gcn_aging_interval))
+        return NULL;
+
+    return &it->second;
+}
+
+void FatTreeSwitch::glb_mark_neighbor_link(uint32_t neighbor_id, bool available) {
+    _glb_neighbor_available[neighbor_id] = available;
 }
 
 double FatTreeSwitch::glb_score(FibEntry* entry, uint32_t dst, uint32_t depth) {
+    if (!glb_entry_available(entry))
+        return std::numeric_limits<double>::max();
+
     Route *r = entry->getEgressPort();
     assert(r && r->size() > 0);
 
     BaseQueue* q = dynamic_cast<BaseQueue*>(r->at(0));
     if (!q)
-        return 0.0;
+        return std::numeric_limits<double>::max();
 
     double score = glb_port_score(q, _glb_queue_weight, _glb_util_weight);
+    double local_score = score;
 
-    if (depth > 0 && r->size() > 2) {
-        FatTreeSwitch* next = dynamic_cast<FatTreeSwitch*>(r->at(2));
-        if (next)
-            score += _glb_downstream_weight * next->glb_remote_score(dst);
+    if (depth > 0) {
+        const GlbPathState* remote = glb_neighbor_snapshot(entry, dst);
+        if (remote) {
+            double downstream_scale = _glb_local_damping ?
+                glb_downstream_scale_for_score(local_score,
+                                               _glb_quality_bucket,
+                                               _glb_normalize_scores) :
+                1.0;
+            score += _glb_downstream_weight * downstream_scale * remote->score;
+        }
     }
     return score;
 }
 
 uint8_t FatTreeSwitch::glb_quality(double score) {
-    double bucket = _glb_quality_bucket > 0.0 ? _glb_quality_bucket : 1.0;
-    uint32_t quality = (uint32_t)(score / bucket);
-    if (quality > _glb_max_quality)
-        quality = _glb_max_quality;
-    return (uint8_t)quality;
+    uint32_t levels = _glb_quality_levels ? _glb_quality_levels : (_glb_max_quality + 1);
+    return glb_quality_from_score(score, _glb_quality_bucket, levels);
 }
 
 uint32_t FatTreeSwitch::glb_best_score(uint32_t dst, uint32_t depth) {
@@ -533,26 +665,32 @@ uint32_t FatTreeSwitch::glb_best_score(uint32_t dst, uint32_t depth) {
 }
 
 uint32_t FatTreeSwitch::glb_route(vector<FibEntry*>* ecmp_set, uint32_t dst) {
-    uint8_t qualities[256];
-    uint32_t best_choices[256];
-    uint32_t best_choices_count = 0;
+    vector<uint8_t> qualities(ecmp_set->size(), 255);
+    vector<bool> available(ecmp_set->size(), false);
     uint8_t best_quality = 255;
 
     for (uint32_t i = 0; i < ecmp_set->size(); i++) {
+        available[i] = glb_entry_available((*ecmp_set)[i]);
+        if (!available[i])
+            continue;
         qualities[i] = glb_quality(glb_score((*ecmp_set)[i], dst, 1));
         if (qualities[i] < best_quality)
             best_quality = qualities[i];
     }
 
-    for (uint32_t i = 0; i < ecmp_set->size(); i++) {
-        if (qualities[i] == best_quality) {
-            assert(best_choices_count < 256);
-            best_choices[best_choices_count++] = i;
+    vector<uint32_t> best_choices;
+    uint32_t min_choices = _glb_min_choices ? _glb_min_choices : 1;
+    uint32_t levels = _glb_quality_levels ? _glb_quality_levels : (_glb_max_quality + 1);
+    for (uint32_t q = best_quality; q < levels && best_choices.size() < min_choices; q++) {
+        for (uint32_t i = 0; i < ecmp_set->size(); i++) {
+            if (available[i] && qualities[i] == q)
+                best_choices.push_back(i);
         }
     }
 
-    assert(best_choices_count > 0);
-    return best_choices[random() % best_choices_count];
+    if (best_choices.empty())
+        return random() % ecmp_set->size();
+    return best_choices[random() % best_choices.size()];
 }
 
 uint32_t FatTreeSwitch::drill_route(vector<FibEntry*>* ecmp_set, uint32_t dst) {
@@ -657,6 +795,9 @@ void FatTreeSwitch::maybe_update_nmrc_feedback(Packet& pkt) {
 }
 
 Route* FatTreeSwitch::getNextHop(Packet& pkt, BaseQueue* ingress_port){
+    if (_strategy == GLB)
+        glb_maybe_refresh_export(pkt.dst());
+
     vector<FibEntry*> * available_hops = _fib->getRoutes(pkt.dst());
 
     if (available_hops){
@@ -814,12 +955,16 @@ Route* FatTreeSwitch::getNextHop(Packet& pkt, BaseQueue* ingress_port){
                 for (uint32_t l = 0; l <  uplink_bundles ; l++) {
                     uint32_t core = l * _ft->agg_switches_per_pod() + podpos;
                     for (uint32_t b = 0; b < _ft->bundlesize(CORE_TIER); b++) {
+                        BaseQueue* q = _ft->queues_nup_nc[_id][core][b];
+                        Pipe* pipe = _ft->pipes_nup_nc[_id][core][b];
+                        if (!q || !pipe)
+                            continue;
                         Route *r = new Route();
-                        r->push_back(_ft->queues_nup_nc[_id][core][b]);
+                        r->push_back(q);
                         assert(((BaseQueue*)r->at(0))->getSwitch() == this);
 
-                        r->push_back(_ft->pipes_nup_nc[_id][core][b]);
-                        r->push_back(_ft->queues_nup_nc[_id][core][b]->getRemoteEndpoint());
+                        r->push_back(pipe);
+                        r->push_back(q->getRemoteEndpoint());
 
                         /*
                           FatTreeSwitch* next = (FatTreeSwitch*)_ft->queues_nup_nc[_id][k]->getRemoteEndpoint();
@@ -838,17 +983,19 @@ Route* FatTreeSwitch::getNextHop(Packet& pkt, BaseQueue* ingress_port){
     } else if (_type == CORE) {
         uint32_t nup = _ft->MIN_POD_AGG_SWITCH(_ft->HOST_POD(pkt.dst())) + (_id % _ft->agg_switches_per_pod());
         for (uint32_t b = 0; b < _ft->bundlesize(CORE_TIER); b++) {
+            BaseQueue* q = _ft->queues_nc_nup[_id][nup][b];
+            Pipe* pipe = _ft->pipes_nc_nup[_id][nup][b];
+            if (!q || !pipe)
+                continue;
             Route *r = new Route();
             //cout << "CORE switch " << _id << " adding route to " << pkt.dst() << " via AGG " << nup << endl;
 
-            assert (_ft->queues_nc_nup[_id][nup][b]);
-            r->push_back(_ft->queues_nc_nup[_id][nup][b]);
+            r->push_back(q);
             assert(((BaseQueue*)r->at(0))->getSwitch() == this);
 
-            assert (_ft->pipes_nc_nup[_id][nup][b]);
-            r->push_back(_ft->pipes_nc_nup[_id][nup][b]);
+            r->push_back(pipe);
 
-            r->push_back(_ft->queues_nc_nup[_id][nup][b]->getRemoteEndpoint());
+            r->push_back(q->getRemoteEndpoint());
             _fib->addRoute(pkt.dst(),r,1,DOWN);
         }
     }
@@ -856,7 +1003,8 @@ Route* FatTreeSwitch::getNextHop(Packet& pkt, BaseQueue* ingress_port){
         cerr << "Route lookup on switch with no proper type: " << _type << endl;
         abort();
     }
-    assert(_fib->getRoutes(pkt.dst()));
+    if (!_fib->getRoutes(pkt.dst()))
+        return NULL;
 
     //FIB has been filled in; return choice. 
     return getNextHop(pkt, ingress_port);

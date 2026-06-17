@@ -11,7 +11,8 @@ ECNQueue::ECNQueue(linkspeed_bps bitrate, mem_b maxsize,
       _K(K),
       _ecn_minthresh(K),
       _ecn_maxthresh(K),
-      _use_red(false)
+      _use_red(false),
+      _ecn_marks(0)
 {
     _state_send = LosslessQueue::READY;
 }
@@ -23,7 +24,8 @@ ECNQueue::ECNQueue(linkspeed_bps bitrate, mem_b maxsize,
       _K(Kmin),
       _ecn_minthresh(Kmin),
       _ecn_maxthresh(Kmax ? Kmax : Kmin),
-      _use_red(true)
+      _use_red(true),
+      _ecn_marks(0)
 {
     if (_ecn_maxthresh < _ecn_minthresh)
         _ecn_maxthresh = _ecn_minthresh;
@@ -120,8 +122,10 @@ ECNQueue::completeService()
         _state_send = LosslessQueue::PAUSED;
     
     //mark on deque
-    if (should_mark_ecn())
+    if (should_mark_ecn()) {
         pkt->set_flags(pkt->flags() | ECN_CE);
+        _ecn_marks++;
+    }
 
     _queuesize -= pkt->size();
     pkt->flow().logTraffic(*pkt, *this, TrafficLogger::PKT_DEPART);

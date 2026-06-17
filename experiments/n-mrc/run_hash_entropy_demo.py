@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# 离线比较默认 2048 节点 2 层单 ToR 对中 1000 个单包流的哈希输入熵。
 """Offline demo for comparing hash input entropy on one 2-tier ToR pair.
 
 The script intentionally stays outside the htsim simulator path.  It models the

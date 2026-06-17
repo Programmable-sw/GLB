@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# 生成 README 负载均衡图，覆盖健康 2048 节点 2 层和 1024 节点 3 层 3% 非对称场景、4/32MiB 流。
 import csv
 import concurrent.futures
 import math
@@ -32,6 +33,13 @@ END_US = int(os.environ.get("README_ALL_LB_END_US", "10000"))
 TRAFFIC = "tornado"
 CC_MODE = "dcqcn_variant"
 RX_MODE = "sp"
+SACK_BITMAP_BITS = int(os.environ.get("README_ALL_LB_SACK_BITMAP_BITS", "64"))
+FLOW_SIZES_MIB = [
+    int(item.strip())
+    for item in os.environ.get("README_ALL_LB_FLOW_SIZES", "4,32").split(",")
+    if item.strip()
+]
+SCHEME_SCOPE = os.environ.get("README_ALL_LB_SCHEME_SCOPE", "all").strip().lower()
 KEEP_RAW = os.environ.get("KEEP_RAW_OUTPUT", "1") != "0"
 FORCE = os.environ.get("FORCE_RERUN") == "1"
 MAX_WORKERS = int(os.environ.get("README_ALL_LB_WORKERS", "4"))
@@ -46,7 +54,7 @@ SCENARIOS = [
         "title": "健康网络",
         "nodes": 2048,
         "tiers": 2,
-        "flow_sizes_mib": [4, 32],
+        "flow_sizes_mib": FLOW_SIZES_MIB,
         "description": "2048 nodes / 2-tier, all links 400Gbps",
     },
     {
@@ -55,20 +63,21 @@ SCENARIOS = [
         "title": "非对称带宽",
         "nodes": 1024,
         "tiers": 3,
-        "flow_sizes_mib": [4, 32],
+        "flow_sizes_mib": FLOW_SIZES_MIB,
         "slow_tor_uplink_fraction": 0.03,
         "slow_tor_uplink_divisor": 2,
         "description": "1024 nodes / 3-tier, 3% ToR uplinks at half bandwidth",
     },
 ]
 
-SCHEMES = [
+ALL_SCHEMES = [
     ("ecmp", "ECMP", "ecmp", []),
     ("ecmp_rr", "ECMP-RR", "ecmp_rr", []),
     ("ops", "OPS", "ops", []),
     ("rr", "RR", "rr", []),
     ("reps", "REPS", "reps", []),
     ("n-mrc", "N-MRC", "n-mrc", []),
+    ("mrc", "MRC", "mrc", []),
     ("conweave", "CONWEAVE", "conweave", []),
     ("adaptive-routing", "AR", "adaptive-routing", ["-ar_granularity", "packet"]),
     ("drill", "DRILL", "drill", []),
@@ -81,11 +90,29 @@ PER_PACKET_SCHEME_LABELS = [
     "rr",
     "reps",
     "n-mrc",
+    "mrc",
     "adaptive-routing",
     "drill",
     "glb",
 ]
-PER_PACKET_SCHEMES = [scheme for scheme in SCHEMES if scheme[0] in PER_PACKET_SCHEME_LABELS]
+
+
+def selected_schemes():
+    if SCHEME_SCOPE == "all":
+        return ALL_SCHEMES
+    if SCHEME_SCOPE == "packet":
+        return [scheme for scheme in ALL_SCHEMES if scheme[0] in PER_PACKET_SCHEME_LABELS]
+
+    requested = [item.strip() for item in SCHEME_SCOPE.split(",") if item.strip()]
+    by_label = {scheme[0]: scheme for scheme in ALL_SCHEMES}
+    missing = [label for label in requested if label not in by_label]
+    if missing:
+        raise ValueError(f"unknown README_ALL_LB_SCHEME_SCOPE labels: {', '.join(missing)}")
+    return [by_label[label] for label in requested]
+
+
+SCHEMES = selected_schemes()
+PER_PACKET_SCHEMES = [scheme for scheme in ALL_SCHEMES if scheme[0] in PER_PACKET_SCHEME_LABELS]
 
 METRICS = [
     ("avg_fct_us", "平均FCT"),
@@ -102,6 +129,7 @@ COLORS = {
     "rr": "#38bdf8",
     "reps": "#059669",
     "n-mrc": "#dc2626",
+    "mrc": "#ea580c",
     "conweave": "#f59e0b",
     "adaptive-routing": "#7c3aed",
     "drill": "#db2777",
@@ -269,6 +297,8 @@ def command_for(scenario, size_mib, tm, dat_file, scheme, flow_count):
         CC_MODE,
         "-roce_rx_mode",
         RX_MODE,
+        "-roce_sack_bitmap_bits",
+        str(SACK_BITMAP_BITS),
         "-hop_latency",
         "0.5",
         "-switch_latency",
@@ -321,6 +351,7 @@ def run_scheme(scenario, size_mib, flows, flow_map, case_dir, tm, scheme):
         "traffic": TRAFFIC,
         "cc": CC_MODE,
         "rx_mode": RX_MODE,
+        "sack_bitmap_bits": SACK_BITMAP_BITS,
         "queue_type": "lossless_input_ecn",
         "linkspeed_mbps": LINKSPEED_MBPS,
         "mtu": MTU,
@@ -539,7 +570,8 @@ def write_report(rows, chart_paths):
         "# README All-LB Lossless/SP Figures",
         "",
         "Parameters: `lossless_input_ecn`, dequeue ECN marking, `roce_rx_mode=sp`, "
-        "`queue=1BDP`, ECN/PFC `0.2/0.8 * queue`, RTO `70us`, CC `dcqcn_variant`.",
+        f"`sack_bitmap_bits={SACK_BITMAP_BITS}`, `queue=1BDP`, "
+        "ECN/PFC `0.2/0.8 * queue`, RTO `70us`, CC `dcqcn_variant`.",
         "",
         "## Charts",
         "",

@@ -20,6 +20,7 @@ CompositeQueue::CompositeQueue(linkspeed_bps bitrate, mem_b maxsize, EventList& 
     _num_drops = 0;
     _num_stripped = 0;
     _num_bounced = 0;
+    _ecn_marks = 0;
     _ecn_minthresh = maxsize*2; // don't set ECN by default
     _ecn_maxthresh = maxsize*2; // don't set ECN by default
 
@@ -87,6 +88,7 @@ CompositeQueue::completeService(){
         //ECN mark on deque
         if (decide_ECN()) {
             pkt->set_flags(pkt->flags() | ECN_CE);
+            _ecn_marks++;
         }
     
         if (_logger) _logger->logQueue(*this, QueueLogger::PKT_SERVICE, *pkt);
@@ -108,13 +110,15 @@ CompositeQueue::completeService(){
             //ECN mark on deque of a header, if low priority queue is still over threshold
             if (decide_ECN()) {
                 pkt->set_flags(pkt->flags() | ECN_CE);
+                _ecn_marks++;
             }
         }
     } else {
         assert(0);
     }
-    
+
     pkt->flow().logTraffic(*pkt,*this,TrafficLogger::PKT_DEPART);
+    log_packet_send(drainTime(pkt));
     pkt->sendOn();
 
     //_virtual_time += drainTime(pkt);
@@ -185,9 +189,10 @@ CompositeQueue::receivePacket(Packet& pkt)
 #endif
                         _num_bounced++;
                         booted_pkt->sendOn();
-                    } else {    
+                    } else {
                         booted_pkt->flow().logTraffic(*booted_pkt,*this,TrafficLogger::PKT_DROP);
                         booted_pkt->free();
+                        _num_drops++;
                         if (_logger) _logger->logQueue(*this, QueueLogger::PKT_DROP, pkt);
                     }
                 }  

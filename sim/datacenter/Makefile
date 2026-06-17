@@ -74,7 +74,7 @@ camcubetopology.o: camcubetopology.cpp camcubetopology.h topology.h ${DEPS}
 subflow_control.o: subflow_control.cpp subflow_control.h  ${DEPS}
 	$(CC) $(INCLUDE) $(CFLAGS) -c subflow_control.cpp
 
-fat_tree_topology.o: fat_tree_topology.cpp fat_tree_topology.h topology.h ${DEPS}
+fat_tree_topology.o: fat_tree_topology.cpp fat_tree_topology.h fat_tree_switch.h topology.h ${DEPS}
 	$(CC) $(INCLUDE) $(CFLAGS) -c fat_tree_topology.cpp
 
 main_waterfill.o: main_waterfill.cpp connection_matrix.h connection_matrix.cpp ${DEPS}

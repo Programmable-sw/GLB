@@ -18,14 +18,19 @@
 #include "clock.h"
 #include "roce.h"
 #include "compositequeue.h"
+#include "ecnqueue.h"
 #include "firstfit.h"
+#include "queue_lossless.h"
+#include "queue_lossless_output.h"
 #include "topology.h"
 #include "connection_matrix.h"
+#include "tcppacket.h"
 
 #include "fat_tree_topology.h"
 #include "fat_tree_switch.h"
 
 #include <list>
+#include <set>
 
 // Simulation params
 
@@ -48,9 +53,328 @@ int DEFAULT_NODES = 432;
 
 EventList eventlist;
 
+struct QueueDiag {
+    uint64_t lossless_overflows;
+    uint64_t lossy_drops;
+    uint64_t lossy_ecn_marks;
+    uint64_t composite_trims;
+    uint64_t composite_drops;
+    uint64_t composite_ecn_marks;
+
+    QueueDiag()
+        : lossless_overflows(0),
+          lossy_drops(0),
+          lossy_ecn_marks(0),
+          composite_trims(0),
+          composite_drops(0),
+          composite_ecn_marks(0) {}
+};
+
+static void add_queue_diag(BaseQueue* queue, set<BaseQueue*>& seen, QueueDiag& diag) {
+    if (!queue || !seen.insert(queue).second) {
+        return;
+    }
+
+    LosslessOutputQueue* lossless_output = dynamic_cast<LosslessOutputQueue*>(queue);
+    if (lossless_output) {
+        diag.lossless_overflows += lossless_output->overflow_count();
+    }
+
+    LosslessQueue* lossless_queue = dynamic_cast<LosslessQueue*>(queue);
+    if (lossless_queue) {
+        diag.lossless_overflows += lossless_queue->overflow_count();
+    }
+
+    ECNQueue* ecn_queue = dynamic_cast<ECNQueue*>(queue);
+    if (ecn_queue) {
+        diag.lossy_drops += ecn_queue->drop_count();
+        diag.lossy_ecn_marks += ecn_queue->ecn_mark_count();
+    }
+
+    CompositeQueue* composite_queue = dynamic_cast<CompositeQueue*>(queue);
+    if (composite_queue) {
+        diag.composite_trims += composite_queue->trim_count();
+        diag.composite_drops += composite_queue->drop_count();
+        diag.composite_ecn_marks += composite_queue->ecn_mark_count();
+    }
+}
+
+static void add_queue_diag(const vector< vector< vector<BaseQueue*> > >& queues,
+                           set<BaseQueue*>& seen, QueueDiag& diag) {
+    for (size_t i = 0; i < queues.size(); i++) {
+        for (size_t j = 0; j < queues[i].size(); j++) {
+            for (size_t k = 0; k < queues[i][j].size(); k++) {
+                add_queue_diag(queues[i][j][k], seen, diag);
+            }
+        }
+    }
+}
+
+static QueueDiag collect_queue_diag(FatTreeTopology* top) {
+    QueueDiag diag;
+    set<BaseQueue*> seen;
+
+    add_queue_diag(top->queues_nc_nup, seen, diag);
+    add_queue_diag(top->queues_nup_nlp, seen, diag);
+    add_queue_diag(top->queues_nlp_ns, seen, diag);
+    add_queue_diag(top->queues_nup_nc, seen, diag);
+    add_queue_diag(top->queues_nlp_nup, seen, diag);
+    add_queue_diag(top->queues_ns_nlp, seen, diag);
+
+    return diag;
+}
+
+class SglbBackgroundDropSink : public PacketSink {
+public:
+    SglbBackgroundDropSink() : _nodename("sglb_background_drop") {}
+
+    void receivePacket(Packet& pkt) {
+        pkt.free();
+    }
+
+    const string& nodename() {
+        return _nodename;
+    }
+
+private:
+    string _nodename;
+};
+
+class SglbBackgroundSource : public EventSource {
+public:
+    SglbBackgroundSource(EventList& eventlist, const string& name, Route* route,
+                         double rate_gbps, uint32_t packet_size,
+                         simtime_picosec on_time, simtime_picosec off_time)
+        : EventSource(eventlist, name),
+          _flow(NULL),
+          _route(route),
+          _packet_size(packet_size),
+          _seq(1),
+          _on_time(on_time),
+          _off_time(off_time),
+          _interval(1),
+          _enabled(route && rate_gbps > 0.0 && packet_size > 0 && on_time > 0) {
+        if (_enabled) {
+            double ps = ceil(((double)packet_size * 8.0 * 1000.0) / rate_gbps);
+            if (ps < 1.0)
+                ps = 1.0;
+            _interval = (simtime_picosec)ps;
+        }
+    }
+
+    void start() {
+        if (_enabled)
+            eventlist().sourceIsPending(*this, EventList::now());
+    }
+
+    void doNextEvent() {
+        if (!_enabled)
+            return;
+
+        simtime_picosec now = eventlist().now();
+        simtime_picosec cycle = _on_time + _off_time;
+        if (cycle > 0 && _off_time > 0) {
+            simtime_picosec phase = now % cycle;
+            if (phase >= _on_time) {
+                eventlist().sourceIsPendingRel(*this, cycle - phase);
+                return;
+            }
+        }
+
+        TcpPacket* pkt = TcpPacket::newpkt(_flow, *_route, _seq, _packet_size);
+        _seq += _packet_size;
+        pkt->sendOn();
+
+        simtime_picosec delay = _interval;
+        if (cycle > 0 && _off_time > 0) {
+            simtime_picosec phase = now % cycle;
+            simtime_picosec remaining_on = _on_time - phase;
+            if (delay > remaining_on)
+                delay = remaining_on;
+        }
+        if (delay == 0)
+            delay = 1;
+        eventlist().sourceIsPendingRel(*this, delay);
+    }
+
+private:
+    PacketFlow _flow;
+    Route* _route;
+    uint32_t _packet_size;
+    TcpPacket::seq_t _seq;
+    simtime_picosec _on_time;
+    simtime_picosec _off_time;
+    simtime_picosec _interval;
+    bool _enabled;
+};
+
+class SglbQueueCvSampler : public EventSource {
+public:
+    SglbQueueCvSampler(EventList& eventlist, FatTreeTopology* top, simtime_picosec period)
+        : EventSource(eventlist, "sglb_queue_cv_sampler"),
+          _top(top),
+          _period(period),
+          _samples(0) {}
+
+    void start() {
+        if (_top && _period > 0)
+            eventlist().sourceIsPendingRel(*this, _period);
+    }
+
+    void doNextEvent() {
+        vector<double> sample;
+        collect_spine_queues(sample);
+        if (_sums.empty())
+            _sums.assign(sample.size(), 0.0);
+        if (sample.size() == _sums.size()) {
+            for (size_t i = 0; i < sample.size(); i++)
+                _sums[i] += sample[i];
+            _samples++;
+        }
+        eventlist().sourceIsPendingRel(*this, _period);
+    }
+
+    double average_queue() const {
+        if (_samples == 0 || _sums.empty())
+            return 0.0;
+
+        double total = 0.0;
+        for (size_t i = 0; i < _sums.size(); i++)
+            total += _sums[i] / (double)_samples;
+        return total / (double)_sums.size();
+    }
+
+    double cv() const {
+        if (_samples == 0 || _sums.empty())
+            return 0.0;
+
+        double mean = average_queue();
+        if (mean <= 0.0)
+            return 0.0;
+
+        double variance = 0.0;
+        for (size_t i = 0; i < _sums.size(); i++) {
+            double avg = _sums[i] / (double)_samples;
+            double delta = avg - mean;
+            variance += delta * delta;
+        }
+        variance /= (double)_sums.size();
+        return sqrt(variance) / mean;
+    }
+
+    uint32_t count() const {
+        return (uint32_t)_sums.size();
+    }
+
+private:
+    void collect_spine_queues(vector<double>& sample) {
+        const vector< vector< vector<BaseQueue*> > >& queues = _top->queues_nc_nup;
+        for (size_t core = 0; core < queues.size(); core++) {
+            for (size_t agg = 0; agg < queues[core].size(); agg++) {
+                for (size_t b = 0; b < queues[core][agg].size(); b++) {
+                    BaseQueue* q = queues[core][agg][b];
+                    if (q)
+                        sample.push_back((double)q->queuesize());
+                }
+            }
+        }
+    }
+
+    FatTreeTopology* _top;
+    simtime_picosec _period;
+    vector<double> _sums;
+    uint64_t _samples;
+};
+
+static Route* make_sglb_background_route(BaseQueue* queue, Pipe* pipe, PacketSink* drop) {
+    Route* route = new Route();
+    route->push_back(queue);
+    route->push_back(pipe);
+    route->push_back(drop);
+    return route;
+}
+
+static bool add_first_sglb_background_link(
+        vector<SglbBackgroundSource*>& sources,
+        EventList& eventlist,
+        SglbBackgroundDropSink* drop,
+        const string& label,
+        const vector< vector< vector<BaseQueue*> > >& queues,
+        const vector< vector< vector<Pipe*> > >& pipes,
+        double rate_gbps,
+        uint32_t packet_size,
+        simtime_picosec on_time,
+        simtime_picosec off_time) {
+    for (size_t i = 0; i < queues.size(); i++) {
+        for (size_t j = 0; j < queues[i].size(); j++) {
+            for (size_t b = 0; b < queues[i][j].size(); b++) {
+                BaseQueue* queue = queues[i][j][b];
+                Pipe* pipe = NULL;
+                if (i < pipes.size() && j < pipes[i].size() && b < pipes[i][j].size())
+                    pipe = pipes[i][j][b];
+                if (!queue || !pipe)
+                    continue;
+
+                Route* route = make_sglb_background_route(queue, pipe, drop);
+                SglbBackgroundSource* source =
+                    new SglbBackgroundSource(eventlist, "sglb_bg_" + label, route,
+                                             rate_gbps, packet_size, on_time, off_time);
+                sources.push_back(source);
+                source->start();
+                cout << "SGLB background " << label
+                     << " on " << queue->nodename()
+                     << " rate " << rate_gbps
+                     << "Gbps on " << timeAsUs(on_time)
+                     << "us off " << timeAsUs(off_time)
+                     << "us packet " << packet_size
+                     << " bytes" << endl;
+                return true;
+            }
+        }
+    }
+    cout << "SGLB background " << label << " skipped: no live link" << endl;
+    return false;
+}
+
+static uint32_t install_sglb_background(FatTreeTopology* top,
+                                        EventList& eventlist,
+                                        vector<SglbBackgroundSource*>& sources,
+                                        SglbBackgroundDropSink* drop,
+                                        double rate_gbps,
+                                        uint32_t packet_size,
+                                        simtime_picosec on_time,
+                                        simtime_picosec off_time) {
+    uint32_t added = 0;
+    if (add_first_sglb_background_link(sources, eventlist, drop, "tor_to_leaf",
+                                       top->queues_nlp_nup, top->pipes_nlp_nup,
+                                       rate_gbps, packet_size, on_time, off_time))
+        added++;
+    if (add_first_sglb_background_link(sources, eventlist, drop, "leaf_to_tor",
+                                       top->queues_nup_nlp, top->pipes_nup_nlp,
+                                       rate_gbps, packet_size, on_time, off_time))
+        added++;
+    if (top->get_tiers() == 3) {
+        if (add_first_sglb_background_link(sources, eventlist, drop, "leaf_to_spine",
+                                           top->queues_nup_nc, top->pipes_nup_nc,
+                                           rate_gbps, packet_size, on_time, off_time))
+            added++;
+        if (add_first_sglb_background_link(sources, eventlist, drop, "spine_to_leaf",
+                                           top->queues_nc_nup, top->pipes_nc_nup,
+                                           rate_gbps, packet_size, on_time, off_time))
+            added++;
+    }
+    return added;
+}
+
 void exit_error(char* progr) {
-    cout << "Usage " << progr << " [-nodes N]\n\t[-conns C]\n\t[-q queue_size]\n\t[-queue_type composite|composite_ecn|lossless|lossless_input|lossless_input_ecn|lossy_input_ecn|lossy_ecn]\n\t[-tm traffic_matrix_file]\n\t[-lb ecmp|ecmp_rr|adaptive-routing|glb|drill|reps|n-mrc|rr|ops|conweave|ndp]\n\t[-cc none|dcqcn|dcqcn_variant|mprdma]\n\t[-cc_iw_pkts pkts]\n\t[-cc_min_cwnd_pkts pkts]\n\t[-cc_max_cwnd_pkts pkts]\n\t[-dcqcn_g x]\n\t[-dcqcn_initial_alpha x]\n\t[-dcqcn_ai_mbps x]\n\t[-dcqcn_min_rate_mbps x]\n\t[-dcqcn_alpha_us x]\n\t[-dcqcn_rate_us x]\n\t[-dcqcn_cnp_us x]\n\t[-dcqcn_byte_counter bytes]\n\t[-dcqcn_fast_recovery_steps N]\n\t[-roce_rx_mode gbn|sp]\n\t[-roce_ooo_us x]\n\t[-roce_loss_trace_window_pkts N]\n\t[-roce_loss_trace_window_ratio x]\n\t[-roce_ooo_window_pkts N]\n\t[-roce_ooo_window_ratio x]\n\t[-roce_bdp_bytes bytes]\n\t[-roce_nack_interval_us x]\n\t[-roce_rto_us x]\n\t[-roce_rto_high_us x]\n\t[-strat route_strategy (single,\n\tecmp_host,ecmp_ar,\n\tecmp_host_ar ar_thresh)]\n\t[-log log_level]\n\t[-seed random_seed]\n\t[-end end_time_in_usec]\n\t[-mtu MTU] default 4096\n\t[-linkspeed Mbps] default 400000\n\t[-hop_latency x] per hop wire latency in us, default 0.5\n\t[-switch_latency x] switching latency in us, default 0.5\n\t[-start_delta] time in us to randomly delay the start of connections\n\t[-slow_core_downlinks N]\n\t[-slow_core_downlink_divisor N]\n\t[-slow_tor_uplinks N]\n\t[-slow_tor_uplink_divisor N]\n\t[-nmrc_bad_hold_down_us x]\n\t[-nmrc_state_mode default|4-state]\n\t[-nmrc_weak_sample_pkts N]\n\t[-nmrc_ecn_degrade aggressive|graded]\n\t[-glb_update_us x]\n\t[-glb_weights q_weight util_weight remote_busy_weight]\n\t[-glb_factors local_q local_util remote_q remote_util remote_busy]\n\t[-glb_normalize]\n\t[-glb_downstream_weight x]\n\t[-glb_quality_bucket x]\n\t[-conweave_rtt_us x]\n\t[-ndp_cwnd pkts]\n\t[-pfc_thresholds low high]" << endl;
+    cout << "Usage " << progr << " [-nodes N]\n\t[-conns C]\n\t[-q queue_size]\n\t[-queue_type composite|composite_ecn|composite_ecn_lb|lossless|lossless_input|lossless_input_ecn|lossy_input_ecn|lossy_ecn]\n\t[-tm traffic_matrix_file]\n\t[-lb ecmp|ecmp_rr|adaptive-routing|glb|drill|reps|n-mrc|mrc|rr|ops|conweave|ndp]\n\t[-cc none|dcqcn|dcqcn_variant|mprdma]\n\t[-cc_iw_pkts pkts]\n\t[-cc_min_cwnd_pkts pkts]\n\t[-cc_max_cwnd_pkts pkts]\n\t[-dcqcn_g x]\n\t[-dcqcn_initial_alpha x]\n\t[-dcqcn_ai_mbps x]\n\t[-dcqcn_min_rate_mbps x]\n\t[-dcqcn_alpha_us x]\n\t[-dcqcn_rate_us x]\n\t[-dcqcn_cnp_us x]\n\t[-dcqcn_byte_counter bytes]\n\t[-dcqcn_fast_recovery_steps N]\n\t[-roce_rx_mode gbn|sp]\n\t[-roce_ooo_us x]\n\t[-roce_loss_trace_window_pkts N]\n\t[-roce_loss_trace_window_ratio x]\n\t[-roce_ooo_window_pkts N]\n\t[-roce_ooo_window_ratio x]\n\t[-roce_bdp_bytes bytes]\n\t[-roce_nack_interval_us x]\n\t[-roce_rto_us x]\n\t[-roce_rto_high_us x]\n\t[-strat route_strategy (single,\n\tecmp_host,ecmp_ar,\n\tecmp_host_ar ar_thresh)]\n\t[-log log_level]\n\t[-seed random_seed]\n\t[-end end_time_in_usec]\n\t[-mtu MTU] default 4096\n\t[-linkspeed Mbps] default 400000\n\t[-hop_latency x] per hop wire latency in us, default 0.5\n\t[-switch_latency x] switching latency in us, default 0.5\n\t[-start_delta] time in us to randomly delay the start of connections\n\t[-slow_core_downlinks N]\n\t[-slow_core_downlink_divisor N]\n\t[-slow_tor_uplinks N]\n\t[-slow_tor_uplink_divisor N]\n\t[-ecn_thresh fraction]\n\t[-nmrc_bad_hold_down_us x]\n\t[-nmrc_state_mode default|4-state]\n\t[-nmrc_weak_sample_pkts N]\n\t[-nmrc_ecn_degrade aggressive|graded]\n\t[-mrc_active_paths N]\n\t[-mrc_backup_paths N]\n\t[-mrc_min_active_paths N]\n\t[-mrc_ecn_cooldown_us x]\n\t[-mrc_failed_retry_us x]\n\t[-mrc_probe_interval_pkts N]\n\t[-glb_update_us x]\n\t[-glb_gcn_update_us x]\n\t[-glb_gcn_aging_us x]\n\t[-glb_weights q_weight util_weight remote_busy_weight]\n\t[-glb_factors local_q local_util remote_q remote_util remote_busy]\n\t[-glb_normalize]\n\t[-glb_downstream_weight x]\n\t[-glb_quality_bucket x]\n\t[-glb_quality_levels N]\n\t[-glb_min_choices N]\n\t[-conweave_rtt_us x]\n\t[-ndp_cwnd pkts]\n\t[-pfc_thresholds low high]" << endl;
+    cout << "\t[-roce_sack_bitmap_bits 64|128]" << endl;
+    cout << "\t[-dcqcn_nack_reaction cnp|ignore|rate_cut]" << endl;
     cout << "\t[-nmrc_unknown_reopen]" << endl;
+    cout << "\t[-glb_local_damping]" << endl;
+    cout << "\t[-sglb_background] [-sglb_bg_rate_gbps x] [-sglb_bg_on_us x] "
+         << "[-sglb_bg_off_us x] [-sglb_bg_packet_size bytes]" << endl;
+    cout << "\t[-queue_cv_sample_us x]" << endl;
     exit(1);
 }
 
@@ -69,10 +393,16 @@ int main(int argc, char **argv) {
     simtime_picosec start_delta = 0;
     queue_type qt = LOSSLESS_INPUT_ECN;
     float ar_sticky_delta = 10;
-    uint32_t ar_granularity = FatTreeSwitch::PER_FLOWLET;
+    uint32_t ar_granularity = FatTreeSwitch::PER_PACKET;
     RoceSrc::lb_mode_t roce_lb_mode = RoceSrc::LB_ECMP;
     RoceSrc::cc_mode_t roce_cc_mode = RoceSrc::CC_DCQCN_VARIANT;
     bool queue_user_set = false;
+    bool queue_type_user_set = false;
+    bool roce_rx_mode_user_set = false;
+    bool roce_cc_mode_user_set = false;
+    bool ecn_thresh_user_set = false;
+    bool path_entropy_user_set = false;
+    bool source_pathid_lb = false;
 
     queue_type snd_type = FAIR_PRIO;
 
@@ -86,6 +416,7 @@ int main(int argc, char **argv) {
     uint32_t cc_min_cwnd_pkts = 1;
     uint32_t cc_max_cwnd_pkts = 0;
     RoceSrc::rx_mode_t roce_rx_mode = RoceSrc::RX_GBN;
+    uint32_t roce_sack_bitmap_bits = ROCE_SACK_BITMAP_BITS_DEFAULT;
     double roce_ooo_us = 15.0;
     uint32_t roce_ooo_window_pkts = 32;
     double roce_ooo_window_ratio = 0.0;
@@ -102,6 +433,12 @@ int main(int argc, char **argv) {
     uint32_t slow_core_downlink_divisor = 10;
     uint32_t slow_tor_uplinks = 0;
     uint32_t slow_tor_uplink_divisor = 2;
+    bool sglb_background = false;
+    double sglb_bg_rate_gbps = 350.0;
+    double sglb_bg_on_us = 200.0;
+    double sglb_bg_off_us = 200.0;
+    uint32_t sglb_bg_packet_size = 0;
+    double queue_cv_sample_us = 0.0;
     double nmrc_bad_hold_down_us = 0.0;
     uint32_t nmrc_state_mode = 3;
     uint32_t nmrc_bad_cache_windows = 1;
@@ -110,6 +447,13 @@ int main(int argc, char **argv) {
     bool nmrc_unknown_reopen = true;
     double nmrc_feedback_min_us = 5.0;
     double nmrc_feedback_max_us = 20.0;
+    double ecn_thresh = 1.0;
+    uint32_t mrc_active_paths = 256;
+    uint32_t mrc_backup_paths = 256;
+    uint32_t mrc_min_active_paths = 16;
+    double mrc_ecn_cooldown_us = 20.0;
+    double mrc_failed_retry_us = 100.0;
+    uint32_t mrc_probe_interval_pkts = 256;
 
     bool log_sink = false;
     bool log_tor_downqueue = false;
@@ -155,6 +499,11 @@ int main(int argc, char **argv) {
             else if (!strcmp(argv[i+1], "composite_ecn")) {
                 qt = COMPOSITE_ECN;
             }
+            else if (!strcmp(argv[i+1], "composite_ecn_lb") ||
+                     !strcmp(argv[i+1], "mrc_trim_ecn") ||
+                     !strcmp(argv[i+1], "trim_ecn")) {
+                qt = COMPOSITE_ECN_LB;
+            }
             else if (!strcmp(argv[i+1], "lossless")) {
                 qt = LOSSLESS;
             }
@@ -173,6 +522,7 @@ int main(int argc, char **argv) {
                 exit_error(argv[0]);
             }
             cout << "queue_type "<< qt << endl;
+            queue_type_user_set = true;
             i++;
         } else if (!strcmp(argv[i],"-host_queue_type")) {
             if (!strcmp(argv[i+1], "swift")) {
@@ -255,6 +605,11 @@ int main(int argc, char **argv) {
                 FatTreeSwitch::set_strategy(FatTreeSwitch::ECMP);
                 roce_lb_mode = RoceSrc::LB_NMRC;
                 lb_scheme_name = "n-mrc";
+            } else if (!strcmp(argv[i+1], "mrc")) {
+                route_strategy = ECMP_FIB;
+                FatTreeSwitch::set_strategy(FatTreeSwitch::ECMP);
+                roce_lb_mode = RoceSrc::LB_MRC;
+                lb_scheme_name = "mrc";
             } else if (!strcmp(argv[i+1], "rr")) {
                 route_strategy = ECMP_FIB;
                 FatTreeSwitch::set_strategy(FatTreeSwitch::ECMP);
@@ -306,6 +661,7 @@ int main(int argc, char **argv) {
                 exit_error(argv[0]);
             }
             cout << "cc mode " << argv[i+1] << endl;
+            roce_cc_mode_user_set = true;
             i++;
         } else if (!strcmp(argv[i],"-logtime")){
             logtime = atof(argv[i+1]);            
@@ -324,6 +680,7 @@ int main(int argc, char **argv) {
             i++;
         } else if (!strcmp(argv[i],"-paths")){
             path_entropy_size = atoi(argv[i+1]);
+            path_entropy_user_set = true;
             cout << "no of paths " << path_entropy_size << endl;
             i++;
         } else if (!strcmp(argv[i],"-hop_latency")){
@@ -371,6 +728,43 @@ int main(int argc, char **argv) {
                 ndp_cwnd = 1;
             cout << "ndp initial receiver-pull window " << ndp_cwnd << " packets" << endl;
             i++;
+        } else if (!strcmp(argv[i],"-ecn_thresh")){
+            ecn_thresh = atof(argv[i+1]);
+            if (ecn_thresh < 0.0)
+                ecn_thresh = 0.0;
+            ecn_thresh_user_set = true;
+            cout << "Composite ECN threshold fraction " << ecn_thresh << endl;
+            i++;
+        } else if (!strcmp(argv[i],"-mrc_active_paths")){
+            mrc_active_paths = atoi(argv[i+1]);
+            cout << "MRC active EV set size " << mrc_active_paths << endl;
+            i++;
+        } else if (!strcmp(argv[i],"-mrc_backup_paths")){
+            mrc_backup_paths = atoi(argv[i+1]);
+            cout << "MRC backup EV set size " << mrc_backup_paths << endl;
+            i++;
+        } else if (!strcmp(argv[i],"-mrc_min_active_paths")){
+            mrc_min_active_paths = atoi(argv[i+1]);
+            if (!mrc_min_active_paths)
+                mrc_min_active_paths = 1;
+            cout << "MRC minimum active EVs " << mrc_min_active_paths << endl;
+            i++;
+        } else if (!strcmp(argv[i],"-mrc_ecn_cooldown_us")){
+            mrc_ecn_cooldown_us = atof(argv[i+1]);
+            if (mrc_ecn_cooldown_us < 0)
+                mrc_ecn_cooldown_us = 0;
+            cout << "MRC ECN cooldown " << mrc_ecn_cooldown_us << "us" << endl;
+            i++;
+        } else if (!strcmp(argv[i],"-mrc_failed_retry_us")){
+            mrc_failed_retry_us = atof(argv[i+1]);
+            if (mrc_failed_retry_us < 0)
+                mrc_failed_retry_us = 0;
+            cout << "MRC failed-path retry " << mrc_failed_retry_us << "us" << endl;
+            i++;
+        } else if (!strcmp(argv[i],"-mrc_probe_interval_pkts")){
+            mrc_probe_interval_pkts = atoi(argv[i+1]);
+            cout << "MRC background probe interval " << mrc_probe_interval_pkts << " packets" << endl;
+            i++;
         } else if (!strcmp(argv[i],"-roce_rx_mode")){
             if (!strcmp(argv[i+1], "gbn") || !strcmp(argv[i+1], "default")) {
                 roce_rx_mode = RoceSrc::RX_GBN;
@@ -382,6 +776,18 @@ int main(int argc, char **argv) {
                 exit_error(argv[0]);
             }
             cout << "RoCE receive mode " << argv[i+1] << endl;
+            roce_rx_mode_user_set = true;
+            i++;
+        } else if (!strcmp(argv[i],"-roce_sack_bitmap_bits")){
+            int requested_bits = atoi(argv[i+1]);
+            uint32_t normalized_bits = requested_bits > 0 ?
+                RoceSrc::normalizeSackBitmapBits((uint32_t)requested_bits) :
+                ROCE_SACK_BITMAP_BITS_DEFAULT;
+            roce_sack_bitmap_bits = normalized_bits;
+            cout << "RoCE SACK bitmap " << roce_sack_bitmap_bits << " bits";
+            if ((uint32_t)(requested_bits > 0 ? requested_bits : 0) != roce_sack_bitmap_bits)
+                cout << " (supported values are 64 and 128)";
+            cout << endl;
             i++;
         } else if (!strcmp(argv[i],"-roce_ooo_us")){
             roce_ooo_us = atof(argv[i+1]);
@@ -507,6 +913,19 @@ int main(int argc, char **argv) {
             RoceSrc::setDcqcnFastRecoverySteps(steps);
             cout << "DCQCN fast recovery steps " << steps << endl;
             i++;
+        } else if (!strcmp(argv[i],"-dcqcn_nack_reaction")){
+            if (!strcmp(argv[i+1], "cnp")) {
+                RoceSrc::setDcqcnNackReaction(RoceSrc::DCQCN_NACK_CNP);
+            } else if (!strcmp(argv[i+1], "ignore")) {
+                RoceSrc::setDcqcnNackReaction(RoceSrc::DCQCN_NACK_IGNORE);
+            } else if (!strcmp(argv[i+1], "rate_cut")) {
+                RoceSrc::setDcqcnNackReaction(RoceSrc::DCQCN_NACK_RATE_CUT);
+            } else {
+                cout << "Unknown DCQCN NACK reaction " << argv[i+1] << endl;
+                exit_error(argv[0]);
+            }
+            cout << "DCQCN NACK reaction " << argv[i+1] << endl;
+            i++;
         } else if (!strcmp(argv[i],"-slow_core_downlinks")){
             slow_core_downlinks = atoi(argv[i+1]);
             cout << "Slow core-to-agg downlinks " << slow_core_downlinks << endl;
@@ -527,12 +946,59 @@ int main(int argc, char **argv) {
                 slow_tor_uplink_divisor = 1;
             cout << "Slow ToR-to-agg uplink divisor " << slow_tor_uplink_divisor << endl;
             i++;
+        } else if (!strcmp(argv[i],"-sglb_background")){
+            sglb_background = true;
+            cout << "SGLB fixed-link background enabled" << endl;
+        } else if (!strcmp(argv[i],"-sglb_bg_rate_gbps")){
+            sglb_bg_rate_gbps = atof(argv[i+1]);
+            if (sglb_bg_rate_gbps < 0.0)
+                sglb_bg_rate_gbps = 0.0;
+            cout << "SGLB background rate " << sglb_bg_rate_gbps << "Gbps" << endl;
+            i++;
+        } else if (!strcmp(argv[i],"-sglb_bg_on_us")){
+            sglb_bg_on_us = atof(argv[i+1]);
+            if (sglb_bg_on_us < 0.0)
+                sglb_bg_on_us = 0.0;
+            cout << "SGLB background ON " << sglb_bg_on_us << "us" << endl;
+            i++;
+        } else if (!strcmp(argv[i],"-sglb_bg_off_us")){
+            sglb_bg_off_us = atof(argv[i+1]);
+            if (sglb_bg_off_us < 0.0)
+                sglb_bg_off_us = 0.0;
+            cout << "SGLB background OFF " << sglb_bg_off_us << "us" << endl;
+            i++;
+        } else if (!strcmp(argv[i],"-sglb_bg_packet_size")){
+            sglb_bg_packet_size = atoi(argv[i+1]);
+            cout << "SGLB background packet size " << sglb_bg_packet_size << " bytes" << endl;
+            i++;
+        } else if (!strcmp(argv[i],"-queue_cv_sample_us")){
+            queue_cv_sample_us = atof(argv[i+1]);
+            if (queue_cv_sample_us < 0.0)
+                queue_cv_sample_us = 0.0;
+            cout << "Queue CV sample interval " << queue_cv_sample_us << "us" << endl;
+            i++;
         } else if (!strcmp(argv[i],"-glb_update_us")){
             double glb_update_us = atof(argv[i+1]);
             if (glb_update_us < 0)
                 glb_update_us = 0;
             FatTreeSwitch::_glb_update_interval = timeFromUs(glb_update_us);
-            cout << "glb remote quality update interval " << glb_update_us << "us" << endl;
+            FatTreeSwitch::_glb_gcn_update_interval = FatTreeSwitch::_glb_update_interval;
+            cout << "glb GCN export update interval " << glb_update_us << "us" << endl;
+            i++;
+        } else if (!strcmp(argv[i],"-glb_gcn_update_us")){
+            double glb_update_us = atof(argv[i+1]);
+            if (glb_update_us < 0)
+                glb_update_us = 0;
+            FatTreeSwitch::_glb_gcn_update_interval = timeFromUs(glb_update_us);
+            FatTreeSwitch::_glb_update_interval = FatTreeSwitch::_glb_gcn_update_interval;
+            cout << "glb GCN export update interval " << glb_update_us << "us" << endl;
+            i++;
+        } else if (!strcmp(argv[i],"-glb_gcn_aging_us")){
+            double glb_aging_us = atof(argv[i+1]);
+            if (glb_aging_us < 0)
+                glb_aging_us = 0;
+            FatTreeSwitch::_glb_gcn_aging_interval = timeFromUs(glb_aging_us);
+            cout << "glb GCN aging interval " << glb_aging_us << "us" << endl;
             i++;
         } else if (!strcmp(argv[i],"-glb_weights")){
             FatTreeSwitch::_glb_queue_weight = atof(argv[i+1]);
@@ -559,6 +1025,9 @@ int main(int argc, char **argv) {
         } else if (!strcmp(argv[i],"-glb_normalize")){
             FatTreeSwitch::_glb_normalize_scores = true;
             cout << "glb normalized queue/util factors enabled" << endl;
+        } else if (!strcmp(argv[i],"-glb_local_damping")){
+            FatTreeSwitch::_glb_local_damping = true;
+            cout << "glb local-pressure downstream damping enabled" << endl;
         } else if (!strcmp(argv[i],"-glb_downstream_weight")){
             FatTreeSwitch::_glb_downstream_weight = atof(argv[i+1]);
             cout << "glb downstream weight " << FatTreeSwitch::_glb_downstream_weight << endl;
@@ -568,6 +1037,19 @@ int main(int argc, char **argv) {
             if (FatTreeSwitch::_glb_quality_bucket <= 0.0)
                 FatTreeSwitch::_glb_quality_bucket = 1.0;
             cout << "glb quality bucket " << FatTreeSwitch::_glb_quality_bucket << endl;
+            i++;
+        } else if (!strcmp(argv[i],"-glb_quality_levels")){
+            FatTreeSwitch::_glb_quality_levels = atoi(argv[i+1]);
+            if (!FatTreeSwitch::_glb_quality_levels)
+                FatTreeSwitch::_glb_quality_levels = 1;
+            FatTreeSwitch::_glb_max_quality = FatTreeSwitch::_glb_quality_levels - 1;
+            cout << "glb quality levels " << FatTreeSwitch::_glb_quality_levels << endl;
+            i++;
+        } else if (!strcmp(argv[i],"-glb_min_choices")){
+            FatTreeSwitch::_glb_min_choices = atoi(argv[i+1]);
+            if (!FatTreeSwitch::_glb_min_choices)
+                FatTreeSwitch::_glb_min_choices = 1;
+            cout << "glb minimum sprayed choices " << FatTreeSwitch::_glb_min_choices << endl;
             i++;
         } else if (!strcmp(argv[i],"-nmrc_feedback_pkts")){
             cout << "n-mrc feedback packet threshold is canonical auto(path_count); ignoring deprecated value " << argv[i+1] << endl;
@@ -746,7 +1228,38 @@ int main(int argc, char **argv) {
     srandom(seed);
 
     cout << "Parsed args\n";
+    if (!sglb_bg_packet_size)
+        sglb_bg_packet_size = packet_size;
     Packet::set_packet_size(packet_size);
+
+    if (roce_lb_mode == RoceSrc::LB_MRC) {
+        if (!queue_type_user_set) {
+            qt = COMPOSITE_ECN_LB;
+            cout << "MRC default queue_type composite_ecn_lb (trim + priority headers + ECN)" << endl;
+        }
+        if (!roce_rx_mode_user_set) {
+            roce_rx_mode = RoceSrc::RX_SP_RETX_QUEUE;
+            cout << "MRC default receive mode sp (SACK/selective retransmission)" << endl;
+        }
+        if (!roce_cc_mode_user_set) {
+            roce_cc_mode = RoceSrc::CC_NONE;
+            cout << "MRC default cc none (ECN drives path avoidance, not DCQCN rate control)" << endl;
+        }
+        if (!ecn_thresh_user_set) {
+            ecn_thresh = 0.8;
+            cout << "MRC default composite ECN threshold fraction " << ecn_thresh << endl;
+        }
+    }
+
+    source_pathid_lb = (roce_lb_mode == RoceSrc::LB_NMRC ||
+                        roce_lb_mode == RoceSrc::LB_MRC ||
+                        roce_lb_mode == RoceSrc::LB_RR ||
+                        roce_lb_mode == RoceSrc::LB_CONWEAVE ||
+                        roce_lb_mode == RoceSrc::LB_NDP);
+    if (source_pathid_lb && !path_entropy_user_set && path_entropy_size > 10000) {
+        path_entropy_size = 1;
+        cout << "source-controlled LB will auto-calibrate path count from topology" << endl;
+    }
 
     uint32_t one_way_links = tiers == 3 ? 6 : 4;
     uint32_t one_way_switches = tiers == 3 ? 5 : 3;
@@ -801,8 +1314,8 @@ int main(int argc, char **argv) {
             cout << " (high " << roce_rto_high_us << "us)";
         cout << ", OOO tolerance " << roce_ooo_us
              << "us, NACK interval " << roce_nack_interval_us << "us" << endl;
-        cout << "RoCE SP SACK feedback uses 16-bit offset + "
-             << ROCE_SACK_BITMAP_BITS << "-bit data bitmap" << endl;
+        cout << "RoCE SP SACK feedback uses aPSN + bitmap_start_psn + valid_len + "
+             << roce_sack_bitmap_bits << "-bit data bitmap" << endl;
     }
 
     if (roce_ooo_window_ratio > 0.0) {
@@ -818,29 +1331,38 @@ int main(int argc, char **argv) {
             roce_ooo_window_pkts = 1;
         cout << "RoCE loss trace window from ratio " << roce_ooo_window_ratio
              << " = " << roce_ooo_window_pkts << " packets" << endl;
-        if (roce_ooo_window_pkts > ROCE_SACK_BITMAP_BITS) {
+        if (roce_ooo_window_pkts > roce_sack_bitmap_bits) {
             cout << "RoCE loss trace window exceeds one SACK bitmap; "
-                 << "offsetted SACK blocks report " << ROCE_SACK_BITMAP_BITS
+                 << "offsetted SACK blocks report " << roce_sack_bitmap_bits
                  << " packets at a time" << endl;
         }
-    } else if (roce_ooo_window_user_set && roce_ooo_window_pkts > ROCE_SACK_BITMAP_BITS) {
+    } else if (roce_ooo_window_user_set && roce_ooo_window_pkts > roce_sack_bitmap_bits) {
         cout << "RoCE loss trace window " << roce_ooo_window_pkts
              << " packets exceeds one SACK bitmap; offsetted SACK blocks report "
-             << ROCE_SACK_BITMAP_BITS << " packets at a time" << endl;
+             << roce_sack_bitmap_bits << " packets at a time" << endl;
     }
 
     FatTreeSwitch::_ar_sticky = ar_granularity;
     FatTreeSwitch::_sticky_delta = timeFromUs(ar_sticky_delta);
+    FatTreeSwitch::_ecn_threshold_fraction = ecn_thresh;
     FatTreeSwitch::_nmrc_feedback_min_interval = timeFromUs(nmrc_feedback_min_us);
     FatTreeSwitch::_nmrc_feedback_max_interval = timeFromUs(nmrc_feedback_max_us);
-    bool source_pathid_lb = (roce_lb_mode == RoceSrc::LB_NMRC ||
-                             roce_lb_mode == RoceSrc::LB_RR ||
-                             roce_lb_mode == RoceSrc::LB_CONWEAVE ||
-                             roce_lb_mode == RoceSrc::LB_NDP);
     FatTreeSwitch::_pathid_only_hash = source_pathid_lb;
+    if (FatTreeSwitch::_strategy == FatTreeSwitch::GLB) {
+        cout << "GLB effective config: GCN update "
+             << timeAsUs(FatTreeSwitch::_glb_gcn_update_interval)
+             << "us, aging " << timeAsUs(FatTreeSwitch::_glb_gcn_aging_interval)
+             << "us, quality levels " << FatTreeSwitch::_glb_quality_levels
+             << ", bucket " << FatTreeSwitch::_glb_quality_bucket
+             << ", min choices " << FatTreeSwitch::_glb_min_choices
+             << ", downstream weight " << FatTreeSwitch::_glb_downstream_weight
+             << ", local damping " << (FatTreeSwitch::_glb_local_damping ? "on" : "off")
+             << endl;
+    }
 
     RoceSrc::setLoadBalancing(roce_lb_mode);
     RoceSrc::setPathEntropySize(path_entropy_size);
+    RoceSrc::setSackBitmapBits(roce_sack_bitmap_bits);
     RoceSrc::setReceiveMode(roce_rx_mode);
     RoceSrc::setOooTolerance(timeFromUs(roce_ooo_us));
     RoceSrc::setOooWindowPkts(roce_ooo_window_pkts);
@@ -848,6 +1370,11 @@ int main(int argc, char **argv) {
     RoceSrc::setMinRTO(roce_rto_us);
     RoceSrc::setHighRTO(roce_rto_high_us);
     RoceSrc::setRepsBufferSize(reps_buffer);
+    RoceSrc::setRepsWarmupPkts(roce_lb_mode == RoceSrc::LB_REPS ? estimated_bdp_pkts : 0);
+    if (roce_lb_mode == RoceSrc::LB_REPS) {
+        cout << "REPS warmup exploration " << estimated_bdp_pkts
+             << " packets (1BDP)" << endl;
+    }
     RoceSrc::setConweaveRttThreshold(timeFromUs(conweave_rtt_us));
     RoceSrc::setConweaveMinRerouteGap(timeFromUs(conweave_min_reroute_us));
     RoceSrc::setNdpInitialWindow(ndp_cwnd);
@@ -984,6 +1511,24 @@ int main(int argc, char **argv) {
         top->add_switch_loggers(logfile, timeFromUs(20.0));
     }
 
+    SglbBackgroundDropSink* sglb_bg_drop = NULL;
+    vector<SglbBackgroundSource*> sglb_bg_sources;
+    if (sglb_background) {
+        sglb_bg_drop = new SglbBackgroundDropSink();
+        uint32_t added = install_sglb_background(
+            top, eventlist, sglb_bg_sources, sglb_bg_drop,
+            sglb_bg_rate_gbps, sglb_bg_packet_size,
+            timeFromUs(sglb_bg_on_us), timeFromUs(sglb_bg_off_us));
+        cout << "SGLB background installed " << added << " fixed-link sources" << endl;
+    }
+
+    SglbQueueCvSampler* queue_cv_sampler = NULL;
+    if (queue_cv_sample_us > 0.0) {
+        queue_cv_sampler = new SglbQueueCvSampler(eventlist, top, timeFromUs(queue_cv_sample_us));
+        queue_cv_sampler->start();
+        cout << "Queue CV sampler enabled every " << queue_cv_sample_us << "us" << endl;
+    }
+
     if (source_pathid_lb) {
         uint32_t path_combo = top->radix_up(TOR_TIER);
         if (top->get_tiers() == 3) {
@@ -1034,6 +1579,28 @@ int main(int argc, char **argv) {
              << ", ecn_degrade_mode " << nmrc_ecn_degrade_mode
              << ", unknown_reopen " << nmrc_unknown_reopen << endl;
     }
+    if (roce_lb_mode == RoceSrc::LB_MRC) {
+        uint32_t effective_mrc_active = mrc_active_paths ? mrc_active_paths : nmrc_path_space;
+        uint32_t effective_mrc_backup = mrc_backup_paths ? mrc_backup_paths : effective_mrc_active;
+        uint32_t effective_mrc_logical = effective_mrc_active + effective_mrc_backup;
+        if (effective_mrc_logical < nmrc_path_space)
+            effective_mrc_logical = nmrc_path_space;
+        if (!effective_mrc_logical)
+            effective_mrc_logical = 1;
+        if (effective_mrc_active > effective_mrc_logical)
+            effective_mrc_active = effective_mrc_logical;
+        if (effective_mrc_backup > effective_mrc_logical - effective_mrc_active)
+            effective_mrc_backup = effective_mrc_logical - effective_mrc_active;
+        cout << "MRC: paths " << nmrc_path_space
+             << ", logical_evs " << effective_mrc_logical
+             << ", active_evs " << effective_mrc_active
+             << ", backup_evs " << effective_mrc_backup
+             << ", min_active_paths " << mrc_min_active_paths
+             << ", ecn_cooldown_us " << mrc_ecn_cooldown_us
+             << ", failed_retry_us " << mrc_failed_retry_us
+             << ", probe_interval_pkts " << mrc_probe_interval_pkts
+             << ", composite_ecn_threshold_fraction " << ecn_thresh << endl;
+    }
     RoceSrc::setNmrcMinGoodPaths(effective_nmrc_min_good_paths);
     RoceSrc::setNmrcBadHoldDown(timeFromUs(nmrc_bad_hold_down_us));
     RoceSrc::setNmrcStateMode(nmrc_state_mode);
@@ -1041,6 +1608,12 @@ int main(int argc, char **argv) {
     RoceSrc::setNmrcWeakSamplePkts(nmrc_weak_sample_pkts);
     RoceSrc::setNmrcEcnDegradeMode(nmrc_ecn_degrade_mode);
     RoceSrc::setNmrcUnknownReopen(nmrc_unknown_reopen);
+    RoceSrc::setMrcActivePaths(mrc_active_paths);
+    RoceSrc::setMrcBackupPaths(mrc_backup_paths);
+    RoceSrc::setMrcMinActivePaths(mrc_min_active_paths);
+    RoceSrc::setMrcEcnCooldown(timeFromUs(mrc_ecn_cooldown_us));
+    RoceSrc::setMrcFailedRetry(timeFromUs(mrc_failed_retry_us));
+    RoceSrc::setMrcProbeIntervalPkts(mrc_probe_interval_pkts);
     RoceSrc::setPathEntropySize(path_entropy_size);
 
     vector<const Route*>*** net_paths;
@@ -1077,6 +1650,14 @@ int main(int argc, char **argv) {
     if (conns->N != no_of_nodes){
         cout << "Connection matrix number of nodes is " << conns->N << " while I am using " << no_of_nodes << endl;
         exit(-1);
+    }
+
+    // handle link failures specified in the connection matrix.
+    for (size_t c = 0; c < conns->failures.size(); c++){
+        failure* crt = conns->failures.at(c);
+
+        cout << "Adding link failure switch type" << crt->switch_type << " Switch ID " << crt->switch_id << " link ID "  << crt->link_id << endl;
+        top->add_failed_link(crt->switch_type,crt->switch_id,crt->link_id);
     }
     
     vector<connection*>* all_conns;
@@ -1191,9 +1772,11 @@ int main(int argc, char **argv) {
             int choice = rand()%net_paths[src][dest]->size();
             routeout = new Route(*(net_paths[src][dest]->at(choice)));
             routeout->add_endpoints(roceSrc, roceSnk);
+            routeout->push_back(roceSnk);
                                 
             routein = new Route(*top->get_bidir_paths(dest,src,false)->at(choice));
             routein->add_endpoints(roceSnk, roceSrc);
+            routein->push_back(roceSrc);
             roceSrc->connect(routeout, routein, *roceSnk, timeFromUs((uint32_t)rand()%20));
         }
 
@@ -1246,11 +1829,35 @@ int main(int argc, char **argv) {
 
     cout << "Done" << endl;
     int new_pkts = 0, rtx_pkts = 0;
+    uint64_t ack_pkts = 0, nack_pkts = 0;
     for (size_t ix = 0; ix < roce_srcs.size(); ix++) {
         new_pkts += roce_srcs[ix]->_new_packets_sent;
         rtx_pkts += roce_srcs[ix]->_rtx_packets_sent;
+        ack_pkts += roce_srcs[ix]->_acks_received;
+        nack_pkts += roce_srcs[ix]->_nacks_received;
     }
     cout << "New: " << new_pkts << " Rtx: " << rtx_pkts << endl;
+    cout << "RoceDiag "
+         << "acks=" << ack_pkts
+         << " nacks=" << nack_pkts
+         << " rtos=" << RoceSrc::_global_rto_count
+         << endl;
+    QueueDiag queue_diag = collect_queue_diag(top);
+    cout << "QueueDiag "
+         << "lossless_overflows=" << queue_diag.lossless_overflows
+         << " lossy_drops=" << queue_diag.lossy_drops
+         << " lossy_ecn_marks=" << queue_diag.lossy_ecn_marks
+         << " composite_trims=" << queue_diag.composite_trims
+         << " composite_drops=" << queue_diag.composite_drops
+         << " composite_ecn_marks=" << queue_diag.composite_ecn_marks
+         << endl;
+    if (queue_cv_sampler) {
+        cout << "QueueCvDiag "
+             << "spine_queue_cv=" << queue_cv_sampler->cv()
+             << " spine_queue_avg=" << queue_cv_sampler->average_queue()
+             << " spine_queue_count=" << queue_cv_sampler->count()
+             << endl;
+    }
 
     /*list <const Route*>::iterator rt_i;
       int counts[10]; int hop;

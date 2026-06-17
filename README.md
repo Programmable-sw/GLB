@@ -4,6 +4,8 @@
 
 n-mrc 是一种 tor-feedback source-controlled packet-level 负载均衡方案。源端为每个 packet 选择一个 EV/pathid；交换机在每个 ecmp stage 解释该 EV；目的 ToR 聚合路径观测并把紧凑的 path-state feedback 返回给源端；源端再用按 `(src ToR, dst ToR)` 共享的路径健康 bitmap 选择后续 packet 的 EV。这样可以避免维护大规模 per-flow/per-QP 路径表，同时让同一 ToR-pair 下的多个 flow 共享路径健康信息。
 
+独立 `mrc` 模式的 calibrated RoCE/队列/DCQCN 基线、默认参数以及 `-lb mrc` 到论文机制的映射，见 `MRC_IMPLEMENTATION.md`。
+
 ## 仓库结构
 
 - `sim/`：htsim C++ 离散事件仿真器。
@@ -40,19 +42,20 @@ n-mrc 把一个 EV 看作完整的端到端路径组合。2-tier 拓扑中，EV 
 | `rr` | 源端按确定性序列轮转 EV/pathid，实现无反馈但覆盖更均匀的 source-controlled rr；随机 EV spraying 对应 `ops`。 |
 | `reps` | ACK 回传近期未 ECN 的 pathid，源端优先复用 clean EV；没有反馈时随机。 |
 | `n-mrc` | 源端按 ToR-pair 共享 recent-bad EV bitmap，目的 ToR 聚合 ECN bad 观测并反馈，源端逐包避开最近拥塞 EV。 |
+| `mrc` | 独立 Multipath RC 风格模式；每个 QP 维护 active/backup EV 集，ECN 临时避开拥塞 EV，NACK/SACK/RTO 标记 failed EV 并换入 backup；默认使用 trim+ECN 队列、SP/SACK、无 DCQCN。 |
 | `conweave` | RTT 超过阈值后切换 pathid，减少持续走拥塞路径的概率。 |
 | `adaptive-routing` | 交换机按本地队列拥塞情况在可用下一跳中选择端口。 |
 | `drill` | 交换机结合随机候选和历史候选端口，优先选择拥塞较低的下一跳。 |
-| `glb` | 交换机把本地队列、链路利用率和下游状态合成评分后选择下一跳。 |
+| `glb` | 交换机把本地队列/利用率与 next-hop 周期导出的下游 GCN 快照合成评分，在量化质量等级内喷洒；LSN 钩子可在链路故障时硬屏蔽邻居。 |
 
-从粒度上看，`ops`、`rr`、`reps` 和 `n-mrc` 都是源端逐包选择 EV/pathid；`ecmp` 使用固定 pathid，`conweave` 只在 RTT 触发时切换 pathid，不做逐包 spraying。`ecmp_rr`、`drill` 和 `glb` 属于交换机侧逐包/逐跳选择 next-hop；`adaptive-routing` 默认使用 flowlet sticky，只有配置为 packet granularity 时才是交换机侧逐包选择。
+从粒度上看，`ops`、`rr`、`reps` 和 `n-mrc` 都是源端逐包选择 EV/pathid；`ecmp` 使用固定 pathid，`conweave` 只在 RTT 触发时切换 pathid，不做逐包 spraying。`ecmp_rr`、`drill`、`glb` 和当前 `adaptive-routing` 默认都属于交换机侧逐包/逐跳选择 next-hop；`adaptive-routing` 仍可通过 `-ar_granularity flowlet` 切到 flowlet sticky。
 
 ## 标准测试场景
 
 | 场景 | 拓扑 | 链路条件 | Flow size | 对比方案 |
 | --- | --- | --- | --- | --- |
-| 健康网络 | 2048 nodes / 2-tier | 全链路 400Gbps | 4/32MiB | ecmp / ops / reps / n-mrc |
-| 非对称带宽 | 1024 nodes / 3-tier | 3% ToR 上行半带宽，即 200Gbps | 8/32MiB | ecmp / ops / reps / n-mrc |
+| 健康网络 | 2048 nodes / 2-tier | 全链路 400Gbps | 4/32MiB | ecmp / ops / reps / n-mrc / mrc / glb / adaptive-routing / drill |
+| 非对称带宽 | 1024 nodes / 3-tier | 3% ToR 上行半带宽，即 200Gbps | 8/32MiB | ecmp / ops / reps / n-mrc / mrc / glb / adaptive-routing / drill |
 
 通用参数：
 
@@ -145,6 +148,7 @@ python3 experiments/n-mrc/run_literature_metric_compare.py
 | `SCENARIO_TRAFFIC` | `tornado` | 支持 `tornado` / `permutation`。 |
 | `SCENARIO_CC` | `dcqcn_variant` | 可改为 `dcqcn`。 |
 | `SCENARIO_RX_MODE` | `gbn` | RoCE 接收/重传模式；设为 `sp` 使用 SACK bitmap 选择性重传。 |
+| `SCENARIO_SACK_BITMAP_BITS` | `64` | SACK bitmap 位宽；默认 64-bit 对齐 MRC spec，可设 `128` 做覆盖度/性能对照。 |
 | `SCENARIO_INCLUDE_NMRC_4STATE` | unset | 设为 `1` 时额外比较旧版 `n-mrc-4state`。 |
 | `SCENARIO_OUT` | 自动生成 | 输出目录。 |
 | `KEEP_RAW_OUTPUT` | unset | 设为 `1` 时保留 `.cmd`、`.stdout`、`.dat` 和 `.cm` 文件。 |
@@ -179,10 +183,11 @@ python3 experiments/n-mrc/run_glb_factor_compare.py
 - `experiments/n-mrc/run_literature_metric_compare.py`：标准场景生成、命令拼接、指标解析和报告生成。
 - `experiments/n-mrc/run_glb_factor_compare.py`：glb 参数对比。
 - `sim/datacenter/main_roce.cpp`：RoCE CLI 参数、LB 模式选择、EV 空间按拓扑自动校准。
-- `sim/roce.cpp` / `sim/roce.h`：源端 `ecmp`、`ops`、`reps`、`n-mrc` 选路状态机和 ACK feedback 更新。
+- `sim/roce.cpp` / `sim/roce.h`：源端 `ecmp`、`ops`、`reps`、`n-mrc`、`mrc` 选路状态机和 ACK/NACK feedback 更新。
 - `sim/rocepacket.h`：RoCE packet/ACK 上携带 pathid 和 n-mrc bitmap feedback。
 - `sim/datacenter/fat_tree_switch.cpp` / `sim/datacenter/fat_tree_switch.h`：交换机 ecmp / adaptive-routing / drill / glb 转发、source-controlled pathid 分段映射、n-mrc feedback 生成。
 - `sim/datacenter/fat_tree_topology.cpp` / `sim/datacenter/fat_tree_topology.h`：generated fat-tree 拓扑、bundle/radix 参数、慢链路注入。
+- `MRC_IMPLEMENTATION.md`：独立 `mrc` 模式的实现细节、默认 CC/队列/参数、已实现机制和当前近似范围。
 
 ## 清理
 

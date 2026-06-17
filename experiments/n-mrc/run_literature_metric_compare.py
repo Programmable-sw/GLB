@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# 运行健康/非对称 n-mrc 主线场景，覆盖 4/8/16/32MiB tornado 流和 ECMP/OPS/REPS/n-mrc。
 import csv
 import math
 import os
@@ -25,6 +26,7 @@ SEED = int(os.environ.get("SCENARIO_SEED", "13"))
 END_US = int(os.environ.get("SCENARIO_END_US", "10000"))
 CC_MODE = os.environ.get("SCENARIO_CC", "dcqcn_variant")
 RX_MODE = os.environ.get("SCENARIO_RX_MODE", "gbn")
+SACK_BITMAP_BITS = int(os.environ.get("SCENARIO_SACK_BITMAP_BITS", "64"))
 INCLUDE_NMRC_4STATE = os.environ.get("SCENARIO_INCLUDE_NMRC_4STATE") == "1"
 INCLUDE_STATELESS = os.environ.get("SCENARIO_INCLUDE_STATELESS") == "1"
 
@@ -330,6 +332,8 @@ def command_for(scenario, variant, tm, dat_file, flow_count, slow_tor_uplinks):
         CC_MODE,
         "-roce_rx_mode",
         RX_MODE,
+        "-roce_sack_bitmap_bits",
+        str(SACK_BITMAP_BITS),
         "-hop_latency",
         "0.5",
         "-switch_latency",
@@ -390,6 +394,8 @@ def run_scenario(scenario):
             "traffic": scenario["traffic"],
             "flow_size_mib": scenario["flow_size_mib"],
             "cc": CC_MODE,
+            "rx_mode": RX_MODE,
+            "sack_bitmap_bits": SACK_BITMAP_BITS,
             "total_flows": len(flows),
             "total_tor_uplinks": total_tor_uplinks,
             "slow_tor_uplinks": slow_tor_uplinks,
@@ -469,6 +475,8 @@ def write_plan(path):
     lines = [
         "# Scenario Plan",
         "",
+        f"RoCE: `rx_mode={RX_MODE}`, `sack_bitmap_bits={SACK_BITMAP_BITS}`, `cc={CC_MODE}`.",
+        "",
         "| scenario | category | topology | flow size | traffic | description |",
         "| --- | --- | --- | --- | --- | --- |",
     ]
@@ -499,6 +507,8 @@ def write_report(summary_rows, path):
         "# ecmp / ops / reps / n-mrc Scenario Comparison",
         "",
         "当前脚本覆盖健康网络和非对称带宽两类主线场景；背景流/热点、链路故障场景暂不展开。",
+        "",
+        f"RoCE: `rx_mode={RX_MODE}`, `sack_bitmap_bits={SACK_BITMAP_BITS}`, `cc={CC_MODE}`.",
         "",
         "## Best Variant By Scenario",
         "",

@@ -144,21 +144,35 @@ class RoceAck : public Packet {
 class RoceNack : public Packet {
  public:
     typedef RocePacket::seq_t seq_t;
+    typedef enum {LOSS = 0, TRIM = 1, OOO = 2} nack_reason_t;
 
     inline static RoceNack* newpkt(PacketFlow &flow, const Route &route,
                                   seq_t ackno,
                                   uint32_t destination = UINT32_MAX,
                                   uint64_t sack_bitmap = 0,
                                   uint16_t sack_offset = 0,
-                                  bool has_sack = false) {
+                                  bool has_sack = false,
+                                  uint64_t sack_bitmap_high = 0,
+                                  seq_t sack_bitmap_start_psn = 0,
+                                  uint16_t sack_bitmap_valid_length = 0,
+                                  uint16_t sack_bitmap_encoded_bits = 64) {
                 RoceNack* p = _packetdb.allocPacket();
-                p->set_route(flow,route,RocePacket::ACKSIZE,ackno);
+                uint32_t packet_size = RocePacket::ACKSIZE;
+                if (has_sack && sack_bitmap_encoded_bits > 64)
+                    packet_size += sizeof(uint64_t);
+                p->set_route(flow,route,packet_size,ackno);
                 p->_type = ROCENACK;
                 p->_is_header = true;
                 p->_ackno = ackno;
                 p->_sack_bitmap = sack_bitmap;
+                p->_sack_bitmap_high = sack_bitmap_high;
                 p->_sack_offset = sack_offset;
+                p->_sack_bitmap_start_psn = sack_bitmap_start_psn ?
+                    sack_bitmap_start_psn : ackno + 1;
+                p->_sack_bitmap_valid_length = has_sack ?
+                    sack_bitmap_valid_length : 0;
                 p->_has_sack = has_sack;
+                p->_reason = LOSS;
                 p->_direction = NONE;
                 p->set_dst(destination);
                 return p;
@@ -166,23 +180,43 @@ class RoceNack : public Packet {
 
     void free() {_packetdb.freePacket(this);}
     inline seq_t ackno() const {return _ackno;}
+    inline seq_t apsn() const {return _ackno;}
     inline uint64_t sack_bitmap() const {return _sack_bitmap;}
+    inline uint64_t sack_bitmap_low() const {return _sack_bitmap;}
+    inline uint64_t sack_bitmap_high() const {return _sack_bitmap_high;}
     inline uint16_t sack_offset() const {return _sack_offset;}
+    inline seq_t sack_bitmap_start_psn() const {return _sack_bitmap_start_psn;}
+    inline uint16_t sack_bitmap_valid_length() const {return _sack_bitmap_valid_length;}
     inline bool has_sack() const {return _has_sack;}
     inline void set_sack_bitmap(uint64_t bitmap) {_sack_bitmap = bitmap;}
+    inline void set_sack_bitmap_high(uint64_t bitmap) {_sack_bitmap_high = bitmap;}
     inline void set_sack_offset(uint16_t offset) {_sack_offset = offset;}
+    inline void set_sack_bitmap_start_psn(seq_t psn) {_sack_bitmap_start_psn = psn;}
+    inline void set_sack_bitmap_valid_length(uint16_t length) {_sack_bitmap_valid_length = length;}
     inline void set_has_sack(bool has_sack) {_has_sack = has_sack;}
+    inline bool sack_bit(uint32_t bit) const {
+        if (bit >= 128)
+            return false;
+        return bit < 64 ? (_sack_bitmap & (1ULL << bit)) :
+            (_sack_bitmap_high & (1ULL << (bit - 64)));
+    }
+    inline nack_reason_t reason() const {return _reason;}
+    inline void set_reason(nack_reason_t reason) {_reason = reason;}
     inline simtime_picosec ts() const {return _ts;}
     inline void set_ts(simtime_picosec ts) {_ts = ts;}
     virtual PktPriority priority() const {return Packet::PRIO_HI;}
   
     virtual ~RoceNack(){}
 
- protected:
+protected:
     seq_t _ackno;
     uint64_t _sack_bitmap;
+    uint64_t _sack_bitmap_high;
     uint16_t _sack_offset;
+    seq_t _sack_bitmap_start_psn;
+    uint16_t _sack_bitmap_valid_length;
     bool _has_sack;
+    nack_reason_t _reason;
     simtime_picosec _ts;
     static PacketDB<RoceNack> _packetdb;
 };

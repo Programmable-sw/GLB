@@ -6,13 +6,28 @@ CFLAGS = -Wall -std=c++11 -g -Wsign-compare
 #CFLAGS += -fsanitize=address -fno-omit-frame-pointer -fsanitize=undefined
 CFLAGS += -O2
 
-all:	htsim_dumbell_ndp htsim_dumbell_ndptunnel htsim_dumbell_tcp htsim_dumbell_swift htsim_multihop_swift htsim_multihop_swift2 htsim_bidir_swift htsim_bidir_ndp htsim_multipath_swift htsim_trigger_test htsim_dumbell_roce htsim_dumbell_hpcc htsim_dumbell_strack
+all:	htsim_dumbell_ndp htsim_dumbell_ndptunnel htsim_dumbell_tcp htsim_dumbell_swift htsim_multihop_swift htsim_multihop_swift2 htsim_bidir_swift htsim_bidir_ndp htsim_multipath_swift htsim_trigger_test htsim_dumbell_roce htsim_roce_gbn_ooo htsim_roce_sack_fields htsim_roce_schedule htsim_roce_reps_warmup htsim_glb_quality htsim_dumbell_hpcc htsim_dumbell_strack
 
 htsim_dumbell_ndp:  main_dumbell_ndp.o $(LIBDEP)
 	$(CC) $(CFLAGS) main_dumbell_ndp.o -o htsim_dumbell_ndp $(LIBS)
 
 htsim_dumbell_roce:	main_dumbell_roce.o $(LIBDEP)
 	$(CC) $(CFLAGS) main_dumbell_roce.o -o htsim_dumbell_roce $(LIBS)
+
+htsim_roce_gbn_ooo:	main_roce_gbn_ooo.o $(LIBDEP)
+	$(CC) $(CFLAGS) main_roce_gbn_ooo.o -o htsim_roce_gbn_ooo $(LIBS)
+
+htsim_roce_sack_fields:	main_roce_sack_fields.o $(LIBDEP)
+	$(CC) $(CFLAGS) main_roce_sack_fields.o -o htsim_roce_sack_fields $(LIBS)
+
+htsim_roce_schedule:	main_roce_schedule.o $(LIBDEP)
+	$(CC) $(CFLAGS) main_roce_schedule.o -o htsim_roce_schedule $(LIBS)
+
+htsim_roce_reps_warmup:	main_roce_reps_warmup.o $(LIBDEP)
+	$(CC) $(CFLAGS) main_roce_reps_warmup.o -o htsim_roce_reps_warmup $(LIBS)
+
+htsim_glb_quality:	main_glb_quality.o $(LIBDEP)
+	$(CC) $(CFLAGS) main_glb_quality.o -o htsim_glb_quality $(LIBS)
 
 htsim_dumbell_hpcc:	main_dumbell_hpcc.o $(LIBDEP)
 	$(CC) $(CFLAGS) main_dumbell_hpcc.o -o htsim_dumbell_hpcc $(LIBS)

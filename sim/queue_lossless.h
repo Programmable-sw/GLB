@@ -24,6 +24,7 @@ public:
     void beginService();
     void completeService();
     void initThresholds();
+    uint64_t overflow_count() const { return _overflow_count; }
 
     //    void setSwitch(Switch *s) {_switch = s;};
     //Switch* getSwitch() {return _switch;};
@@ -38,6 +39,7 @@ private:
     int _state_recv;
 
     int _sending;
+    uint64_t _overflow_count;
 
     int _low_threshold;
     int _high_threshold;
