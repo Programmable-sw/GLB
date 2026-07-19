@@ -1367,6 +1367,8 @@ uint32_t FatTreeSwitch::nmrc_maybe_reroute(
     _nmrc_diag_route_checks++;
     uint64_t flow_key = ((uint64_t)pkt.flow_id()) << 32;
     RocePacket& data = (RocePacket&)pkt;
+    data.set_nmrc_detour(false);
+    data.set_nmrc_actual_egress(original_choice);
     _nmrc_diag_observed_flow_evs.insert(flow_key | data.mrc_ev());
     _nmrc_diag_observed_flow_paths.insert(flow_key | original_choice);
     vector<uint8_t> levels(available_hops->size(), STOR_LEVEL_AVOID);
@@ -1414,6 +1416,8 @@ uint32_t FatTreeSwitch::nmrc_maybe_reroute(
         _nmrc_diag_level_transitions[decision.original_level]
                                     [decision.selected_level]++;
     }
+    data.set_nmrc_detour(true);
+    data.set_nmrc_actual_egress(decision.selected_index);
     return decision.selected_index;
 }
 

@@ -403,6 +403,12 @@ public:
     uint64_t _nmrc_fastcnp_latency_sum;
     uint64_t _nmrc_fastcnp_unknown_qp;
     uint64_t _nmrc_fastcnp_unknown_ev;
+    uint64_t _nmrc_trim_non_detour;
+    uint64_t _nmrc_trim_detour;
+    uint64_t _nmrc_trim_nominal_cooldown_starts;
+    uint64_t _nmrc_trim_actual_cooldown_starts;
+    uint64_t _nmrc_trim_duplicate_stale_ignored;
+    uint64_t _nmrc_trim_actual_unresolved;
     uint64_t _mrc_state_samples;
     uint64_t _mrc_active_count_sum;
     uint64_t _mrc_backup_count_sum;
@@ -633,6 +639,8 @@ private:
     void init_nmrc_evs(uint32_t path_space);
     NmrcChoice choose_nmrc_ev(uint32_t path_space);
     bool notify_nmrc_ev(uint32_t ev);
+    void process_nmrc_trim_feedback(const RoceNack& nack,
+                                    bool failure_accepted);
     uint32_t nmrc_ev_index(uint32_t ev) const;
     uint32_t nmrc_physical_path(uint32_t ev, uint32_t path_space) const;
     void init_selector_priority(Packet::PktPriority priority, uint32_t path_space);
@@ -887,7 +895,9 @@ private:
                         uint16_t sack_bitmap_valid_length = 0,
                         uint32_t mrc_ev = UINT32_MAX,
                         RocePacket::seq_t missing_psn = 0,
-                        uint8_t missing_attempt_id = 0);
+                        uint8_t missing_attempt_id = 0,
+                        bool nmrc_detour = false,
+                        uint32_t nmrc_actual_egress = UINT32_MAX);
     void build_sack_bitmap(RocePacket::seq_t ackno, uint64_t& sack_bitmap_low,
                            uint64_t& sack_bitmap_high,
                            RocePacket::seq_t& sack_bitmap_start_psn,

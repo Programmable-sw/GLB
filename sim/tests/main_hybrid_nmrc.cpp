@@ -408,6 +408,113 @@ static void test_fast_cnp_only_cools_ev_without_transport_or_cc_changes() {
            "a post-completion FastCNP must not restart EV cooling");
 }
 
+static RoceNack* make_trim_nack(PacketFlow& flow, Route& route,
+                                uint32_t ev, bool detour,
+                                uint32_t actual_egress) {
+    RoceNack* nack = RoceNack::newpkt(flow, route, 0);
+    nack->set_reason(RoceNack::TRIM);
+    nack->set_missing_psn(1);
+    nack->set_attempt_id(0);
+    nack->set_mrc_ev(ev);
+    nack->set_nmrc_detour(detour);
+    nack->set_nmrc_actual_egress(actual_egress);
+    return nack;
+}
+
+static void test_trim_path_metadata_resets_on_packet_reuse() {
+    DataCaptureSink sink;
+    Route route;
+    route.push_back(&sink);
+    PacketFlow flow(NULL);
+    flow.set_flowid(1601);
+
+    RocePacket* data = RocePacket::newpkt(flow, route, 1, 4096, false, false);
+    data->set_nmrc_detour(true);
+    data->set_nmrc_actual_egress(3);
+    expect(data->nmrc_detour() && data->nmrc_actual_egress() == 3,
+           "data packets must expose the actual n-MRC detour path");
+    data->free();
+
+    RocePacket* recycled_data =
+        RocePacket::newpkt(flow, route, 4097, 4096, false, false);
+    expect(!recycled_data->nmrc_detour() &&
+               !recycled_data->has_nmrc_actual_egress(),
+           "recycled data packets must clear n-MRC detour metadata");
+    recycled_data->free();
+
+    RoceNack* nack = make_trim_nack(flow, route, 2, true, 3);
+    expect(nack->nmrc_detour() && nack->nmrc_actual_egress() == 3,
+           "TRIM NACKs must carry the data packet's actual detour path");
+    nack->free();
+
+    RoceNack* recycled_nack = RoceNack::newpkt(flow, route, 0);
+    expect(!recycled_nack->nmrc_detour() &&
+               !recycled_nack->has_nmrc_actual_egress(),
+           "recycled NACKs must clear n-MRC detour metadata");
+    recycled_nack->free();
+}
+
+static void test_actual_path_trim_is_default_nmrc_feedback() {
+    DataCaptureSink sink;
+    Route route;
+    route.push_back(&sink);
+
+    RoceSrc::setLoadBalancing(RoceSrc::LB_NMRC);
+    RoceSrc::setNmrcEvMode(RoceSrc::NMRC_EV_ENCODED);
+    RoceSrc* src = make_src(1701);
+    src->init_nmrc_evs_for_test(8);
+    std::vector<uint32_t> evs = src->nmrc_ev_values_for_test();
+    std::vector<uint32_t> paths = src->nmrc_physical_paths_for_test();
+
+    RoceNack* direct =
+        make_trim_nack(src->_flow, route, evs[1], false, paths[1]);
+    src->process_nmrc_trim_feedback(*direct, true);
+    expect(src->nmrc_ev_cooling_for_test(evs[1]) &&
+               src->_nmrc_trim_nominal_cooldown_starts == 1,
+           "direct TRIM must cool its nominal EV by default");
+    direct->free();
+
+    RoceNack* detour =
+        make_trim_nack(src->_flow, route, evs[2], true, paths[3]);
+    src->process_nmrc_trim_feedback(*detour, true);
+    expect(!src->nmrc_ev_cooling_for_test(evs[2]) &&
+               src->nmrc_ev_cooling_for_test(evs[3]) &&
+               src->_nmrc_trim_actual_cooldown_starts == 1,
+           "detour TRIM must cool the EV mapped to actual egress by default");
+    detour->free();
+
+    RoceNack* rejected =
+        make_trim_nack(src->_flow, route, evs[4], false, paths[4]);
+    src->process_nmrc_trim_feedback(*rejected, false);
+    expect(!src->nmrc_ev_cooling_for_test(evs[4]) &&
+               src->_nmrc_trim_duplicate_stale_ignored == 1,
+           "a rejected duplicate or stale TRIM must not start cooldown");
+    rejected->free();
+}
+
+static void test_actual_path_trim_requires_unique_mapping() {
+    DataCaptureSink sink;
+    Route route;
+    route.push_back(&sink);
+
+    RoceSrc::setLoadBalancing(RoceSrc::LB_NMRC);
+    RoceSrc::setNmrcEvMode(RoceSrc::NMRC_EV_RANDOM32);
+    RoceSrc* src = make_src(1801);
+    src->init_nmrc_evs_for_test(8);
+    std::vector<uint32_t> evs = src->nmrc_ev_values_for_test();
+    std::vector<uint32_t> paths = src->nmrc_physical_paths_for_test();
+
+    RoceNack* ambiguous =
+        make_trim_nack(src->_flow, route, evs[0], true, paths[0]);
+    src->process_nmrc_trim_feedback(*ambiguous, true);
+    expect(src->_nmrc_trim_actual_unresolved == 1,
+           "aliased actual paths must be counted as unresolved");
+    for (uint32_t i = 0; i < evs.size(); i++)
+        expect(!src->nmrc_ev_cooling_for_test(evs[i]),
+               "an ambiguous actual path must not cool any EV");
+    ambiguous->free();
+}
+
 int main() {
     test_set_sizes_and_uniqueness();
     test_per_qp_determinism_and_dephasing();
@@ -417,6 +524,9 @@ int main() {
     test_data_packet_carries_exact_ev_and_retransmission_reselects_it();
     test_fast_cnp_metadata_priority_and_recycling();
     test_fast_cnp_only_cools_ev_without_transport_or_cc_changes();
+    test_trim_path_metadata_resets_on_packet_reuse();
+    test_actual_path_trim_is_default_nmrc_feedback();
+    test_actual_path_trim_requires_unique_mapping();
     std::cout << "Hybrid n-MRC EV-state tests passed" << std::endl;
     return 0;
 }

@@ -60,6 +60,10 @@ def main():
         "hybrid reroute CLI",
     )
     require(main_roce, "-nmrc_fastcnp on|off", "hybrid FastCNP CLI")
+    require(main_roce, "trim_cooldown=actual_path", "default actual-path TRIM policy")
+    reject(main_roce, "-nmrc_trim_cooldown", "removed TRIM policy CLI")
+    reject(main_roce, "nominal_only", "removed nominal-only policy")
+    reject(roce_h, "NMRC_TRIM_COOLDOWN_", "removed TRIM policy modes")
     require(main_roce, "HybridNmrcConfig", "hybrid resolved configuration")
     require(main_roce, "HybridNmrcDiag", "hybrid final diagnostics")
     for field in (
@@ -72,6 +76,12 @@ def main():
         "cooling_recoveries=",
         "duplicate_notifications=",
         "all_cooling_fallbacks=",
+        "trim_non_detour=",
+        "trim_detour=",
+        "trim_nominal_cooldown_starts=",
+        "trim_actual_cooldown_starts=",
+        "trim_duplicate_stale_ignored=",
+        "trim_actual_unresolved=",
         "observed_first_hop_alias_ratio=",
     ):
         require(main_roce, field, "hybrid concise diagnostics")

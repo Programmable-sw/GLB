@@ -288,6 +288,12 @@ RoceSrc::RoceSrc(RoceLogger* logger, TrafficLogger* pktlogger, EventList &eventl
     _nmrc_fastcnp_latency_sum = 0;
     _nmrc_fastcnp_unknown_qp = 0;
     _nmrc_fastcnp_unknown_ev = 0;
+    _nmrc_trim_non_detour = 0;
+    _nmrc_trim_detour = 0;
+    _nmrc_trim_nominal_cooldown_starts = 0;
+    _nmrc_trim_actual_cooldown_starts = 0;
+    _nmrc_trim_duplicate_stale_ignored = 0;
+    _nmrc_trim_actual_unresolved = 0;
     _mrc_state_samples = 0;
     _mrc_active_count_sum = 0;
     _mrc_backup_count_sum = 0;
@@ -1065,6 +1071,7 @@ void RoceSrc::processNack(const RoceNack& nack){
                     nack.missing_psn(), nack.attempt_id());
                 if (failure_accepted)
                     _bounded_exact_trim_recoveries++;
+                process_nmrc_trim_feedback(nack, failure_accepted);
             }
         } else {
             // An OOO NACK is emitted only after the receiver's tolerance or
@@ -2200,6 +2207,45 @@ bool RoceSrc::notify_nmrc_ev(uint32_t ev) {
         _nmrc_select_ordinal + _nmrc_evs.size();
     _nmrc_cooldown_starts++;
     return true;
+}
+
+void RoceSrc::process_nmrc_trim_feedback(const RoceNack& nack,
+                                         bool failure_accepted) {
+    if (_lb_mode != LB_NMRC || nack.reason() != RoceNack::TRIM)
+        return;
+    if (!failure_accepted) {
+        _nmrc_trim_duplicate_stale_ignored++;
+        return;
+    }
+    if (!nack.nmrc_detour()) {
+        _nmrc_trim_non_detour++;
+        if (nack.has_mrc_ev() && notify_nmrc_ev(nack.mrc_ev()))
+            _nmrc_trim_nominal_cooldown_starts++;
+        return;
+    }
+
+    _nmrc_trim_detour++;
+    if (!nack.has_nmrc_actual_egress()) {
+        _nmrc_trim_actual_unresolved++;
+        return;
+    }
+
+    uint32_t match = UINT32_MAX;
+    for (uint32_t i = 0; i < _nmrc_evs.size(); i++) {
+        if (_nmrc_evs[i].physical_path != nack.nmrc_actual_egress())
+            continue;
+        if (match != UINT32_MAX) {
+            _nmrc_trim_actual_unresolved++;
+            return;
+        }
+        match = i;
+    }
+    if (match == UINT32_MAX) {
+        _nmrc_trim_actual_unresolved++;
+        return;
+    }
+    if (notify_nmrc_ev(_nmrc_evs[match].ev))
+        _nmrc_trim_actual_cooldown_starts++;
 }
 
 void RoceSrc::init_nmrc_evs_for_test(uint32_t path_space) {
@@ -3594,7 +3640,8 @@ void RoceSink::receivePacket(Packet& pkt) {
         send_nack(ts, _cumulative_ack, p->path_id(), bitmap_low, sack_offset,
                   has_sack, RoceNack::TRIM, bitmap_high, sack_start_psn,
                   sack_valid_length, p->mrc_ev(), p->seqno(),
-                  p->attempt_id());
+                  p->attempt_id(), p->nmrc_detour(),
+                  p->nmrc_actual_egress());
         pkt.flow().logTraffic(pkt,*this,TrafficLogger::PKT_RCVDESTROY);
         pkt.free();
         return;
@@ -3786,7 +3833,9 @@ RoceNack* RoceSink::send_nack(simtime_picosec ts, RocePacket::seq_t ackno, uint3
                               uint16_t sack_bitmap_valid_length,
                               uint32_t mrc_ev,
                               RocePacket::seq_t missing_psn,
-                              uint8_t missing_attempt_id) {
+                              uint8_t missing_attempt_id,
+                              bool nmrc_detour,
+                              uint32_t nmrc_actual_egress) {
     RoceNack *nack = NULL;
     nack = RoceNack::newpkt(_src->_flow, *_route, ackno,_srcaddr,sack_bitmap,
                             sack_offset, has_sack, sack_bitmap_high,
@@ -3810,6 +3859,9 @@ RoceNack* RoceSink::send_nack(simtime_picosec ts, RocePacket::seq_t ackno, uint3
             nack->set_attempt_id(missing_attempt_id);
         }
     }
+    nack->set_nmrc_detour(nmrc_detour);
+    if (nmrc_actual_egress != UINT32_MAX)
+        nack->set_nmrc_actual_egress(nmrc_actual_egress);
     nack->set_reason(reason);
     nack->set_stor_peer(_src->_dstaddr);
     assert(nack);

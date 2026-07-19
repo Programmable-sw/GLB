@@ -50,6 +50,8 @@ class RocePacket : public Packet {
                 p->_stor_peer = UINT32_MAX;
                 p->_mrc_ev = UINT32_MAX;
                 p->_attempt_id = 0;
+                p->_nmrc_detour = false;
+                p->_nmrc_actual_egress = UINT32_MAX;
                 p->set_dst(destination);
                 return p;
     }
@@ -74,6 +76,8 @@ class RocePacket : public Packet {
                 p->_stor_peer = UINT32_MAX;
                 p->_mrc_ev = UINT32_MAX;
                 p->_attempt_id = 0;
+                p->_nmrc_detour = false;
+                p->_nmrc_actual_egress = UINT32_MAX;
                 p->set_dst(destination);
                 return p;
     }
@@ -106,6 +110,17 @@ class RocePacket : public Packet {
     inline bool has_mrc_ev() const {return _mrc_ev != UINT32_MAX;}
     inline void set_attempt_id(uint8_t attempt_id) {_attempt_id = attempt_id;}
     inline uint8_t attempt_id() const {return _attempt_id;}
+    inline void set_nmrc_detour(bool detour) {_nmrc_detour = detour;}
+    inline bool nmrc_detour() const {return _nmrc_detour;}
+    inline void set_nmrc_actual_egress(uint32_t egress) {
+        _nmrc_actual_egress = egress;
+    }
+    inline bool has_nmrc_actual_egress() const {
+        return _nmrc_actual_egress != UINT32_MAX;
+    }
+    inline uint32_t nmrc_actual_egress() const {
+        return _nmrc_actual_egress;
+    }
     virtual PktPriority priority() const {return Packet::PRIO_LO;}
     const static int ACKSIZE=64;
  protected:
@@ -119,6 +134,8 @@ class RocePacket : public Packet {
     uint32_t _stor_peer;
     uint32_t _mrc_ev;
     uint8_t _attempt_id;
+    bool _nmrc_detour;
+    uint32_t _nmrc_actual_egress;
     static PacketDB<RocePacket> _packetdb;
 };
 
@@ -252,6 +269,8 @@ class RoceNack : public Packet {
                 p->_missing_psn = 0;
                 p->_has_attempt_id = false;
                 p->_attempt_id = 0;
+                p->_nmrc_detour = false;
+                p->_nmrc_actual_egress = UINT32_MAX;
                 p->set_dst(destination);
                 return p;
     }
@@ -302,6 +321,17 @@ class RoceNack : public Packet {
     }
     inline bool has_attempt_id() const {return _has_attempt_id;}
     inline uint8_t attempt_id() const {return _attempt_id;}
+    inline void set_nmrc_detour(bool detour) {_nmrc_detour = detour;}
+    inline bool nmrc_detour() const {return _nmrc_detour;}
+    inline void set_nmrc_actual_egress(uint32_t egress) {
+        _nmrc_actual_egress = egress;
+    }
+    inline bool has_nmrc_actual_egress() const {
+        return _nmrc_actual_egress != UINT32_MAX;
+    }
+    inline uint32_t nmrc_actual_egress() const {
+        return _nmrc_actual_egress;
+    }
     virtual PktPriority priority() const {return Packet::PRIO_HI;}
   
     virtual ~RoceNack(){}
@@ -323,6 +353,8 @@ protected:
     seq_t _missing_psn;
     bool _has_attempt_id;
     uint8_t _attempt_id;
+    bool _nmrc_detour;
+    uint32_t _nmrc_actual_egress;
     static PacketDB<RoceNack> _packetdb;
 };
 

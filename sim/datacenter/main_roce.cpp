@@ -2959,6 +2959,7 @@ int main(int argc, char **argv) {
         cout << "HybridNmrcConfig ev_mode=" << ev_mode_name
              << " reroute_policy=" << reroute_policy_name
              << " fastcnp=" << (nmrc_fastcnp ? "on" : "off")
+             << " trim_cooldown=actual_path"
              << " paths=" << path_space
              << " ev_set_size=" << ev_set_size
              << " ev_mapping="
@@ -3359,6 +3360,12 @@ int main(int argc, char **argv) {
     uint64_t nmrc_fastcnp_latency_sum = 0;
     uint64_t nmrc_fastcnp_unknown_qp = 0;
     uint64_t nmrc_fastcnp_unknown_ev = 0;
+    uint64_t nmrc_trim_non_detour = 0;
+    uint64_t nmrc_trim_detour = 0;
+    uint64_t nmrc_trim_nominal_cooldown_starts = 0;
+    uint64_t nmrc_trim_actual_cooldown_starts = 0;
+    uint64_t nmrc_trim_duplicate_stale_ignored = 0;
+    uint64_t nmrc_trim_actual_unresolved = 0;
     uint64_t nmrc_cooldown_starts = 0;
     uint64_t nmrc_cooling_skips = 0;
     uint64_t nmrc_cooling_recoveries = 0;
@@ -3495,6 +3502,16 @@ int main(int argc, char **argv) {
             roce_srcs[ix]->_nmrc_fastcnp_unknown_qp;
         nmrc_fastcnp_unknown_ev +=
             roce_srcs[ix]->_nmrc_fastcnp_unknown_ev;
+        nmrc_trim_non_detour += roce_srcs[ix]->_nmrc_trim_non_detour;
+        nmrc_trim_detour += roce_srcs[ix]->_nmrc_trim_detour;
+        nmrc_trim_nominal_cooldown_starts +=
+            roce_srcs[ix]->_nmrc_trim_nominal_cooldown_starts;
+        nmrc_trim_actual_cooldown_starts +=
+            roce_srcs[ix]->_nmrc_trim_actual_cooldown_starts;
+        nmrc_trim_duplicate_stale_ignored +=
+            roce_srcs[ix]->_nmrc_trim_duplicate_stale_ignored;
+        nmrc_trim_actual_unresolved +=
+            roce_srcs[ix]->_nmrc_trim_actual_unresolved;
         nmrc_cooldown_starts +=
             roce_srcs[ix]->nmrc_cooldown_starts_for_diag();
         nmrc_cooling_skips +=
@@ -3790,6 +3807,16 @@ int main(int argc, char **argv) {
              << nmrc_duplicate_notifications
              << " all_cooling_fallbacks="
              << nmrc_all_cooling_fallbacks
+             << " trim_non_detour=" << nmrc_trim_non_detour
+             << " trim_detour=" << nmrc_trim_detour
+             << " trim_nominal_cooldown_starts="
+             << nmrc_trim_nominal_cooldown_starts
+             << " trim_actual_cooldown_starts="
+             << nmrc_trim_actual_cooldown_starts
+             << " trim_duplicate_stale_ignored="
+             << nmrc_trim_duplicate_stale_ignored
+             << " trim_actual_unresolved="
+             << nmrc_trim_actual_unresolved
              << " observed_evs=" << observed_evs
              << " observed_first_hop_choices=" << observed_paths
              << " observed_first_hop_alias_ratio=" << observed_alias_ratio
