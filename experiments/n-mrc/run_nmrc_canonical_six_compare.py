@@ -561,9 +561,6 @@ def summarize_three_seed_cells(rows):
             values = sorted(row["primary_us"] for row in selected)
             if not values:
                 continue
-            middle = len(values) // 2
-            median = (values[middle] if len(values) % 2 else
-                      (values[middle - 1] + values[middle]) / 2.0)
             result.append({
                 "scenario": scenario,
                 "kind": selected[0]["kind"],
@@ -572,7 +569,7 @@ def summarize_three_seed_cells(rows):
                 "seed_values": ";".join(
                     f"{row['seed']}:{format_number(row['primary_us'])}"
                     for row in selected),
-                "primary_median_us": median,
+                "primary_geometric_mean_us": geometric_mean(values),
                 "primary_min_us": min(values),
                 "primary_max_us": max(values),
                 "raw_cells": len(values),
@@ -606,15 +603,16 @@ def build_report(rows, revision):
             f"{item['alltoall_normalized_geometric_mean']:.4f} |")
     lines += [
         "",
-        "## Three-seed cells (median / min / max)",
+        "## Three-seed cells (geometric mean / min / max)",
         "",
-        "| scenario | metric | scheme | median us | min us | max us |",
+        "| scenario | metric | scheme | geometric mean us | min us | max us |",
         "| --- | --- | --- | ---: | ---: | ---: |",
     ]
     for item in cells:
         lines.append(
             f"| {item['scenario']} | {item['primary_metric']} | "
-            f"{item['scheme']} | {item['primary_median_us']:.3f} | "
+            f"{item['scheme']} | "
+            f"{item['primary_geometric_mean_us']:.3f} | "
             f"{item['primary_min_us']:.3f} | "
             f"{item['primary_max_us']:.3f} |")
     lines += [

@@ -11,6 +11,8 @@ P16/256 MiB 背景关/开，以及 P4/64 MiB 背景关；固定 seeds 为
 `13,29,47`。同一 `(scenario, seed)` 的六个方案严格复用一份 traffic
 matrix。前三个场景使用 p99 FCT，后三个 All-to-All 场景使用 CCT；排名先在
 每个 `(scenario, seed)` 内除以该块最优值，再计算几何平均。
+每个 `(scenario, scheme)` 的三-seed 绝对主指标也使用几何平均汇总；报告不使用
+中位数，同时保留每个 seed 的原始值和 min/max 供离散性检查。
 
 运行命令：
 

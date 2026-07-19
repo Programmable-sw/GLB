@@ -366,7 +366,9 @@ def main():
         if item["scenario"] == runner.SCENARIOS[0] and
         item["scheme"] == runner.SCHEMES[0])
     assert target["seed_values"] == "13:100;29:101;47:102"
-    assert target["primary_median_us"] == 101.0
+    assert math.isclose(
+        target["primary_geometric_mean_us"],
+        (100.0 * 101.0 * 102.0) ** (1.0 / 3.0))
     assert target["primary_min_us"] == 100.0
     assert target["primary_max_us"] == 102.0
     assert target["raw_cells"] == 3
@@ -383,8 +385,9 @@ def main():
 
     report = runner.build_report(rows, revision="deadbeef")
     assert "Per-seed primary results (108 raw cells)" in report
-    assert "median / min / max" in report
+    assert "geometric mean / min / max" in report
     assert "normalized geometric mean" in report
+    assert "median" not in report.lower()
 
 
 if __name__ == "__main__":
