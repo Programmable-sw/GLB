@@ -71,6 +71,7 @@ SCENARIO_SET = parse_csv_list(
         aliases=("SCENARIO_SCENARIOS",),
     )
 )
+QUEUE_TYPES = parse_csv_list(env_value("SCENARIO_QUEUE_TYPES", "lossless_input_ecn"))
 SCHEME_SCOPE = env_value("SCENARIO_SCHEMES", "packet", aliases=("README_ALL_LB_SCHEME_SCOPE",)).strip()
 MAX_WORKERS = int(env_value("SCENARIO_WORKERS", "4", aliases=("README_ALL_LB_WORKERS",)))
 KEEP_RAW = env_value("KEEP_RAW_OUTPUT", "1") != "0"
@@ -78,14 +79,50 @@ FORCE = env_value("FORCE_RERUN", "0") == "1"
 CJK_FONT = None
 
 FINISH_RE = re.compile(r"Flow Roce_(\d+)_(\d+) \d+ finished at ([0-9.]+)")
+KEY_VALUE_RE = re.compile(r"([A-Za-z0-9_]+)=([0-9.]+)")
+QUEUE_DIAG_FIELDS = [
+    "lossless_overflows",
+    "lossless_ecn_marks",
+    "lossy_drops",
+    "lossy_ecn_marks",
+    "composite_trims",
+    "composite_drops",
+    "composite_ecn_marks",
+]
+ROCE_DIAG_FIELDS = [
+    "acks",
+    "nacks",
+    "rtos",
+    "ecn_echo_acks",
+    "feedback_acks",
+    "feedback_zero_bits",
+    "nmrc_ev_skips",
+    "nmrc_bitmap_fallbacks",
+    "stor_selected_good",
+    "stor_selected_degraded",
+    "stor_selected_bad",
+    "stor_selected_avoid",
+]
+STOR_DIAG_FIELDS = [
+    "stor_min_score",
+    "stor_avoid_entries",
+    "stor_avoid_exits",
+    "stor_clean_signals",
+    "stor_ecn_signals",
+    "stor_trim_signals",
+]
 
 
 def default_output_dir():
     scenario_slug = "-".join(SCENARIO_SET)
     traffic_slug = "-".join(TRAFFICS)
     size_slug = "-".join(str(size) for size in FLOW_SIZE_MIBS)
+    queue_suffix = ""
+    if QUEUE_TYPES != ["lossless_input_ecn"]:
+        queue_suffix = f"_queue-{'-'.join(QUEUE_TYPES)}"
     return EXP_DIR / "output" / (
         f"readme_packet_lb_scenarios-{scenario_slug}_traffic-{traffic_slug}_flow-{size_slug}m"
+        f"{queue_suffix}"
     )
 
 
@@ -130,24 +167,30 @@ ALL_SCHEMES = [
     ("ops", "OPS", "ops", []),
     ("rr", "RR", "rr", []),
     ("reps", "REPS", "reps", []),
-    ("n-mrc", "N-MRC", "n-mrc", []),
+    ("avail", "Avail", "avail", []),
+    ("grade", "Grade", "grade", []),
+    ("netaware", "n-MRC", "netaware", []),
     ("mrc", "MRC", "mrc", []),
     ("conweave", "CONWEAVE", "conweave", []),
     ("adaptive-routing", "AR", "adaptive-routing", ["-ar_granularity", "packet"]),
     ("drill", "DRILL", "drill", []),
-    ("glb", "GLB", "glb", []),
+    ("sglb", "SGLB", "sglb", []),
 ]
+
+COMPOSITE_DEFAULT_SCHEMES = {"mrc", "avail", "grade", "netaware"}
 
 PACKET_SCHEME_LABELS = [
     "ecmp_rr",
     "ops",
     "rr",
     "reps",
-    "n-mrc",
+    "avail",
+    "grade",
+    "netaware",
     "mrc",
     "adaptive-routing",
     "drill",
-    "glb",
+    "sglb",
 ]
 
 METRICS = [
@@ -164,12 +207,14 @@ COLORS = {
     "ops": "#2563eb",
     "rr": "#38bdf8",
     "reps": "#059669",
-    "n-mrc": "#dc2626",
+    "avail": "#dc2626",
+    "grade": "#be123c",
+    "netaware": "#7f1d1d",
     "mrc": "#ea580c",
     "conweave": "#f59e0b",
     "adaptive-routing": "#7c3aed",
     "drill": "#db2777",
-    "glb": "#111827",
+    "sglb": "#111827",
 }
 
 
@@ -279,6 +324,13 @@ def flows_for(scenario):
     raise ValueError(f"unsupported traffic={scenario['traffic']}")
 
 
+def scenario_name(definition, traffic, size_mib, queue_type):
+    base = f"{definition['key']}_{traffic}_{definition['nodes']}n_{definition['tiers']}tier_{size_mib}m"
+    if QUEUE_TYPES == ["lossless_input_ecn"]:
+        return base
+    return f"{base}_{queue_type}"
+
+
 def build_scenarios():
     by_key = {scenario["key"]: scenario for scenario in SCENARIO_DEFINITIONS}
     missing = [key for key in SCENARIO_SET if key not in by_key]
@@ -289,27 +341,26 @@ def build_scenarios():
     for key in SCENARIO_SET:
         definition = by_key[key]
         validate_generated_fattree(definition["nodes"], definition["tiers"])
-        for traffic in TRAFFICS:
-            if traffic not in {"tornado", "permutation"}:
-                raise ValueError(f"unsupported traffic={traffic}")
-            for size_mib in FLOW_SIZE_MIBS:
-                if size_mib not in ALL_FLOW_SIZE_MIBS:
-                    raise ValueError(
-                        f"flow size {size_mib}MiB is not in supported set {ALL_FLOW_SIZE_MIBS}"
+        for queue_type in QUEUE_TYPES:
+            for traffic in TRAFFICS:
+                if traffic not in {"tornado", "permutation"}:
+                    raise ValueError(f"unsupported traffic={traffic}")
+                for size_mib in FLOW_SIZE_MIBS:
+                    if size_mib not in ALL_FLOW_SIZE_MIBS:
+                        raise ValueError(
+                            f"flow size {size_mib}MiB is not in supported set {ALL_FLOW_SIZE_MIBS}"
+                        )
+                    scenarios.append(
+                        {
+                            **definition,
+                            "traffic": traffic,
+                            "flow_size_mib": size_mib,
+                            "queue_type": queue_type,
+                            "paths": definition.get("paths", definition["nodes"]),
+                            "end_us": END_US,
+                            "name": scenario_name(definition, traffic, size_mib, queue_type),
+                        }
                     )
-                scenarios.append(
-                    {
-                        **definition,
-                        "traffic": traffic,
-                        "flow_size_mib": size_mib,
-                        "paths": definition.get("paths", definition["nodes"]),
-                        "end_us": END_US,
-                        "name": (
-                            f"{definition['key']}_{traffic}_"
-                            f"{definition['nodes']}n_{definition['tiers']}tier_{size_mib}m"
-                        ),
-                    }
-                )
     return scenarios
 
 
@@ -354,6 +405,31 @@ def parse_stdout(stdout_file, flow_map):
     return rows
 
 
+def parse_key_value_diag(stdout_file, prefix, fields):
+    values = {field: 0 for field in fields}
+    if not stdout_file.exists():
+        return values
+    for line in stdout_file.read_text(errors="ignore").splitlines():
+        if not line.startswith(prefix):
+            continue
+        for key, raw_value in KEY_VALUE_RE.findall(line):
+            if key in values:
+                values[key] = float(raw_value) if "." in raw_value else int(raw_value)
+    return values
+
+
+def parse_queue_diag(stdout_file):
+    return parse_key_value_diag(stdout_file, "QueueDiag ", QUEUE_DIAG_FIELDS)
+
+
+def parse_roce_diag(stdout_file):
+    return parse_key_value_diag(stdout_file, "RoceDiag ", ROCE_DIAG_FIELDS)
+
+
+def parse_stor_diag(stdout_file):
+    return parse_key_value_diag(stdout_file, "StorDiag ", STOR_DIAG_FIELDS)
+
+
 def metrics_for(rows, total):
     fcts = [row["fct_us"] for row in rows]
     cct = 0.0
@@ -393,8 +469,16 @@ def scenario_run_name(scenario):
     return scenario["name"]
 
 
+def queue_type_for_scheme(scenario, scheme):
+    label = scheme[0]
+    if label in COMPOSITE_DEFAULT_SCHEMES:
+        return "composite_ecn_lb"
+    return scenario["queue_type"]
+
+
 def command_for(scenario, scheme, tm, dat_file, flow_count, slow_tor_uplinks):
     _label, _display, lb_mode, extra = scheme
+    queue_type = queue_type_for_scheme(scenario, scheme)
     cmd = [
         str(SIM),
         "-o",
@@ -410,7 +494,7 @@ def command_for(scenario, scheme, tm, dat_file, flow_count, slow_tor_uplinks):
         "-linkspeed",
         str(LINKSPEED_MBPS),
         "-queue_type",
-        "lossless_input_ecn",
+        queue_type,
         "-host_queue_type",
         "prio",
         "-mtu",
@@ -472,6 +556,10 @@ def run_scheme(scenario, flows, flow_map, case_dir, tm, scheme, total_tor_uplink
             f"{label} cached",
             flush=True,
         )
+    queue_diag = parse_queue_diag(stdout_file)
+    roce_diag = parse_roce_diag(stdout_file)
+    stor_diag = parse_stor_diag(stdout_file)
+    queue_type = queue_type_for_scheme(scenario, scheme)
 
     summary = {
         "case": scenario["name"],
@@ -487,7 +575,7 @@ def run_scheme(scenario, flows, flow_map, case_dir, tm, scheme, total_tor_uplink
         "cc": CC_MODE,
         "rx_mode": RX_MODE,
         "sack_bitmap_bits": SACK_BITMAP_BITS,
-        "queue_type": "lossless_input_ecn",
+        "queue_type": queue_type,
         "linkspeed_mbps": LINKSPEED_MBPS,
         "mtu": MTU,
         "end_us": scenario["end_us"],
@@ -496,6 +584,9 @@ def run_scheme(scenario, flows, flow_map, case_dir, tm, scheme, total_tor_uplink
         "slow_tor_uplink_fraction": slow_tor_uplinks / total_tor_uplinks if total_tor_uplinks else 0.0,
         "slow_tor_uplink_divisor": scenario.get("slow_tor_uplink_divisor", 1),
         "slow_tor_uplink_select": scenario.get("slow_tor_uplink_select", "spaced"),
+        **roce_diag,
+        **queue_diag,
+        **stor_diag,
         **metrics_for(parsed, len(flows)),
     }
     print(
@@ -714,6 +805,8 @@ def write_plan(path):
         "# Scenario Plan",
         "",
         f"RoCE: `rx_mode={RX_MODE}`, `sack_bitmap_bits={SACK_BITMAP_BITS}`, `cc={CC_MODE}`.",
+        "Queue defaults: `mrc`/`avail`/`grade`/`n-mrc` use `composite_ecn_lb`; "
+        "other schemes use the scenario queue.",
         "",
         "| case | scenario | topology | traffic | flow size | slow ToR uplinks | description |",
         "| --- | --- | --- | --- | ---: | ---: | --- |",
@@ -749,7 +842,8 @@ def write_report(rows, chart_paths):
     lines = [
         "# README Packet-Level Scenario Comparison",
         "",
-        "Parameters: `lossless_input_ecn`, dequeue ECN marking, "
+        "Parameters: non-MRC-path baselines use `lossless_input_ecn`; "
+        "`mrc`/`avail`/`grade`/`n-mrc` use `composite_ecn_lb`; "
         f"`roce_rx_mode={RX_MODE}`, `sack_bitmap_bits={SACK_BITMAP_BITS}`, "
         "`queue=1BDP`, ECN/PFC `0.2/0.8 * queue`, RTO `70us`, "
         f"CC `{CC_MODE}`.",
@@ -786,13 +880,15 @@ def write_report(rows, chart_paths):
         "",
         "## Completion",
         "",
-        "| case | scheme | completed | avg FCT us | p99 FCT us | p99.9 FCT us | CCT us |",
-        "| --- | --- | ---: | ---: | ---: | ---: | ---: |",
+        "| case | scheme | completed | avg FCT us | p99 FCT us | p99.9 FCT us | CCT us | ECN echo | trims | nacks | STOR min score | STOR avoid in/out |",
+        "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
     ]
     for row in rows:
         lines.append(
             "| {case} | {scheme_display} | {completed}/{nodes} | {avg_fct_us:.3f} | "
-            "{p99_fct_us:.3f} | {p999_fct_us:.3f} | {cct_us:.3f} |".format(**row)
+            "{p99_fct_us:.3f} | {p999_fct_us:.3f} | {cct_us:.3f} | "
+            "{ecn_echo_acks} | {composite_trims} | {nacks} | {stor_min_score} | "
+            "{stor_avoid_entries}/{stor_avoid_exits} |".format(**row)
         )
 
     (OUT / "comparison_report.md").write_text("\n".join(lines) + "\n")

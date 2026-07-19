@@ -56,10 +56,12 @@ SCHEMES = [
     ("ops", "OPS", "ops", []),
     ("rr", "RR", "rr", []),
     ("reps", "REPS", "reps", []),
-    ("n-mrc", "N-MRC", "n-mrc", []),
+    ("avail", "Avail", "avail", []),
+    ("grade", "Grade", "grade", ["-queue_type", "composite_ecn_lb"]),
+    ("netaware", "n-MRC", "netaware", []),
     ("adaptive-routing", "AR", "adaptive-routing", ["-ar_granularity", "packet"]),
     ("drill", "DRILL", "drill", []),
-    ("glb", "GLB", "glb", []),
+    ("sglb", "SGLB", "sglb", []),
 ]
 
 METRICS = [
@@ -73,10 +75,12 @@ COLORS = {
     "ops": "#2563eb",
     "rr": "#38bdf8",
     "reps": "#059669",
-    "n-mrc": "#dc2626",
+    "avail": "#dc2626",
+    "grade": "#be123c",
+    "netaware": "#7f1d1d",
     "adaptive-routing": "#7c3aed",
     "drill": "#db2777",
-    "glb": "#111827",
+    "sglb": "#111827",
 }
 
 

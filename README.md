@@ -1,36 +1,32 @@
-# n-mrc on htsim
+# n-MRC on htsim
 
-本仓库在 Broadcom `csg-htsim` 的 RoCE datacenter 仿真器基础上，实现并评估 n-mrc 负载均衡方案。
+本仓库在 Broadcom `csg-htsim` 的 RoCE datacenter 仿真器基础上，评估 n-MRC 相关的多路径负载均衡方案。
 
-n-mrc 是一种 tor-feedback source-controlled packet-level 负载均衡方案。源端为每个 packet 选择一个 EV/pathid；交换机在每个 ecmp stage 解释该 EV；目的 ToR 聚合路径观测并把紧凑的 path-state feedback 返回给源端；源端再用按 `(src ToR, dst ToR)` 共享的路径健康 bitmap 选择后续 packet 的 EV。这样可以避免维护大规模 per-flow/per-QP 路径表，同时让同一 ToR-pair 下的多个 flow 共享路径健康信息。
+原 full-snapshot `n-mrc` 已改名为 `netaware`：leaf 维护 ToR-pair 的完整四级 path profile，并以固定 5us ACK snapshot 反馈给 NIC。新的 `n-mrc` 融合源端 MRC EV 轮询和源侧第一跳 Leaf 的 SGLB 严格升档换路，并以 FastCNP 格式的路径通知让端侧冷却坏 EV 一轮；它不替代 ECN，也不触发 DCQCN。
 
-独立 `mrc` 模式的 calibrated RoCE/队列/DCQCN 基线、默认参数以及 `-lb mrc` 到论文机制的映射，见 `MRC_IMPLEMENTATION.md`。
+独立 `mrc` 模式的 RoCE/队列默认底座、encoded EV 状态机以及 `-lb mrc` 到 MRC 论文机制的映射，见 `MRC_IMPLEMENTATION.md`。MRC 参考文献的整理稿见 `docs/papers/MRC.md`。各负载均衡方案、NetAware full snapshot 和新 n-MRC FastCNP 路径通知的实际逻辑，见 `experiments/n-mrc/README.md`。
+
+Avail、Grade 和 n-MRC 在 corrected stack 下的参数筛选、三 seed 验证、128/512/2048 scaling 及最终机制结论，见 `experiments/n-mrc/output/branch123_ai_tuning/branch123_ai_tuning_for_gpt.md`。
 
 ## 仓库结构
 
 - `sim/`：htsim C++ 离散事件仿真器。
 - `sim/datacenter/htsim_roce`：编译后的 RoCE 仿真程序。
 - `experiments/n-mrc/run_literature_metric_compare.py`：README 标准场景统一验证脚本，负责逐包方案仿真、CSV/report 和图表输出。
-- `experiments/n-mrc/run_glb_factor_compare.py`：glb 参数对比脚本。
+- `experiments/n-mrc/run_hybrid_nmrc_compare.py`：新 n-MRC 的 EV/换路策略矩阵及 SGLB、AR、NetAware、MRC、REPS 同栈对比。
+- `experiments/n-mrc/run_sglb_factor_compare.py`：sglb 参数对比脚本。
 
-## n-mrc 机制简介
+## avail 机制简介
 
-n-mrc 把一个 EV 看作完整的端到端路径组合。2-tier 拓扑中，EV 主要对应 ToR 上行选择；3-tier 拓扑中，EV 会被分段映射到 ToR uplink、Agg uplink、Core-down bundle 和 Agg-down bundle。
+avail 把一个 EV 看作完整的端到端路径组合。
 
-默认 n-mrc 使用二态 bad-cache 状态。源端按 `(src ToR, dst ToR)` 共享最近一个反馈窗口的 bad EV bitmap；目的 ToR 只在某 EV 的数据包带 ECN CE 时把该 EV 标为 bad，非 ECN packet 不写 clean 正反馈。源端发包时避开 recent-bad EV，未被报告 bad 的 EV 保持 unknown 并自然回到候选池。
+avail 使用 source-ToR bad-cache bitmap。源端按 `(src ToR, dst ToR)` 共享最近一个反馈窗口的 bad EV bitmap；source ToR 在返回 ACK 带 ECN 或收到 TRIM NACK 时把对应 EV 标为 bad。源端发包时避开 recent-bad EV，未被报告 bad 的 EV 在下一反馈窗口自然回到候选池。默认反馈节奏为 packet trigger `1`、固定 `5us`。旧的 `32 pkt + 5--20us` 窗口仍可通过 `-stor_feedback_pkts 32 -stor_feedback_min_us 5 -stor_feedback_max_us 20 -stor_trim_feedback_min_us 5` 显式启用。
 
-`rr` 和 n-mrc 的源端 EV 序列都不是全局同一个轮转序列，而是按 flow 和 packet priority 初始化不同的起点和步长。起点和步长由 `src`、`dst`、`flow_id` 和 priority 混合得到；步长会被调整到与 EV 空间大小互质，因此单个 flow 的序列可以遍历整个 EV 空间。`rr` 按该序列直接选择下一个 EV；n-mrc 使用同一序列扫描候选 EV，但会跳过 recent-bad bitmap 中标坏的 EV。
+avail 的共享 bitmap 不复制到每个 QP。每个 QP 只维护 selection counter，用 `src/dst/flow_id/priority/profile_version/epoch` 对路径下标做可随机访问的虚拟 permutation，并跳过 recent-bad EV。
 
-另一版多状态 n-mrc 暂时保留为备用，可通过 `-nmrc_state_mode 4-state` 切换。该模式中每个 EV 使用 2-bit 状态：
+## grade 方案设计
 
-| 状态 | 含义 |
-| --- | --- |
-| `11` | strong-good path |
-| `10` | usable path |
-| `01` | suspect/low path |
-| `00` | 留给丢包语义 |
-
-4-state 模式发送时源端优先选择 `11` 路径；若 `11` 路径不足，再逐步放宽到 `10` 和 `01`。目的 ToR 记录每条 EV 上 packet 是否 clean 或带 ECN CE 标记，生成 bitmap feedback，并由 ACK 带回源端更新共享状态。
+grade 是一个 source-ToR monitoring and feedback 分支。端侧按预选 EV set 逐包填 EV，交换机仍按 ECMP hash 转发；source ToR 观察 ACK ECN 和 TRIM NACK，把每个 EV 量化为 GOOD、DEGRADED、BAD 或 AVOID，再 piggyback 回端侧并按等级加权。默认反馈节奏同样为 packet trigger `1`、固定 `5us`。公式和当前参数不在这里展开，统一放在 `experiments/n-mrc/README.md`。
 
 ## 已实现负载均衡方案
 
@@ -41,22 +37,54 @@ n-mrc 把一个 EV 看作完整的端到端路径组合。2-tier 拓扑中，EV 
 | `ops` | 源端每个 packet 随机选择 EV/pathid，实现无反馈 packet spraying。 |
 | `rr` | 源端按确定性序列轮转 EV/pathid，实现无反馈但覆盖更均匀的 source-controlled rr；随机 EV spraying 对应 `ops`。 |
 | `reps` | ACK 回传近期未 ECN 的 pathid，源端优先复用 clean EV；没有反馈时随机。 |
-| `n-mrc` | 源端按 ToR-pair 共享 recent-bad EV bitmap，目的 ToR 聚合 ECN bad 观测并反馈，源端逐包避开最近拥塞 EV。 |
-| `mrc` | 独立 Multipath RC 风格模式；每个 QP 维护 active/backup EV 集，ECN 临时避开拥塞 EV，NACK/SACK/RTO 标记 failed EV 并换入 backup；默认使用 trim+ECN 队列、SP/SACK、无 DCQCN。 |
+| `avail` | source ToR 根据 ACK ECN 或 TRIM NACK 生成 ToR-pair 共享的 1-bit recent-bad EV bitmap；每 QP 只用 selection counter 虚拟打乱路径下标并跳过 bad EV。默认 ECN 与 TRIM 都会在同一短反馈窗口内把精确路径标为暂时不可用；`-avail_ecn_only` 仅用于恢复旧 ECN-only 语义的消融实验。 |
+| `grade` | source ToR 用默认 4-bit simple scorer（clean `+1`，ECN/TRIM `-4`，阈值 `12/7/3`）量化共享 EV 状态；NIC 按 4/2/1/0、`K=4*path_count` 的共享 base bucket 和 per-QP 虚拟 permutation 加权选路。原 balanced 三字段评分仅由 `-grade_complex_score` 启用。 |
+| `netaware` | source leaf 组合 1us 本地端口 snapshot 与 5us spine 下游 export snapshot，生成完整 ToR-pair 四级 profile；NIC 默认用 GoodCap 对共享 4/2/1/0 分布做 GOOD-share 限流，再映射到 `K=4*path_count` bucket。 |
+| `n-mrc` | 每 QP 轮询 encoded 或 16-bit random EV set；源侧第一跳 Leaf 在存在足量严格更优四级路径时用 SGLB 换路，并以 FastCNP 格式通知端侧冷却原 EV 一轮。后续 ECN 仍完整端到端 echo。 |
+| `mrc` | 每个 QP 将 EV 与单平面物理 path-id 一一编码，按确定性排列循环使用不超过 32 个 active EV。ECN 与 TRIM 使用相同处罚：默认进入 one-cycle soft skip，冷却期间后续拥塞反馈会续期，反馈排空后自然恢复；显式 `-mrc_cooldown_mode cwnd_scaled` 保留按拓扑 BDP 取整的固定长 cooldown 诊断。全部 EV 冷却时使用最早到期 EV 保活，不清除状态或 deadline。OOO 只进入 SP/SACK 选择重传，LOSS/RTO 标记 failed 并换入剩余唯一路径。 |
 | `conweave` | RTT 超过阈值后切换 pathid，减少持续走拥塞路径的概率。 |
 | `adaptive-routing` | 交换机按本地队列拥塞情况在可用下一跳中选择端口。 |
 | `drill` | 交换机结合随机候选和历史候选端口，优先选择拥塞较低的下一跳。 |
-| `glb` | 交换机把本地队列/利用率与 next-hop 周期导出的下游 GCN 快照合成评分，在量化质量等级内喷洒；LSN 钩子可在链路故障时硬屏蔽邻居。 |
+| `sglb` | 交换机默认将 1us 本地队列压力与 next-hop 每 5us 导出的下游队列压力按 noisy-or 合成，量化为四档后按 SGLB top-K 整档扩展候选；LSN 钩子可硬屏蔽故障邻居。原五因子评分和八档量化分别由显式 flag 启用。 |
 
-从粒度上看，`ops`、`rr`、`reps` 和 `n-mrc` 都是源端逐包选择 EV/pathid；`ecmp` 使用固定 pathid，`conweave` 只在 RTT 触发时切换 pathid，不做逐包 spraying。`ecmp_rr`、`drill`、`glb` 和当前 `adaptive-routing` 默认都属于交换机侧逐包/逐跳选择 next-hop；`adaptive-routing` 仍可通过 `-ar_granularity flowlet` 切到 flowlet sticky。
+从粒度上看，`ops`、`rr`、`reps`、`avail`、`grade`、`n-mrc` 和 `mrc` 都是源端逐包选择 EV/pathid；`ecmp` 使用固定 pathid，`conweave` 只在 RTT 触发时切换 pathid，不做逐包 spraying。`ecmp_rr`、`drill`、`sglb` 和当前 `adaptive-routing` 默认都属于交换机侧逐包/逐跳选择 next-hop；`adaptive-routing` 仍可通过 `-ar_granularity flowlet` 切到 flowlet sticky。
+
+全局 RoCE 传输默认使用 `mrc_exact_bounded`：SP/SACK、exact-PSN TRIM recovery、`awnd=cwnd-inflight` 和每 QP 最多 1 MTU 的 bounded recovery reserve。复现此前 Natural+Cumulative 数据时必须显式使用：
+
+```bash
+-roce_transport_semantics legacy -roce_trim_recovery cumulative
+```
+
+该历史入口保留 Natural inflate；Exact+Bounded 不接受 cumulative TRIM recovery。
 
 ## 标准测试场景
 
 | 场景 | 拓扑 | 链路条件 | Traffic | Flow size | 对比方案 |
 | --- | --- | --- | --- | --- | --- |
-| 健康网络 | 2048 nodes / 2-tier | 全链路 400Gbps | tornado / permutation | 4/8/16/32MiB，默认启用 4/32MiB | ecmp_rr / ops / rr / adaptive-routing / drill / glb / reps / mrc / n-mrc |
-| 非对称带宽1 | 1024 nodes / 3-tier | 3% ToR 上行半带宽，即 200Gbps | tornado / permutation | 4/8/16/32MiB，默认启用 4/32MiB | ecmp_rr / ops / rr / adaptive-routing / drill / glb / reps / mrc / n-mrc |
-| 非对称带宽2 | 2048 nodes / 2-tier | `floor(2048 * 10%) = 204` 条 ToR 上行随机稀疏半带宽，按 ToR 均匀分散 | tornado / permutation | 4/8/16/32MiB，默认启用 4/32MiB | ecmp_rr / ops / rr / adaptive-routing / drill / glb / reps / mrc / n-mrc |
+| 健康网络 | 2048 nodes / 2-tier | 全链路 400Gbps | tornado / permutation | 4/8/16/32MiB，默认启用 4/32MiB | ecmp_rr / ops / rr / adaptive-routing / drill / sglb / reps / mrc / avail / grade / n-mrc |
+| 非对称带宽 | 2048 nodes / 2-tier | `floor(2048 * 10%) = 204` 条 ToR 上行随机稀疏半带宽，按 ToR 均匀分散 | tornado / permutation | 4/8/16/32MiB，默认启用 4/32MiB | ecmp_rr / ops / rr / adaptive-routing / drill / sglb / reps / mrc / avail / grade / n-mrc |
+
+常用负载样例：
+
+| 负载 | 构造方式 | 主要测试目标 |
+| --- | --- | --- |
+| `healthy` | 所有 fabric 链路等速；使用 permutation 一一映射或 tornado 固定偏移，每个 host 产生一个 foreground flow。 | 检查无持续路径不均衡时的基础 FCT、乱序和重传开销。 |
+| `degraded` | 保持 healthy traffic matrix，但随机稀疏选择部分 ToR-to-spine 上行并将其带宽降低，未选链路保持原速。慢链路仍可用，不表示断链。 | 检查方案能否识别并减少使用长期慢路径。 |
+| `mixed` | background long flows 与 target short/foreground flows 同时运行，两类真实 RoCE flow 都按被测 LB 选路，不固定到特定 path。mixed 本身不保证形成热点。 | 检查背景负载下的短流尾延迟、长流干扰和公平性。 |
+| `path_hotspot` | 与 selector 无关的 fixed-link background source 对所有 leaf 的少数选定 spine links 注入相同 offered load；target flows 保持普通 permutation destination，并使用完整 spine 集合。 | 制造可绕开的中间路径热点，检查 target 是否识别并避开已占用 spine。 |
+| `incast` | 16/32/64/128 个 source 同时向同一个 destination host 发送；所有路径最终共享该 host 的最后一跳。 | 检查不可绕开的最后一跳瓶颈、TRIM/NACK/RTO 和尾延迟。 |
+
+`path_hotspot` 与 `incast` 的区别是：前者的拥塞位于少数 spine 路径，target 可以改走其他 spine；后者的拥塞位于所有路径共享的 destination-host downlink，换 EV/path 不能消除瓶颈。
+
+历史 512-node 周期交换机状态矩阵中的 `n-mrc` 结果现在归入 `netaware`：SGLB 使用 1us local/5us GCN cache，NetAware 使用 1us leaf-local/5us spine-export cache。新 n-MRC 用下面的专用 runner 做 EV/换路策略与 baseline 对比：
+
+```bash
+python3 experiments/n-mrc/run_periodic_cache_packet_lb_512.py
+python3 experiments/n-mrc/run_hybrid_nmrc_compare.py --dry-run --quick
+python3 experiments/n-mrc/run_hybrid_nmrc_compare.py --quick --seeds 13,29,47
+```
+
+结果保存在 `experiments/n-mrc/output/nmrc_periodic_cache_packet_lb_512/`。其中 controlled `path_hotspot` 使用与 selector 无关的 fixed-link background，向 4/16 个 spine paths 提供相同背景负载；mixed 使用真实 rate-limited RoCE background flows。背景 packet 被 composite queue trim 后实际 payload load 可能不同，因此报告同时给出 target NACK 和全局 QueueDiag。
 
 通用参数：
 
@@ -79,10 +107,10 @@ n-mrc 把一个 EV 看作完整的端到端路径组合。2-tier 拓扑中，EV 
 
 ## 环境准备
 
-推荐直接 clone 当前 n-mrc 分支：
+推荐直接 clone 当前实验分支：
 
 ```bash
-git clone -b main-htsim https://github.com/Programmable-sw/GLB.git csg-htsim
+git clone -b main-htsim https://github.com/Programmable-sw/SGLB.git csg-htsim
 cd csg-htsim
 git remote add upstream https://github.com/Broadcom/csg-htsim.git || true
 git fetch --all --prune
@@ -108,7 +136,7 @@ make -C sim -j"$(nproc)"
 ./sim/datacenter/htsim_roce -h | head -n 40
  python3 -m py_compile \
   experiments/n-mrc/run_literature_metric_compare.py \
-  experiments/n-mrc/run_glb_factor_compare.py
+  experiments/n-mrc/run_sglb_factor_compare.py
 ```
 
 ## 运行实验
@@ -124,7 +152,7 @@ python3 experiments/n-mrc/run_literature_metric_compare.py
 - 场景：健康网络、非对称带宽、非对称带宽2。
 - Traffic：`tornado`、`permutation`。
 - Flow size：默认启用 `4,32`MiB；脚本支持 `4,8,16,32`MiB。
-- 每个 case 默认跑逐包方案 `ecmp_rr`、`ops`、`rr`、`reps`、`n-mrc`、`mrc`、`adaptive-routing`、`drill`、`glb`。
+- 每个 case 默认跑逐包方案 `ecmp_rr`、`ops`、`rr`、`reps`、`avail`、`grade`、`n-mrc`、`mrc`、`adaptive-routing`、`drill`、`sglb`。
 
 只跑非对称带宽2的 8MiB 快速检查：
 
@@ -157,6 +185,12 @@ python3 experiments/n-mrc/run_literature_metric_compare.py
 | `SCENARIO_OUT` | 自动生成 | 输出目录。 |
 | `KEEP_RAW_OUTPUT` | `1` | 保留 `.cmd`、`.stdout`、`.dat` 和 `.cm` 文件并支持缓存；设为 `0` 时清理 raw 输出。 |
 
+显式使用 `SCENARIO_CC=dcqcn` 时，当前 rate-based DCQCN 默认参数按
+`400 Gbit/s / 7 us RTT / 350000-byte BDP` 校准：`initial_alpha=0.6`、
+`min_rate=80 Gbit/s`、`alpha/rate interval=28 us`、`CNP interval=16.8 us`、
+`byte_counter=1.4 MB`。其他链路速率或 RTT 应通过 `-dcqcn_*` 参数覆盖并
+重新验证；默认实验口径仍是 `dcqcn_variant`。
+
 ## 输出文件
 
 主测试输出目录包含：
@@ -168,29 +202,35 @@ python3 experiments/n-mrc/run_literature_metric_compare.py
 - `scenario_plan.md`：脚本本次展开的场景列表。
 - `*_packet_lb_slowdown.png/pdf`：README 风格归一化对比图，指标为 avg FCT、p99 FCT、p99.9 FCT。
 
-## 辅助 glb 参数脚本
+## 辅助 sglb 参数脚本
 
-glb 五因子参数对比脚本保留为辅助实验：
+SGLB 默认使用四档 noisy-or top-K。原五因子评分保留为显式对照：
 
 ```bash
-python3 experiments/n-mrc/run_glb_factor_compare.py
+-sglb_score_mode legacy
+```
+
+同一 noisy-or top-K 的八档量化由 `-sglb_nmrc_levels 8` 启用。五因子参数对比脚本保留为辅助实验：
+
+```bash
+python3 experiments/n-mrc/run_sglb_factor_compare.py
 ```
 
 示例：
 
 ```bash
-GLB_FACTOR_NODES=1024 GLB_FACTOR_TIERS=3 GLB_FACTOR_FLOW_SIZE=$((32 * 1024 * 1024)) \
-python3 experiments/n-mrc/run_glb_factor_compare.py
+SGLB_FACTOR_NODES=1024 SGLB_FACTOR_TIERS=3 SGLB_FACTOR_FLOW_SIZE=$((32 * 1024 * 1024)) \
+python3 experiments/n-mrc/run_sglb_factor_compare.py
 ```
 
 ## 核心代码
 
 - `experiments/n-mrc/run_literature_metric_compare.py`：README 标准场景生成、命令拼接、指标解析、报告生成和图表输出。
-- `experiments/n-mrc/run_glb_factor_compare.py`：glb 参数对比。
+- `experiments/n-mrc/run_sglb_factor_compare.py`：sglb 参数对比。
 - `sim/datacenter/main_roce.cpp`：RoCE CLI 参数、LB 模式选择、EV 空间按拓扑自动校准。
-- `sim/roce.cpp` / `sim/roce.h`：源端 `ecmp`、`ops`、`reps`、`n-mrc`、`mrc` 选路状态机和 ACK/NACK feedback 更新。
-- `sim/rocepacket.h`：RoCE packet/ACK 上携带 pathid 和 n-mrc bitmap feedback。
-- `sim/datacenter/fat_tree_switch.cpp` / `sim/datacenter/fat_tree_switch.h`：交换机 ecmp / adaptive-routing / drill / glb 转发、source-controlled pathid 分段映射、n-mrc feedback 生成。
+- `sim/roce.cpp` / `sim/roce.h`：源端 `ecmp`、`ops`、`reps`、`avail`/`grade`（内部复用 STOR）、`mrc` 选路状态机和 ACK/NACK feedback 更新。
+- `sim/rocepacket.h`：RoCE packet/ACK/NACK 上携带 pathid、Grade/Avail 的 STOR feedback 和独立 n-MRC snapshot。
+- `sim/datacenter/fat_tree_switch.cpp` / `sim/datacenter/fat_tree_switch.h`：交换机 ecmp / adaptive-routing / drill / sglb 转发、source-controlled pathid 分段映射、Avail/Grade 的 source-ToR feedback 生成。
 - `sim/datacenter/fat_tree_topology.cpp` / `sim/datacenter/fat_tree_topology.h`：generated fat-tree 拓扑、bundle/radix 参数、慢链路注入。
 - `MRC_IMPLEMENTATION.md`：独立 `mrc` 模式的实现细节、默认 CC/队列/参数、已实现机制和当前近似范围。
 
@@ -203,4 +243,4 @@ make -C sim clean
 
 ## htsim 背景
 
-htsim 是一个高性能离散事件仿真器，设计目标是快速研究拥塞控制算法行为。本 fork 保留 htsim/RoCE 仿真器结构，并在其上加入 n-mrc 相关实验。
+htsim 是一个高性能离散事件仿真器，设计目标是快速研究拥塞控制算法行为。本 fork 保留 htsim/RoCE 仿真器结构，并在其上加入 n-MRC 相关实验。

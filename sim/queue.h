@@ -54,12 +54,15 @@ class BaseQueue  : public EventSource, public PacketSink, public Drawable {
             return (simtime_picosec)(pkt->size() * _ps_per_byte); 
     }
 
-    inline mem_b serviceCapacity(simtime_picosec t) { 
-            return (mem_b)(timeAsSec(t) * (double)_bitrate); 
+    inline mem_b serviceCapacity(simtime_picosec t) {
+            return (mem_b)(timeAsSec(t) * (double)_bitrate);
     }
+    inline linkspeed_bps bitrate() const { return _bitrate; }
 
     virtual void log_packet_send(simtime_picosec duration);
     virtual uint16_t average_utilization();
+    uint16_t peek_average_utilization();
+    uint64_t bytes_sent_count() const { return _bytes_sent; }
 
     virtual uint64_t quantized_queuesize();
     virtual uint8_t quantized_utilization();
@@ -81,6 +84,7 @@ protected:
     simtime_picosec _busy;
     simtime_picosec _idle;
     simtime_picosec _window;
+    uint64_t _bytes_sent;
 
     simtime_picosec _last_update_qs, _last_update_utilization;
     uint8_t _last_qs, _last_utilization;

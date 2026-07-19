@@ -4,11 +4,14 @@
 
 #include "switch.h"
 #include "callback_pipe.h"
+#include "rocepacket.h"
+#include <set>
 #include <unordered_map>
 #include <vector>
 
 class FatTreeTopology;
-class GlbGcnTimer;
+class SglbGcnTimer;
+class NetawareExportTimer;
 
 /*
  * Copyright (C) 2013-2014 Universita` di Pisa. All rights reserved.
@@ -90,7 +93,7 @@ public:
     };
 
     enum routing_strategy {
-        NIX = 0, ECMP = 1, ADAPTIVE_ROUTING = 2, ECMP_ADAPTIVE = 3, RR = 4, RR_ECMP = 5, GLB = 6, DRILL = 7
+        NIX = 0, ECMP = 1, ADAPTIVE_ROUTING = 2, ECMP_ADAPTIVE = 3, RR = 4, RR_ECMP = 5, SGLB = 6, DRILL = 7
     };
 
     enum sticky_choices {
@@ -106,27 +109,229 @@ public:
     uint32_t adaptive_route(vector<FibEntry*>* ecmp_set, int8_t (*cmp)(FibEntry*,FibEntry*));
     uint32_t replace_worst_choice(vector<FibEntry*>* ecmp_set, int8_t (*cmp)(FibEntry*,FibEntry*),uint32_t my_choice);
     uint32_t adaptive_route_p2c(vector<FibEntry*>* ecmp_set, int8_t (*cmp)(FibEntry*,FibEntry*));
-    uint32_t glb_route(vector<FibEntry*>* ecmp_set, uint32_t dst);
-    uint32_t glb_best_score(uint32_t dst, uint32_t depth);
+    uint32_t sglb_route(vector<FibEntry*>* ecmp_set, uint32_t dst);
+    uint32_t sglb_best_score(uint32_t dst, uint32_t depth);
     uint32_t drill_route(vector<FibEntry*>* ecmp_set, uint32_t dst);
 
-    struct GlbPathState {
+    enum SglbScoreMode {
+        SGLB_SCORE_LEGACY = 0,
+        SGLB_SCORE_NMRC_QUANTIZED_TOPK = 1
+    };
+
+    enum NmrcReroutePolicy {
+        NMRC_REROUTE_ANY_BETTER = 0,
+        NMRC_REROUTE_BETTER_GE3 = 1
+    };
+
+    struct NmrcRerouteDecision {
+        bool reroute;
+        uint32_t selected_index;
+        uint32_t better_count;
+        uint32_t candidate_count;
+        uint8_t original_level;
+        uint8_t selected_level;
+
+        NmrcRerouteDecision()
+            : reroute(false), selected_index(UINT32_MAX), better_count(0),
+              candidate_count(0), original_level(STOR_LEVEL_GOOD),
+              selected_level(STOR_LEVEL_GOOD) {}
+    };
+
+    static NmrcRerouteDecision nmrc_select_better_path(
+        uint32_t original_index,
+        const vector<uint8_t>& levels,
+        const vector<bool>& available,
+        NmrcReroutePolicy policy,
+        uint32_t min_choices,
+        uint32_t selection_value);
+
+    struct SglbPathState {
         double score;
         double best_score;
         double avg_busy;
+        double queue_fraction;
+        double queue_pressure;
         uint32_t candidate_count;
         uint8_t quality;
         simtime_picosec last_update;
         bool valid;
         bool link_available;
 
-        GlbPathState()
+        SglbPathState()
             : score(0.0), best_score(0.0), avg_busy(0.0),
-              candidate_count(0), quality(0), last_update(0),
+              queue_fraction(0.0), queue_pressure(0.0), candidate_count(0),
+              quality(0), last_update(0),
               valid(false), link_available(true) {}
     };
 
-    static uint8_t glb_quality_from_score(double score, double bucket, uint32_t levels) {
+    struct SglbQualitySnapshot {
+        double score;
+        uint8_t quality;
+        simtime_picosec last_update;
+        bool valid;
+
+        SglbQualitySnapshot()
+            : score(0.0), quality(0), last_update(0), valid(false) {}
+    };
+
+    enum StorSignal {
+        STOR_SIGNAL_CLEAN = 0,
+        STOR_SIGNAL_ECN = 1,
+        STOR_SIGNAL_TRIM = 2
+    };
+
+    enum StorScoreProfile {
+        STOR_SCORE_PROFILE_ORIGINAL = 0,
+        STOR_SCORE_PROFILE_BALANCED = 1,
+        STOR_SCORE_PROFILE_CUSTOM = 2,
+        STOR_SCORE_PROFILE_SIMPLE = 3,
+        STOR_SCORE_PROFILE_BINARY = 4
+    };
+
+    enum StorAgingProfile {
+        STOR_AGING_PACKET = 0,
+        STOR_AGING_TIME_EWMA = 1,
+        STOR_AGING_HYBRID = 2
+    };
+
+    enum NetawareScoreMode {
+        NETAWARE_SCORE_GATED = 0,
+        NETAWARE_SCORE_WORST_HOP = 1,
+        NETAWARE_SCORE_SGLB_QUANTIZED = 2
+    };
+
+    enum NetawarePathCoupling {
+        NETAWARE_PATH_COUPLING_ADDITIVE = 0,
+        NETAWARE_PATH_COUPLING_BOTTLENECK = 1,
+        NETAWARE_PATH_COUPLING_NOISY_OR = 2
+    };
+
+    struct NetawarePathScore {
+        double local_q_pressure;
+        double remote_q_pressure;
+        double local_util_pressure;
+        double remote_util_pressure;
+        double path_score;
+        uint8_t level;
+        const char* reason;
+
+        NetawarePathScore()
+            : local_q_pressure(0.0), remote_q_pressure(0.0),
+              local_util_pressure(0.0), remote_util_pressure(0.0),
+              path_score(0.0), level(STOR_LEVEL_GOOD), reason("good") {}
+    };
+
+    struct NetawarePortSnapshot {
+        double queue_fraction;
+        double utilization_fraction;
+        linkspeed_bps bitrate;
+        simtime_picosec last_update;
+        bool paused;
+        bool valid;
+
+        NetawarePortSnapshot()
+            : queue_fraction(0.0), utilization_fraction(0.0), bitrate(0),
+              last_update(0), paused(false), valid(false) {}
+    };
+
+    struct StorEvState {
+        uint8_t score;
+        uint8_t ecn_acc;
+        uint8_t trim_acc;
+        simtime_picosec last_update;
+        simtime_picosec last_bad_time;
+        simtime_picosec last_probe_time;
+        uint64_t last_probe_packet;
+        uint8_t probe_clean_streak;
+        uint8_t min_score_seen;
+        uint8_t last_level;
+        bool has_bad_time;
+        uint64_t clean_signals;
+        uint64_t ecn_signals;
+        uint64_t trim_signals;
+        uint64_t avoid_entries;
+        uint64_t avoid_exits;
+
+        StorEvState()
+            : score(255), ecn_acc(0), trim_acc(0), last_update(0),
+              last_bad_time(0), last_probe_time(0), last_probe_packet(0),
+              probe_clean_streak(0), min_score_seen(255),
+              last_level(STOR_LEVEL_GOOD), has_bad_time(false),
+              clean_signals(0), ecn_signals(0),
+              trim_signals(0), avoid_entries(0), avoid_exits(0) {}
+    };
+
+    static uint8_t stor_level_from_score(uint8_t score);
+    static void stor_apply_signal(StorEvState& state, StorSignal signal);
+    static void set_stor_score_profile(StorScoreProfile profile);
+    static const char* stor_score_profile_name();
+    static void set_stor_aging_profile(StorAgingProfile profile);
+    static const char* stor_aging_profile_name();
+    StorFeedbackLevels stor_feedback_after_signal(uint32_t src_host,
+                                                  uint32_t peer_host,
+                                                  uint32_t pathid,
+                                                  uint32_t path_count,
+                                                  StorSignal signal);
+    void collect_stor_diag(uint8_t& min_score,
+                           uint64_t& avoid_entries,
+                           uint64_t& avoid_exits,
+                           uint64_t& clean_signals,
+                           uint64_t& ecn_signals,
+                           uint64_t& trim_signals) const;
+    void collect_netaware_diag(uint64_t& samples,
+                           uint64_t& sample_zero_bits,
+                           uint64_t& feedbacks,
+                           uint64_t& packet_feedbacks,
+                           uint64_t& time_feedbacks,
+                           uint64_t& feedback_packets_sum,
+                           uint64_t& feedback_zero_bits,
+                           uint64_t& all_good_feedbacks) const;
+    struct NetawarePathTraceSample {
+        uint32_t spine_id;
+        mem_b q_leaf_to_spine;
+        mem_b q_spine_to_dst_leaf;
+        mem_b q_leaf_to_spine_max;
+        mem_b q_spine_to_dst_leaf_max;
+        double util_leaf_to_spine;
+        double util_spine_to_dst_leaf;
+        linkspeed_bps link_rate_leaf_to_spine;
+        linkspeed_bps link_rate_spine_to_dst_leaf;
+        bool link_down;
+        uint64_t ecn_marks_on_path;
+        uint64_t trimmed_packets_on_path;
+        uint64_t dropped_packets_on_path;
+        uint64_t bytes_sent_on_path;
+        double local_q_pressure;
+        double remote_q_pressure;
+        double local_util_pressure;
+        double remote_util_pressure;
+        double path_score;
+        const char* netaware_level_reason;
+        uint8_t path_grade;
+
+        NetawarePathTraceSample()
+            : spine_id(UINT32_MAX), q_leaf_to_spine(0),
+              q_spine_to_dst_leaf(0), q_leaf_to_spine_max(0),
+              q_spine_to_dst_leaf_max(0), util_leaf_to_spine(0.0),
+              util_spine_to_dst_leaf(0.0), link_rate_leaf_to_spine(0),
+              link_rate_spine_to_dst_leaf(0), link_down(true),
+              ecn_marks_on_path(0), trimmed_packets_on_path(0),
+              dropped_packets_on_path(0), bytes_sent_on_path(0),
+              local_q_pressure(0.0), remote_q_pressure(0.0),
+              local_util_pressure(0.0), remote_util_pressure(0.0),
+              path_score(0.0), netaware_level_reason("missing_queue"),
+              path_grade(STOR_LEVEL_GOOD) {}
+    };
+    bool netaware_trace_path_state(uint32_t dst,
+                               uint32_t ev,
+                               uint32_t path_count,
+                               NetawarePathTraceSample& sample);
+    const StorEvState* stor_state_for_test(uint32_t peer_host,
+                                           uint32_t pathid) const;
+    void stor_apply_time_aging_for_test(uint32_t peer_host,
+                                        simtime_picosec now);
+
+    static uint8_t sglb_quality_from_score(double score, double bucket, uint32_t levels) {
         if (levels == 0)
             levels = 1;
         if (bucket <= 0.0)
@@ -144,7 +349,7 @@ public:
         return (uint8_t)quality;
     }
 
-    static double glb_downstream_scale_for_score(double local_score,
+    static double sglb_downstream_scale_for_score(double local_score,
                                                  double bucket,
                                                  bool normalized) {
         if (local_score <= 0.0)
@@ -158,7 +363,45 @@ public:
         return 1.0 / (1.0 + pressure);
     }
 
-    static bool glb_snapshot_usable(const GlbPathState& state,
+    static double sglb_nmrc_queue_pressure(double queue_fraction);
+    static double sglb_nmrc_noisy_or(double local, double remote);
+    static uint8_t sglb_nmrc_level(double score);
+    static uint8_t sglb_nmrc_quantized_level(double score, uint32_t levels);
+    static const char* sglb_score_mode_name();
+
+    static const char* netaware_score_mode_name();
+    static const char* netaware_path_coupling_name();
+    static uint32_t netaware_default_feedback_pkts(uint32_t path_count);
+    static double netaware_default_feedback_min_us(uint32_t path_count);
+    static double netaware_default_feedback_max_us(uint32_t path_count);
+    static uint32_t avail_default_feedback_pkts(uint32_t path_count);
+    static uint32_t grade_default_feedback_pkts(uint32_t path_count);
+    static bool netaware_snapshot_refresh_due(const NetawarePortSnapshot& snapshot,
+                                          simtime_picosec now,
+                                          simtime_picosec interval) {
+        if (!snapshot.valid || interval == 0)
+            return true;
+        if (now < snapshot.last_update)
+            return true;
+        return now - snapshot.last_update >= interval;
+    }
+    static double netaware_pressure_from_range(double value, double low, double high);
+    static double netaware_composite_score(double local_q_pressure,
+                                       double remote_q_pressure,
+                                       double local_util_pressure,
+                                       double remote_util_pressure);
+    static double netaware_couple_hop_scores(double local_q_pressure,
+                                         double remote_q_pressure,
+                                         double local_util_pressure,
+                                         double remote_util_pressure);
+    static uint8_t netaware_level_from_score(double score);
+    static uint8_t netaware_gated_level_from_inputs(bool paused,
+                                                double rate_ratio,
+                                                double queue_fraction,
+                                                double util_fraction,
+                                                bool grade_queues);
+
+    static bool sglb_snapshot_usable(const SglbPathState& state,
                                     simtime_picosec now,
                                     simtime_picosec aging_interval) {
         if (!state.valid || !state.link_available)
@@ -170,7 +413,7 @@ public:
         return now - state.last_update <= aging_interval;
     }
 
-    void glb_mark_neighbor_link(uint32_t neighbor_id, bool available);
+    void sglb_mark_neighbor_link(uint32_t neighbor_id, bool available);
 
     static int8_t compare_flow_count(FibEntry* l, FibEntry* r);
     static int8_t compare_pause(FibEntry* l, FibEntry* r);
@@ -196,35 +439,160 @@ public:
     static simtime_picosec _sticky_delta;
     static double _ecn_threshold_fraction;
     static double _speculative_threshold_fraction;
-    static double _glb_downstream_weight;
-    static double _glb_queue_weight;
-    static double _glb_util_weight;
-    static double _glb_remote_queue_weight;
-    static double _glb_remote_util_weight;
-    static double _glb_remote_busy_weight;
-    static double _glb_quality_bucket;
-    static uint32_t _glb_max_quality;
-    static simtime_picosec _glb_update_interval;
-    static uint32_t _glb_quality_levels;
-    static uint32_t _glb_min_choices;
-    static simtime_picosec _glb_gcn_update_interval;
-    static simtime_picosec _glb_gcn_aging_interval;
-    static bool _glb_normalize_scores;
-    static bool _glb_local_damping;
-    static uint32_t _nmrc_feedback_pkts;
-    static simtime_picosec _nmrc_feedback_min_interval;
-    static simtime_picosec _nmrc_feedback_max_interval;
-    static uint32_t _nmrc_path_count;
-    static bool _nmrc_feedback_observed_values;
-    static bool _nmrc_feedback_bad_only;
+    static double _sglb_downstream_weight;
+    static double _sglb_queue_weight;
+    static double _sglb_util_weight;
+    static double _sglb_remote_queue_weight;
+    static double _sglb_remote_util_weight;
+    static double _sglb_remote_busy_weight;
+    static double _sglb_quality_bucket;
+    static uint32_t _sglb_max_quality;
+    static simtime_picosec _sglb_update_interval;
+    static uint32_t _sglb_quality_levels;
+    static uint32_t _sglb_min_choices;
+    static simtime_picosec _sglb_gcn_update_interval;
+    static simtime_picosec _sglb_gcn_aging_interval;
+    static bool _sglb_normalize_scores;
+    static bool _sglb_local_damping;
+    static SglbScoreMode _sglb_score_mode;
+    static double _sglb_nmrc_q_min;
+    static double _sglb_nmrc_q_max;
+    static double _sglb_nmrc_degraded_threshold;
+    static double _sglb_nmrc_bad_threshold;
+    static double _sglb_nmrc_avoid_threshold;
+    static uint32_t _sglb_nmrc_levels;
+    static uint64_t _sglb_diag_route_calls;
+    static uint64_t _sglb_diag_available_choices;
+    static uint64_t _sglb_diag_candidate_choices;
+    static uint64_t _sglb_diag_best_quality_choices;
+    static uint64_t _sglb_diag_distinct_qualities;
+    static uint64_t _sglb_diag_all_same_quality_calls;
+    static uint64_t _sglb_diag_all_zero_quality_calls;
+    static uint64_t _sglb_diag_selected_nonbest_quality;
+    static uint64_t _sglb_diag_remote_snapshot_used;
+    static uint64_t _sglb_diag_remote_snapshot_missing;
+    static uint64_t _sglb_diag_observed_levels[4];
+    static uint64_t _sglb_diag_selected_levels[4];
+    static double _sglb_diag_score_spread_sum;
+    static void reset_sglb_route_diag();
+    static bool _nmrc_hybrid_enabled;
+    static bool _nmrc_fastcnp_enabled;
+    static NmrcReroutePolicy _nmrc_reroute_policy;
+    static uint64_t _nmrc_diag_route_checks;
+    static uint64_t _nmrc_diag_reroutes;
+    static uint64_t _nmrc_diag_threshold_blocked;
+    static uint64_t _nmrc_diag_fastcnp_generated;
+    static uint64_t _nmrc_diag_fastcnp_route_missing;
+    static uint64_t _nmrc_diag_better_count[33];
+    static uint64_t _nmrc_diag_level_transitions[4][4];
+    static std::set<uint64_t> _nmrc_diag_observed_flow_evs;
+    static std::set<uint64_t> _nmrc_diag_observed_flow_paths;
+    static void reset_nmrc_hybrid_diag();
+    static uint64_t nmrc_diag_observed_evs() {
+        return _nmrc_diag_observed_flow_evs.size();
+    }
+    static uint64_t nmrc_diag_observed_paths() {
+        return _nmrc_diag_observed_flow_paths.size();
+    }
+    static bool _netaware_enabled;
+    static uint32_t _netaware_path_count;
+    static uint32_t _netaware_feedback_pkts;
+    static simtime_picosec _netaware_feedback_min_interval;
+    static simtime_picosec _netaware_feedback_max_interval;
+    static double _netaware_queue_threshold_fraction;
+    static double _netaware_degraded_queue_fraction;
+    static double _netaware_bad_queue_fraction;
+    static double _netaware_degraded_utilization_fraction;
+    static double _netaware_util_queue_floor_fraction;
+    static double _netaware_slow_link_fraction;
+    static simtime_picosec _netaware_state_update_interval;
+    static simtime_picosec _netaware_remote_update_interval;
+    static NetawareScoreMode _netaware_score_mode;
+    static NetawarePathCoupling _netaware_path_coupling;
+    static double _netaware_score_q_min;
+    static double _netaware_score_q_max;
+    static double _netaware_score_util_low;
+    static double _netaware_score_util_high;
+    static double _netaware_score_weight_local_q;
+    static double _netaware_score_weight_remote_q;
+    static double _netaware_score_weight_local_util;
+    static double _netaware_score_weight_remote_util;
+    static double _netaware_score_degraded_threshold;
+    static double _netaware_score_bad_threshold;
+    static double _netaware_score_avoid_threshold;
+    static bool _stor_enabled;
+    static uint32_t _stor_path_count;
+    static uint32_t _stor_feedback_pkts;
+    static simtime_picosec _stor_feedback_min_interval;
+    static simtime_picosec _stor_feedback_max_interval;
+    static simtime_picosec _stor_trim_feedback_min_interval;
+    static bool _stor_feedback_on_trim;
+    static bool _stor_binary_trim_bad;
+    static uint8_t _stor_clean_gain;
+    static uint8_t _stor_ecn_acc_add;
+    static uint8_t _stor_trim_acc_add;
+    static uint8_t _stor_ecn_base_penalty;
+    static uint8_t _stor_trim_base_penalty;
+    static uint8_t _stor_ecn_decay_shift;
+    static uint8_t _stor_trim_decay_shift;
+    static uint8_t _stor_ecn_penalty_shift;
+    static uint8_t _stor_trim_penalty_shift;
+    static uint8_t _stor_good_threshold;
+    static uint8_t _stor_degraded_threshold;
+    static uint8_t _stor_bad_threshold;
+    static uint8_t _stor_simple_max_score;
+    static uint8_t _stor_simple_clean_gain;
+    static uint8_t _stor_simple_congestion_penalty;
+    static StorScoreProfile _stor_score_profile;
+    static StorAgingProfile _stor_aging_profile;
+    static simtime_picosec _stor_time_ecn_tau;
+    static simtime_picosec _stor_time_trim_tau;
+    static simtime_picosec _stor_time_score_tau;
+    static simtime_picosec _stor_hybrid_bad_hold;
+    static simtime_picosec _stor_hybrid_avoid_hold;
+    static uint32_t _stor_hybrid_probe_interval_pkts;
+    static uint32_t _stor_hybrid_probe_clean_promote;
     static bool _pathid_only_hash;
 private:
-    struct NmrcState {
-        std::vector<uint8_t> bitmap;
+    struct NetawareState {
+        StorFeedbackLevels levels;
+        bool levels_valid;
+        uint32_t packets;
+        simtime_picosec last_level_update;
+        simtime_picosec last_feedback;
+        uint64_t samples;
+        uint64_t sample_zero_bits;
+        uint64_t feedbacks;
+        uint64_t packet_feedbacks;
+        uint64_t time_feedbacks;
+        uint64_t feedback_packets_sum;
+        uint64_t feedback_zero_bits;
+        uint64_t all_good_feedbacks;
+
+        NetawareState()
+            : levels_valid(false), packets(0), last_level_update(0),
+              last_feedback(0), samples(0),
+              sample_zero_bits(0), feedbacks(0), packet_feedbacks(0),
+              time_feedbacks(0), feedback_packets_sum(0),
+              feedback_zero_bits(0), all_good_feedbacks(0) {}
+    };
+
+    struct NetawareExportState {
+        std::vector<NetawarePortSnapshot> ports;
+        simtime_picosec last_update;
+        bool valid;
+
+        NetawareExportState() : last_update(0), valid(false) {}
+    };
+
+    struct StorState {
+        std::vector<StorEvState> evs;
         uint32_t packets;
         simtime_picosec last_feedback;
+        uint64_t signals_seen;
+        bool dirty;
 
-        NmrcState() : packets(0), last_feedback(0) {}
+        StorState() : packets(0), last_feedback(0), signals_seen(0), dirty(false) {}
     };
 
     switch_type _type;
@@ -235,12 +603,18 @@ private:
     vector<FibEntry*>* _uproutes;
 
     unordered_map<uint32_t,FlowletInfo*> _flowlet_maps;
-    unordered_map<uint32_t,NmrcState> _nmrc_states;
+    unordered_map<uint32_t,NetawareState> _netaware_states;
+    unordered_map<uint32_t,StorState> _stor_states;
     unordered_map<uint32_t,uint32_t> _drill_memory;
-    unordered_map<uint32_t,GlbPathState> _glb_exported_state;
-    unordered_map<uint32_t,bool> _glb_neighbor_available;
-    GlbGcnTimer* _glb_gcn_timer;
-    bool _glb_gcn_timer_pending;
+    unordered_map<uint32_t,SglbPathState> _sglb_exported_state;
+    unordered_map<uint32_t,unordered_map<FibEntry*,SglbQualitySnapshot> > _sglb_quality_table;
+    unordered_map<uint32_t,bool> _sglb_neighbor_available;
+    SglbGcnTimer* _sglb_gcn_timer;
+    bool _sglb_gcn_timer_pending;
+    unordered_map<BaseQueue*,NetawarePortSnapshot> _netaware_local_state;
+    unordered_map<uint32_t,NetawareExportState> _netaware_exported_state;
+    NetawareExportTimer* _netaware_export_timer;
+    bool _netaware_export_timer_pending;
 
     static unordered_map<BaseQueue*,uint32_t> _port_flow_counts;
 
@@ -250,24 +624,61 @@ private:
 
     unordered_map<Packet*,bool> _packets;
 
-    void glb_candidate_queues(uint32_t dst, vector<BaseQueue*>& queues);
-    uint32_t glb_queue_kbytes(BaseQueue* q);
-    double glb_queue_fraction(BaseQueue* q);
-    uint32_t glb_utilization_percent(BaseQueue* q);
-    double glb_port_score(BaseQueue* q, double queue_weight, double util_weight);
-    GlbPathState glb_compute_export_state(uint32_t dst);
-    void glb_maybe_refresh_export(uint32_t dst);
-    void glb_schedule_periodic_gcn();
-    void glb_periodic_refresh_exports();
-    const GlbPathState* glb_neighbor_snapshot(FibEntry* entry, uint32_t dst) const;
-    uint32_t glb_next_hop_id(FibEntry* entry) const;
-    bool glb_entry_available(FibEntry* entry) const;
-    double glb_score(FibEntry* entry, uint32_t dst, uint32_t depth);
-    uint8_t glb_quality(double score);
+    void sglb_candidate_queues(uint32_t dst, vector<BaseQueue*>& queues);
+    uint32_t sglb_queue_kbytes(BaseQueue* q);
+    double sglb_queue_fraction(BaseQueue* q);
+    uint32_t sglb_utilization_percent(BaseQueue* q);
+    double sglb_port_score(BaseQueue* q, double queue_weight, double util_weight);
+    SglbPathState sglb_compute_export_state(uint32_t dst);
+    void sglb_maybe_refresh_export(uint32_t dst);
+    void sglb_schedule_periodic_gcn();
+    void sglb_periodic_refresh_exports();
+    const SglbPathState* sglb_neighbor_snapshot(FibEntry* entry, uint32_t dst) const;
+    uint32_t sglb_next_hop_id(FibEntry* entry) const;
+    bool sglb_entry_available(FibEntry* entry) const;
+    double sglb_compute_score(FibEntry* entry, uint32_t dst, uint32_t depth);
+    double sglb_compute_nmrc_score(FibEntry* entry, uint32_t dst,
+                                       uint32_t depth);
+    const SglbQualitySnapshot& sglb_quality_snapshot(FibEntry* entry, uint32_t dst, uint32_t depth);
+    uint8_t sglb_quality(double score);
     uint32_t pathid_ecmp_choice(Packet& pkt, uint32_t hop_count, packet_direction direction);
-    void maybe_update_nmrc_feedback(Packet& pkt);
+    uint32_t nmrc_maybe_reroute(Packet& pkt,
+                                vector<FibEntry*>* available_hops,
+                                uint32_t original_choice);
+    bool nmrc_is_source_leaf_data(Packet& pkt,
+                                  vector<FibEntry*>* available_hops) const;
+    bool nmrc_inject_fastcnp(const RocePacket& data,
+                             uint32_t original_egress,
+                             uint32_t selected_egress,
+                             uint8_t original_level,
+                             uint8_t selected_level);
+    void maybe_update_netaware_feedback(Packet& pkt);
+    void maybe_update_stor_feedback(Packet& pkt);
+    BaseQueue* netaware_local_queue_for_ev(uint32_t dst, uint32_t ev);
+    BaseQueue* netaware_trace_spine_queue_for_ev(uint32_t dst, uint32_t ev);
+    NetawarePortSnapshot netaware_read_port_snapshot(BaseQueue* q);
+    NetawarePortSnapshot netaware_local_snapshot(BaseQueue* q);
+    NetawareExportState netaware_compute_export_state(uint32_t dst);
+    void netaware_maybe_refresh_export(uint32_t dst);
+    void netaware_schedule_periodic_export();
+    void netaware_periodic_refresh_exports();
+    const NetawarePortSnapshot* netaware_neighbor_snapshot(uint32_t dst, uint32_t ev);
+    uint8_t netaware_port_level(const NetawarePortSnapshot& snapshot,
+                            linkspeed_bps normal_bitrate,
+                            bool grade_queues);
+    uint8_t netaware_gated_port_level(const NetawarePortSnapshot& snapshot,
+                                  linkspeed_bps normal_bitrate,
+                                  bool grade_queues);
+    NetawarePathScore netaware_path_score(const NetawarePortSnapshot& local,
+                                  const NetawarePortSnapshot& remote);
+    StorFeedbackLevels netaware_compute_levels(uint32_t dst, uint32_t path_count);
+    void netaware_refresh_levels(NetawareState& state, uint32_t dst,
+                             uint32_t path_count, simtime_picosec now);
+    static void stor_apply_time_aging(StorState& state, simtime_picosec now);
+    static void stor_note_level_transition(StorEvState& ev, uint8_t old_level);
 
-    friend class GlbGcnTimer;
+    friend class SglbGcnTimer;
+    friend class NetawareExportTimer;
 };
 
 #endif

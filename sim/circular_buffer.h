@@ -86,8 +86,12 @@ public:
         return _queue.at(_next_pop);
     }
 
-    bool empty() {return _count == 0;}
-    int size() {return _count;}
+    bool empty() const {return _count == 0;}
+    int size() const {return _count;}
+    const T& at_offset(int offset) const {
+        assert(offset >= 0 && offset < _count);
+        return _queue.at((_next_pop + offset) % _size);
+    }
 private:
     void validate() {
         assert(_count < _size);

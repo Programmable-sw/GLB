@@ -13,6 +13,7 @@ BaseQueue::BaseQueue(linkspeed_bps bitrate, EventList& eventlist, QueueLogger* l
     _ps_per_byte = (simtime_picosec)((pow(10.0, 12.0) * 8) / _bitrate);
     _window = timeFromUs(30.0);
     _busy = 0;
+    _bytes_sent = 0;
 
     _last_update_qs = 0;
     _last_update_utilization = 0;
@@ -20,7 +21,7 @@ BaseQueue::BaseQueue(linkspeed_bps bitrate, EventList& eventlist, QueueLogger* l
     _last_utilization = 0;
 }
 
-void 
+void
 BaseQueue::log_packet_send(simtime_picosec duration){
     //a packet tranmission has just finished; it lasted from a to b.
     simtime_picosec b = eventlist().now();
@@ -29,6 +30,8 @@ BaseQueue::log_packet_send(simtime_picosec duration){
     _busyend.push(b);
 
     _busy += duration;
+    if (_ps_per_byte > 0)
+        _bytes_sent += (uint64_t)(((double)duration / (double)_ps_per_byte) + 0.5);
 
     simtime_picosec cutoff = b > _window ? b - _window : 0;
     simtime_picosec y = _busyend.back();
@@ -69,6 +72,25 @@ BaseQueue::average_utilization(){
 
     }
     return (_busy*100/_window);
+}
+
+uint16_t
+BaseQueue::peek_average_utilization(){
+    // Diagnostics must not prune utilization history used by live routing.
+    simtime_picosec busy = _busy;
+    if (_busystart.empty())
+        return 0;
+
+    simtime_picosec now = eventlist().now();
+    simtime_picosec cutoff = now > _window ? now - _window : 0;
+    for (int i = 0; i < _busyend.size(); i++) {
+        simtime_picosec end = _busyend.at_offset(i);
+        if (end >= cutoff)
+            break;
+        simtime_picosec start = _busystart.at_offset(i);
+        busy -= end - start;
+    }
+    return busy * 100 / _window;
 }
 
 uint8_t

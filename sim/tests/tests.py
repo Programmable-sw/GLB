@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 
+from __future__ import annotations
+
 import json
 import subprocess
 import os
@@ -136,4 +138,3 @@ if __name__ == '__main__':
 
 	for test in all_tests:
 		run_test(test, update = args.update, verbose = args.verbose)
-

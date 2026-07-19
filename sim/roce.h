@@ -13,6 +13,7 @@
 #include <set>
 #include <vector>
 #include <array>
+#include <ostream>
 //#include "util.h"
 #include "math.h"
 #include "config.h"
@@ -37,9 +38,52 @@ class Switch;
 class RoceSrc : public BaseQueue, public TriggerTarget {
     friend class RoceSink;
 public:
-    typedef enum {LB_ECMP = 0, LB_REPS = 1, LB_NMRC = 2, LB_CONWEAVE = 3, LB_NDP = 4, LB_RR = 5, LB_OPS = 6, LB_MRC = 7} lb_mode_t;
-    typedef enum {CC_NONE = 0, CC_DCQCN_VARIANT = 1, CC_MPRDMA = 1, CC_DCQCN = 2} cc_mode_t;
+    typedef enum {LB_ECMP = 0, LB_REPS = 1, LB_CONWEAVE = 2, LB_NDP = 3, LB_RR = 4, LB_OPS = 5, LB_MRC = 6, LB_STOR = 7, LB_NETAWARE = 8, LB_NMRC = 9} lb_mode_t;
+    typedef enum {
+        CC_NONE = 0,
+        CC_DCQCN_VARIANT = 1,
+        CC_MPRDMA = 1,
+        CC_DCQCN = 2,
+        CC_DCQCN_VARIANT_NODUP_OLD = 3
+    } cc_mode_t;
     typedef enum {RX_GBN = 0, RX_SP_RETX_QUEUE = 1} rx_mode_t;
+    typedef enum {
+        TRANSPORT_LEGACY = 0,
+        TRANSPORT_MRC_EXACT_BOUNDED = 1
+    } transport_semantics_t;
+    typedef enum {
+        TRIM_RECOVERY_CUMULATIVE = 0,
+        TRIM_RECOVERY_EXACT_PSN = 1
+    } trim_recovery_mode_t;
+    typedef enum {
+        MRC_COOLDOWN_CWND_SCALED = 0,
+        MRC_COOLDOWN_ONE_CYCLE = 1
+    } mrc_cooldown_mode_t;
+    typedef enum {
+        MRC_ALL_COOLING_EARLIEST = 0,
+        MRC_ALL_COOLING_ROUND_ROBIN = 1
+    } mrc_all_cooling_fallback_t;
+    typedef enum {
+        MRC_CONGESTION_ECN = 0,
+        MRC_CONGESTION_TRIM = 1
+    } mrc_congestion_signal_t;
+    typedef enum {
+        NETAWARE_WRR_BUCKET = 0,
+        NETAWARE_WRR_DIRECT = 1,
+        NETAWARE_WRR_SHUFFLED_BUCKET = 2
+    } netaware_wrr_mode_t;
+    typedef enum {
+        NETAWARE_WEIGHT_ADAPTATION_OFF = 0,
+        NETAWARE_WEIGHT_ADAPTATION_GOOD_SHARE_CAP = 1
+    } netaware_weight_adaptation_t;
+    typedef enum {
+        NMRC_EV_ENCODED = 0,
+        NMRC_EV_RANDOM_MATCHED = 1,
+        NMRC_EV_RANDOM32 = 2
+    } nmrc_ev_mode_t;
+    enum {
+        WEIGHTED_SHUFFLED_BUCKET_PATH_MULTIPLIER = 4
+    };
     typedef enum {
         DCQCN_NACK_AS_CNP = 0,
         DCQCN_NACK_CNP = DCQCN_NACK_AS_CNP,
@@ -63,6 +107,16 @@ public:
     static void setMinRTO(uint32_t min_rto_in_us) {_min_rto = timeFromUs((uint32_t)min_rto_in_us);}
     static void setHighRTO(uint32_t high_rto_in_us) {_rto_high = high_rto_in_us ? timeFromUs((uint32_t)high_rto_in_us) : 0;}
     static void setReceiveMode(rx_mode_t mode) {_rx_mode = mode;}
+    static void setTransportSemantics(transport_semantics_t semantics) {
+        _transport_semantics = semantics;
+    }
+    static transport_semantics_t transportSemantics() {
+        return _transport_semantics;
+    }
+    static const char* transportSemanticsName() {
+        return _transport_semantics == TRANSPORT_MRC_EXACT_BOUNDED ?
+            "mrc_exact_bounded" : "legacy";
+    }
     static uint32_t normalizeSackBitmapBits(uint32_t bits) {
         return bits <= ROCE_SACK_BITMAP_BITS_DEFAULT ?
             ROCE_SACK_BITMAP_BITS_DEFAULT : ROCE_SACK_BITMAP_BITS_MAX;
@@ -74,26 +128,118 @@ public:
     static void setNackInterval(simtime_picosec interval) {_nack_interval = interval;}
     static void setLoadBalancing(lb_mode_t mode) {_lb_mode = mode;}
     static void setPathEntropySize(uint32_t paths) {_path_entropy_size = paths ? paths : 1;}
+    static void setNmrcEvMode(nmrc_ev_mode_t mode);
+    static nmrc_ev_mode_t nmrcEvMode();
+    static void setNmrcEvSeed(uint32_t seed);
+    static uint32_t nmrcEvSeed();
     static void setRepsBufferSize(uint32_t size) {_reps_buffer_size = size ? size : 1;}
     static void setRepsWarmupPkts(uint32_t pkts) {_reps_warmup_pkts = pkts;}
-    static void setNmrcMinGoodPaths(uint32_t paths) {_nmrc_min_good_paths = paths ? paths : 1;}
-    static void setNmrcHostsPerTor(uint32_t hosts) {_nmrc_hosts_per_tor = hosts ? hosts : 1;}
-    static void setNmrcBadHoldDown(simtime_picosec hold_down) {_nmrc_bad_hold_down = hold_down;}
-    static void setNmrcStateMode(uint32_t mode) {_nmrc_state_mode = mode;}
-    static void setNmrcWeakSamplePkts(uint32_t pkts) {_nmrc_weak_sample_pkts = pkts;}
-    static void setNmrcEcnDegradeMode(uint32_t mode) {_nmrc_ecn_degrade_mode = mode;}
-    static void setNmrcUnknownReopen(bool enable) {_nmrc_unknown_reopen = enable;}
-    static void setNmrcBadCacheWindows(uint32_t windows) {_nmrc_bad_cache_windows = windows ? windows : 1;}
-    static void setMrcActivePaths(uint32_t paths) {_mrc_active_path_count = paths;}
-    static void setMrcBackupPaths(uint32_t paths) {_mrc_backup_path_count = paths;}
-    static void setMrcMinActivePaths(uint32_t paths) {_mrc_min_active_paths = paths ? paths : 1;}
-    static void setMrcEcnCooldown(simtime_picosec cooldown) {_mrc_ecn_cooldown = cooldown;}
+    static void setHostsPerTor(uint32_t hosts) {_hosts_per_tor = hosts ? hosts : 1;}
+    static void resetStorSharedState();
+    static void resetNetawareSharedState();
+    static void setStorBinarySelector(bool enabled) {_stor_binary_selector = enabled;}
+    static bool storBinarySelector() {return _stor_binary_selector;}
+    static void setStorLevelWeights(uint32_t good, uint32_t degraded,
+                                    uint32_t bad, uint32_t avoid) {
+        _stor_level_weights[STOR_LEVEL_GOOD] = good;
+        _stor_level_weights[STOR_LEVEL_DEGRADED] = degraded;
+        _stor_level_weights[STOR_LEVEL_BAD] = bad;
+        _stor_level_weights[STOR_LEVEL_AVOID] = avoid;
+        resetStorSharedState();
+    }
+    static uint32_t storLevelWeight(uint8_t level) {
+        return level <= STOR_LEVEL_AVOID ? _stor_level_weights[level] : 0;
+    }
+    static void setNetawareLevelWeights(uint32_t good, uint32_t degraded,
+                                    uint32_t bad, uint32_t avoid) {
+        _netaware_level_weights[STOR_LEVEL_GOOD] = good;
+        _netaware_level_weights[STOR_LEVEL_DEGRADED] = degraded;
+        _netaware_level_weights[STOR_LEVEL_BAD] = bad;
+        _netaware_level_weights[STOR_LEVEL_AVOID] = avoid;
+        resetNetawareSharedState();
+    }
+    static uint32_t netawareLevelWeight(uint8_t level) {
+        return level <= STOR_LEVEL_AVOID ? _netaware_level_weights[level] : 0;
+    }
+    static void setNetawareWrrMode(netaware_wrr_mode_t mode) {_netaware_wrr_mode = mode;}
+    static netaware_wrr_mode_t netawareWrrMode() {return _netaware_wrr_mode;}
+    static const char* netawareWrrModeName();
+    static void setNetawareWeightAdaptation(netaware_weight_adaptation_t mode);
+    static netaware_weight_adaptation_t netawareWeightAdaptation();
+    static const char* netawareWeightAdaptationName();
+    static uint32_t weightedShuffledBucketSize(uint32_t path_space) {
+        return WEIGHTED_SHUFFLED_BUCKET_PATH_MULTIPLIER *
+            (path_space ? path_space : 1);
+    }
+    static uint32_t netawareShuffledBucketSize(uint32_t path_space) {
+        return weightedShuffledBucketSize(path_space);
+    }
+    static uint32_t virtualShuffleIndexForTest(uint32_t key, uint64_t epoch,
+                                               uint32_t position,
+                                               uint32_t domain);
+    static void setNetawareDecisionTrace(std::ostream* trace) {_netaware_decision_trace = trace;}
+    static void resetPathSelectionDiag();
+    static void setDiagPhysicalPathSpace(uint32_t paths) {_diag_physical_path_space = paths ? paths : 1;}
+    static uint64_t diagSelectedTotal() {return _diag_selected_total;}
+    static const std::map<uint32_t, uint64_t>& diagSelectedEvHist() {return _diag_selected_ev_hist;}
+    static const std::map<uint32_t, uint64_t>& diagSelectedPhysicalHist() {return _diag_selected_physical_hist;}
+    static const std::vector<uint32_t>& diagFirstSelectedEvs() {return _diag_first_selected_evs;}
+    static void setMrcCooldownMode(mrc_cooldown_mode_t mode) {
+        _mrc_cooldown_mode = mode;
+    }
+    static mrc_cooldown_mode_t mrcCooldownMode() {
+        return _mrc_cooldown_mode;
+    }
+    static void setMrcCooldownReferencePkts(uint32_t pkts) {
+        _mrc_cooldown_reference_pkts = pkts ? pkts : 1;
+    }
+    static uint32_t mrcCooldownReferencePkts() {
+        return _mrc_cooldown_reference_pkts;
+    }
+    static const char* mrcCooldownModeName() {
+        if (_mrc_cooldown_mode == MRC_COOLDOWN_ONE_CYCLE)
+            return "one_cycle";
+        return "cwnd_scaled";
+    }
+    static void setMrcAllCoolingFallback(
+            mrc_all_cooling_fallback_t fallback) {
+        _mrc_all_cooling_fallback = fallback;
+    }
+    static mrc_all_cooling_fallback_t mrcAllCoolingFallback() {
+        return _mrc_all_cooling_fallback;
+    }
+    static const char* mrcAllCoolingFallbackName() {
+        return _mrc_all_cooling_fallback == MRC_ALL_COOLING_EARLIEST ?
+            "earliest" : "round_robin";
+    }
+    static uint32_t mrcCwndScaledRotations(uint32_t active_count) {
+        if (!active_count)
+            active_count = 1;
+        return (_mrc_cooldown_reference_pkts + active_count - 1) /
+            active_count;
+    }
+    static uint64_t mrcCwndScaledSkipSelections(uint32_t active_count) {
+        if (!active_count)
+            active_count = 1;
+        return (uint64_t)active_count *
+            (uint64_t)mrcCwndScaledRotations(active_count);
+    }
     static void setMrcFailedRetry(simtime_picosec retry) {_mrc_failed_retry = retry;}
     static void setMrcProbeIntervalPkts(uint32_t pkts) {_mrc_probe_interval_pkts = pkts;}
     static void setConweaveRttThreshold(simtime_picosec threshold) {_conweave_rtt_threshold = threshold;}
     static void setConweaveMinRerouteGap(simtime_picosec gap) {_conweave_min_reroute_gap = gap;}
     static void setNdpInitialWindow(uint32_t pkts) {_ndp_initial_window = pkts ? pkts : 1;}
     static void setCongestionControl(cc_mode_t mode) {_cc_mode = mode;}
+    static void setTrimRecoveryMode(trim_recovery_mode_t mode) {
+        _trim_recovery_mode = mode;
+    }
+    static trim_recovery_mode_t trimRecoveryMode() {
+        return _trim_recovery_mode;
+    }
+    static const char* trimRecoveryModeName() {
+        return _trim_recovery_mode == TRIM_RECOVERY_EXACT_PSN ?
+            "exact" : "cumulative";
+    }
     static void setCcInitialWindow(uint32_t pkts) {_cc_initial_cwnd_pkts = pkts ? pkts : 1;}
     static void setCcMinWindow(uint32_t pkts) {_cc_min_cwnd_pkts = pkts ? pkts : 1;}
     static void setCcMaxWindow(uint32_t pkts) {_cc_max_cwnd_pkts = pkts;}
@@ -108,6 +254,7 @@ public:
     static void setDcqcnCnpInterval(simtime_picosec interval) {_dcqcn_cnp_interval = interval;}
     static void setDcqcnNackReaction(dcqcn_nack_reaction_t reaction) {_dcqcn_nack_reaction = reaction;}
     static void setDcqcnNackReaction(uint32_t reaction) {_dcqcn_nack_reaction = (dcqcn_nack_reaction_t)reaction;}
+    static void printDcqcnConfiguration(std::ostream& out);
 
     void set_flowsize(uint64_t flow_size_in_bytes) {
         _flow_size = flow_size_in_bytes;
@@ -135,6 +282,44 @@ public:
     virtual void processAck(const RoceAck& ack);
     virtual void processNack(const RoceNack& nack);
     virtual void rtx_timer_hook(simtime_picosec now, simtime_picosec period);
+    uint32_t choose_path_for_test(Packet::PktPriority priority, bool retransmitted) {
+        return choose_path(priority, retransmitted);
+    }
+    void apply_stor_feedback_for_test(const StorFeedbackLevels& levels);
+    void apply_netaware_feedback_for_test(const NetawareFeedbackLevels& levels);
+    std::vector<uint32_t> netaware_bucket_tickets_for_test(Packet::PktPriority priority,
+                                                       uint32_t path_space);
+    void init_nmrc_evs_for_test(uint32_t path_space);
+    std::vector<uint32_t> nmrc_ev_values_for_test() const;
+    std::vector<uint32_t> nmrc_physical_paths_for_test() const;
+    uint32_t choose_nmrc_ev_for_test(uint32_t path_space);
+    bool notify_nmrc_ev_for_test(uint32_t ev);
+    bool nmrc_ev_cooling_for_test(uint32_t ev) const;
+    uint64_t nmrc_ev_cool_until_for_test(uint32_t ev) const;
+    uint64_t nmrc_selection_ordinal_for_test() const;
+    uint64_t nmrc_all_cooling_fallbacks_for_test() const;
+    uint32_t nmrc_ev_set_size_for_diag() const {
+        return (uint32_t)_nmrc_evs.size();
+    }
+    uint32_t nmrc_unique_physical_paths_for_diag() const;
+    uint64_t nmrc_cooldown_starts_for_diag() const {
+        return _nmrc_cooldown_starts;
+    }
+    uint64_t nmrc_cooling_skips_for_diag() const {
+        return _nmrc_cooling_skips;
+    }
+    uint64_t nmrc_cooling_recoveries_for_diag() const {
+        return _nmrc_cooling_recoveries;
+    }
+    uint64_t nmrc_duplicate_notifications_for_diag() const {
+        return _nmrc_duplicate_notifications;
+    }
+    uint64_t nmrc_all_cooling_fallbacks_for_diag() const {
+        return _nmrc_all_cooling_fallbacks;
+    }
+    std::array<uint32_t, 5> mrc_state_counts_for_diag() const;
+    std::array<uint32_t, 5> mrc_state_physical_counts_for_diag() const;
+    uint32_t mrc_backup_remaining_for_diag() const;
 
     virtual mem_b queuesize() const { return 0;};
     virtual mem_b maxsize() const { return 0;}; 
@@ -147,6 +332,97 @@ public:
     uint32_t _rtx_packets_sent;
     uint32_t _acks_received;
     uint32_t _nacks_received;
+    uint32_t _ooo_nacks_received;
+    uint32_t _trim_nacks_received;
+    uint32_t _loss_nacks_received;
+    uint32_t _ecn_echo_acks_received;
+    uint32_t _duplicate_acks_received;
+    uint32_t _duplicate_ack_inflate_suppressed;
+    uint64_t _bounded_inflight_pkts;
+    uint64_t _bounded_unique_acks;
+    uint32_t _bounded_recovery_inflight_bytes;
+    uint32_t _bounded_recovery_inflight_max_bytes;
+    uint64_t _bounded_stale_attempt_nacks;
+    uint64_t _bounded_duplicate_failure_nacks;
+    uint64_t _bounded_duplicate_confirmations_suppressed;
+    uint64_t _bounded_acked_revival_rejected;
+    uint64_t _bounded_attempt_wraps;
+    uint64_t _bounded_exact_trim_recoveries;
+    uint64_t _bounded_sack_loss_recoveries;
+    uint32_t _feedback_acks_received;
+    uint32_t _feedback_nacks_received;
+    uint32_t _feedback_zero_bits_received;
+    uint32_t _netaware_ev_skips;
+    uint32_t _netaware_bitmap_fallbacks;
+    uint64_t _stor_selected_good;
+    uint64_t _stor_selected_degraded;
+    uint64_t _stor_selected_bad;
+    uint64_t _stor_selected_avoid;
+    uint64_t _reps_random_sends;
+    uint64_t _reps_cached_sends;
+    uint64_t _reps_clean_ack_cached;
+    uint64_t _reps_ecn_ack_discarded;
+    uint64_t _reps_buffer_occupancy_samples;
+    std::map<uint32_t, uint64_t> _reps_buffer_occupancy_hist;
+    uint64_t _mrc_ecn_cooldown_events;
+    uint64_t _mrc_trim_events;
+    uint64_t _mrc_rto_fail_events;
+    uint64_t _mrc_trim_cooling_events;
+    uint64_t _mrc_nack_ooo_ignored_for_failure;
+    uint64_t _mrc_nack_loss_fail_events;
+    uint64_t _mrc_nack_unknown_ignored_for_failure;
+    uint64_t _mrc_failure_backup_promotions;
+    uint64_t _mrc_forced_cooling_use;
+    uint64_t _mrc_forced_cooling_earliest_use;
+    uint64_t _mrc_forced_cooling_round_robin_use;
+    uint64_t _mrc_feedback_exact_ev_events;
+    uint64_t _mrc_feedback_sequence_fallback_events;
+    uint64_t _mrc_feedback_physical_fallback_events;
+    uint64_t _mrc_feedback_cumulative_mismatch_events;
+    uint64_t _mrc_select_counter;
+    uint64_t _mrc_cycle_cooling_events;
+    uint64_t _mrc_cycle_cooling_expiries;
+    uint64_t _mrc_cooling_skip_selection_sum;
+    uint64_t _mrc_cooling_skip_selection_events;
+    uint64_t _mrc_cwnd_scaled_feedback_events;
+    uint64_t _mrc_cwnd_scaled_duplicate_feedback_ignored;
+    uint64_t _mrc_probe_events;
+    uint64_t _mrc_probe_success_events;
+    uint64_t _mrc_probe_fail_events;
+    uint64_t _mrc_backup_replacement_events;
+    uint64_t _mrc_backup_replacement_diff_physical;
+    uint64_t _mrc_retx_original_physical;
+    uint64_t _mrc_retx_different_physical;
+    uint64_t _mrc_retx_same_physical_new_ev;
+    uint64_t _mrc_retx_different_physical_new_ev;
+    uint64_t _mrc_retx_unknown_original;
+    uint64_t _mrc_retx_fallback_events;
+    uint64_t _nmrc_fastcnp_arrived;
+    uint64_t _nmrc_fastcnp_after_done;
+    uint64_t _nmrc_fastcnp_bytes;
+    uint64_t _nmrc_fastcnp_latency_sum;
+    uint64_t _nmrc_fastcnp_unknown_qp;
+    uint64_t _nmrc_fastcnp_unknown_ev;
+    uint64_t _mrc_state_samples;
+    uint64_t _mrc_active_count_sum;
+    uint64_t _mrc_backup_count_sum;
+    uint64_t _mrc_cooling_count_sum;
+    uint64_t _mrc_failed_count_sum;
+    uint64_t _mrc_active_physical_count_sum;
+    uint64_t _mrc_cooling_physical_count_sum;
+    uint64_t _mrc_failed_physical_count_sum;
+    uint32_t _mrc_active_count_max;
+    uint32_t _mrc_backup_count_max;
+    uint32_t _mrc_cooling_count_max;
+    uint32_t _mrc_failed_count_max;
+    uint32_t _mrc_active_physical_count_max;
+    uint32_t _mrc_cooling_physical_count_max;
+    uint32_t _mrc_failed_physical_count_max;
+    std::map<uint32_t, uint64_t> _mrc_ecn_physical_hist;
+    std::map<uint32_t, uint64_t> _mrc_trim_physical_hist;
+    std::map<uint32_t, uint64_t> _mrc_nack_physical_hist;
+    std::map<uint32_t, uint64_t> _mrc_ooo_nack_physical_hist;
+    std::map<uint32_t, uint64_t> _mrc_loss_nack_physical_hist;
 
     uint32_t _acked_packets;
     uint32_t _pathid;
@@ -183,32 +459,28 @@ public:
     static simtime_picosec _min_rto;
     static simtime_picosec _rto_high;
     static rx_mode_t _rx_mode;
+    static transport_semantics_t _transport_semantics;
     static uint32_t _sack_bitmap_bits;
     static simtime_picosec _ooo_tolerance;
     static uint32_t _ooo_window_pkts;
     static simtime_picosec _nack_interval;
     static lb_mode_t _lb_mode;
     static uint32_t _path_entropy_size;
+    static nmrc_ev_mode_t _nmrc_ev_mode;
+    static uint32_t _nmrc_ev_seed;
     static uint32_t _reps_buffer_size;
     static uint32_t _reps_warmup_pkts;
-    static uint32_t _nmrc_min_good_paths;
-    static uint32_t _nmrc_hosts_per_tor;
-    static simtime_picosec _nmrc_bad_hold_down;
-    static uint32_t _nmrc_state_mode;
-    static uint32_t _nmrc_weak_sample_pkts;
-    static uint32_t _nmrc_ecn_degrade_mode;
-    static bool _nmrc_unknown_reopen;
-    static uint32_t _nmrc_bad_cache_windows;
-    static uint32_t _mrc_active_path_count;
-    static uint32_t _mrc_backup_path_count;
-    static uint32_t _mrc_min_active_paths;
-    static simtime_picosec _mrc_ecn_cooldown;
+    static uint32_t _hosts_per_tor;
+    static mrc_cooldown_mode_t _mrc_cooldown_mode;
+    static uint32_t _mrc_cooldown_reference_pkts;
+    static mrc_all_cooling_fallback_t _mrc_all_cooling_fallback;
     static simtime_picosec _mrc_failed_retry;
     static uint32_t _mrc_probe_interval_pkts;
     static simtime_picosec _conweave_rtt_threshold;
     static simtime_picosec _conweave_min_reroute_gap;
     static uint32_t _ndp_initial_window;
     static cc_mode_t _cc_mode;
+    static trim_recovery_mode_t _trim_recovery_mode;
     static uint32_t _cc_initial_cwnd_pkts;
     static uint32_t _cc_min_cwnd_pkts;
     static uint32_t _cc_max_cwnd_pkts;
@@ -256,6 +528,13 @@ private:
     void reset_congestion_control();
     void reset_rtx_timeout();
     simtime_picosec current_rto_interval() const;
+    void trace_cc_state(const char* event,
+                        RocePacket::seq_t seqno = 0,
+                        int reason = -1,
+                        bool duplicate = false,
+                        bool old_duplicate = false,
+                        bool ecn = false,
+                        double delta = 0.0) const;
     void update_congestion_control_on_ack(const RoceAck& ack, double newly_acked_pkts);
     void update_congestion_control_on_nack();
     bool has_retransmit_work() const;
@@ -265,6 +544,16 @@ private:
     void maybe_reset_sack_rxtpsn();
     bool sack_seq_blocked_by_rxtpsn(RocePacket::seq_t seq) const;
     void update_sack_rxtpsn(RocePacket::seq_t psn);
+    void bounded_note_new_send(RocePacket::seq_t psn);
+    uint64_t bounded_mark_acked(RocePacket::seq_t psn);
+    bool bounded_queue_failure(RocePacket::seq_t psn, uint8_t attempt_id);
+    bool bounded_begin_retransmission(RocePacket::seq_t psn,
+                                      uint8_t& attempt_id,
+                                      bool& used_recovery_reserve);
+    bool bounded_expire_recovery_reserve();
+    uint64_t bounded_mark_cumulative_acked(RocePacket::seq_t old_cack,
+                                           RocePacket::seq_t new_cack);
+    uint64_t bounded_process_sack(const RoceNack& nack);
     bool congestion_window_allows_send() const;
     double congestion_window_available() const;
     void clamp_congestion_window();
@@ -289,10 +578,14 @@ private:
     uint32_t choose_path(Packet::PktPriority priority, bool retransmitted);
     void update_reps(const RoceAck& ack);
     void update_conweave(const RoceAck& ack, simtime_picosec rtt);
-    void update_nmrc(const RoceAck& ack);
+    void update_netaware(const RoceAck& ack);
+    void processFastCnp(const RoceFastCnp& fast_cnp);
+    void update_stor(const RoceAck& ack);
+    void update_stor(const RoceNack& nack);
     void reset_mrc_paths();
     void init_mrc_paths(uint32_t path_space);
     uint32_t choose_mrc_path(uint32_t path_space);
+    struct MrcEv;
     struct MrcChoice {
         uint32_t logical_ev;
         uint32_t physical_path;
@@ -301,35 +594,73 @@ private:
             : logical_ev(logical), physical_path(physical) {}
     };
     MrcChoice choose_mrc_ev(uint32_t path_space);
+    MrcChoice choose_mrc_retx_ev(uint32_t path_space,
+                                 uint32_t original_logical_ev);
     void update_mrc_on_ack(const RoceAck& ack);
     void update_mrc_on_nack(const RoceNack& nack);
     void update_mrc_on_rto();
     void note_mrc_packet_ev(RocePacket::seq_t seqno, uint32_t logical_ev);
     void clean_mrc_seq_evs();
-    void fail_mrc_sequence(RocePacket::seq_t seqno);
     uint32_t mrc_logical_ev_count(uint32_t path_space) const;
     uint32_t mrc_desired_active_paths(uint32_t path_space) const;
     bool mrc_ev_in_active(uint32_t logical_ev) const;
     bool mrc_ev_selectable(uint32_t logical_ev);
+    bool mrc_cooling_expired(const MrcEv& ev) const;
+    MrcChoice mrc_note_selected_choice(const MrcChoice& choice);
+    uint64_t mrc_current_cooldown_skip_selections() const;
     void mrc_activate_ev(uint32_t logical_ev);
     void mrc_remove_active_ev(uint32_t logical_ev);
-    void mrc_mark_congested(uint32_t logical_ev);
-    void mrc_mark_physical_congested(uint32_t physical_path);
+    void mrc_mark_congested(
+        uint32_t logical_ev,
+        mrc_congestion_signal_t signal = MRC_CONGESTION_ECN);
     void mrc_mark_failed(uint32_t logical_ev);
-    void mrc_mark_physical_failed(uint32_t physical_path);
     void mrc_promote_backup(uint32_t path_space);
     uint32_t mrc_choose_probe_ev(uint32_t path_space);
-    void mrc_note_clean_ack(RocePacket::seq_t ackno);
-    void mrc_note_ecn_ack(RocePacket::seq_t ackno, uint32_t physical_path);
-    void init_nmrc_priority(Packet::PktPriority priority, uint32_t path_space);
-    void ensure_nmrc_bitmap(uint32_t path_space);
-    void load_nmrc_shared_bitmap(uint32_t path_space);
-    void store_nmrc_shared_bitmap();
-    std::pair<uint32_t, uint32_t> nmrc_cache_key() const;
-    void release_nmrc_hold_if_expired(uint32_t path_space);
-    void ensure_nmrc_bad_cache(uint32_t path_space);
-    void rebuild_nmrc_bad_cache_bitmap(uint32_t path_space);
-    void apply_nmrc_bad_cache_feedback(const NmrcBitmap& feedback, uint32_t path_space);
+    void mrc_note_clean_ack(RocePacket::seq_t ackno,
+                            uint32_t explicit_ev = UINT32_MAX);
+    uint32_t mrc_resolve_encoded_feedback_ev(uint32_t explicit_ev,
+                                             RocePacket::seq_t sequence,
+                                             uint32_t physical_path);
+    struct NmrcEv;
+    struct NmrcChoice {
+        uint32_t ev;
+        uint32_t physical_path;
+        NmrcChoice() : ev(UINT32_MAX), physical_path(0) {}
+        NmrcChoice(uint32_t value, uint32_t physical)
+            : ev(value), physical_path(physical) {}
+    };
+    void reset_nmrc_evs();
+    void init_nmrc_evs(uint32_t path_space);
+    NmrcChoice choose_nmrc_ev(uint32_t path_space);
+    NmrcChoice choose_nmrc_retx_ev(uint32_t path_space,
+                                   RocePacket::seq_t seqno);
+    bool notify_nmrc_ev(uint32_t ev);
+    void note_nmrc_packet_ev(RocePacket::seq_t seqno, uint32_t ev);
+    uint32_t nmrc_ev_index(uint32_t ev) const;
+    uint32_t nmrc_physical_path(uint32_t ev, uint32_t path_space) const;
+    void init_selector_priority(Packet::PktPriority priority, uint32_t path_space);
+    std::pair<uint32_t, uint32_t> tor_pair_cache_key() const;
+    void apply_stor_feedback(const StorFeedbackLevels& feedback, uint32_t path_space);
+    void apply_netaware_snapshot(const NetawareFeedbackLevels& feedback, uint32_t path_space);
+    void record_netaware_selected_level(uint8_t level);
+    uint32_t choose_netaware_direct_path(uint32_t prio, uint32_t path_space);
+    uint32_t choose_netaware_bucket_path(uint32_t prio, uint32_t path_space);
+    uint32_t choose_netaware_virtual_bucket_path(uint32_t prio, uint32_t path_space);
+    uint32_t choose_virtual_binary_path(uint32_t prio, uint32_t path_space,
+                                        const StorFeedbackLevels& levels,
+                                        uint64_t profile_version,
+                                        uint32_t mode_tag);
+    uint32_t virtual_selector_key(uint32_t prio, uint64_t profile_version,
+                                  uint64_t epoch, uint32_t mode_tag) const;
+    static uint32_t virtual_shuffle_index(uint32_t key, uint64_t epoch,
+                                          uint32_t position, uint32_t domain);
+    uint32_t choose_netaware_path(Packet::PktPriority priority, uint32_t path_space);
+    uint32_t choose_stor_path(Packet::PktPriority priority, uint32_t path_space);
+    void trace_netaware_decision(RocePacket::seq_t seqno, uint32_t path,
+                             Packet::PktPriority priority);
+    void record_path_selection(uint32_t selected_ev, uint32_t physical_path);
+    void sample_reps_buffer_occupancy();
+    void sample_mrc_state_counts();
     void init_ndp_paths(uint32_t path_space);
     uint32_t choose_ndp_path(uint32_t path_space);
     void grant_ndp_credit(uint32_t credits = 1);
@@ -352,9 +683,23 @@ private:
         uint8_t state;
         uint8_t probe_successes;
         simtime_picosec retry_after;
+        uint64_t cool_until_select_count;
         MrcEv()
             : logical_ev(0), physical_path(0), state(MRC_PATH_UNUSED),
-              probe_successes(0), retry_after(0) {}
+              probe_successes(0), retry_after(0),
+              cool_until_select_count(0) {}
+    };
+    struct NmrcEv {
+        uint32_t ev;
+        uint32_t physical_path;
+        uint64_t cool_until_select_count;
+        bool cooling;
+        NmrcEv()
+            : ev(0), physical_path(0), cool_until_select_count(0),
+              cooling(false) {}
+        NmrcEv(uint32_t value, uint32_t physical)
+            : ev(value), physical_path(physical),
+              cool_until_select_count(0), cooling(false) {}
     };
     class SpRtxQueue {
     public:
@@ -371,6 +716,35 @@ private:
     private:
         std::set<RocePacket::seq_t> _seqs;
     };
+    typedef enum {
+        BOUNDED_SENT = 0,
+        BOUNDED_RTX_PENDING = 1,
+        BOUNDED_RTX_INFLIGHT = 2,
+        BOUNDED_ACKED = 3
+    } bounded_tx_state_t;
+    struct BoundedPacketState {
+        BoundedPacketState()
+            : state(BOUNDED_SENT), attempt_id(0), counted_inflight(false),
+              uses_recovery_reserve(false) {}
+        bounded_tx_state_t state;
+        uint8_t attempt_id;
+        bool counted_inflight;
+        bool uses_recovery_reserve;
+    };
+    struct SharedWeightedProfile {
+        StorFeedbackLevels levels;
+        std::vector<uint32_t> tickets;
+        std::vector<uint32_t> bucket;
+        uint64_t version;
+        SharedWeightedProfile() : version(0) {}
+    };
+    static void rebuild_shared_weighted_profile(
+        SharedWeightedProfile& profile, uint32_t path_space,
+        const std::array<uint32_t, 4>& level_weights);
+    static void rebuild_netaware_weighted_profile(
+        SharedWeightedProfile& profile, uint32_t path_space);
+    SharedWeightedProfile& shared_stor_profile(uint32_t path_space);
+    SharedWeightedProfile& shared_netaware_profile(uint32_t path_space);
     void ensure_reps_buffer();
     void reset_reps_buffer();
 
@@ -378,14 +752,19 @@ private:
     uint32_t _reps_head;
     uint32_t _reps_valid_count;
     uint32_t _reps_explore_remaining;
-    static std::map<std::pair<uint32_t, uint32_t>, NmrcBitmap> _nmrc_shared_bitmaps;
-    static std::map<std::pair<uint32_t, uint32_t>, simtime_picosec> _nmrc_shared_hold_until;
-    static std::map<std::pair<uint32_t, uint32_t>, std::vector<NmrcBitmap> > _nmrc_shared_bad_epochs;
-    static std::map<std::pair<uint32_t, uint32_t>, uint32_t> _nmrc_shared_bad_epoch_cursor;
-    NmrcBitmap _nmrc_path_bitmap;
-    simtime_picosec _nmrc_hold_until;
-    std::vector<NmrcBitmap> _nmrc_bad_epochs;
-    uint32_t _nmrc_bad_epoch_cursor;
+    static std::map<std::pair<uint32_t, uint32_t>, SharedWeightedProfile> _stor_shared_profiles;
+    static std::map<std::pair<uint32_t, uint32_t>, SharedWeightedProfile> _netaware_shared_profiles;
+    static std::array<uint32_t, 4> _stor_level_weights;
+    static std::array<uint32_t, 4> _netaware_level_weights;
+    static netaware_wrr_mode_t _netaware_wrr_mode;
+    static netaware_weight_adaptation_t _netaware_weight_adaptation;
+    static bool _stor_binary_selector;
+    static std::ostream* _netaware_decision_trace;
+    static uint32_t _diag_physical_path_space;
+    static uint64_t _diag_selected_total;
+    static std::map<uint32_t, uint64_t> _diag_selected_ev_hist;
+    static std::map<uint32_t, uint64_t> _diag_selected_physical_hist;
+    static std::vector<uint32_t> _diag_first_selected_evs;
     std::vector<uint32_t> _ndp_path_ids;
     uint32_t _ndp_cursor;
     uint32_t _ndp_pull_credit;
@@ -398,11 +777,28 @@ private:
     uint32_t _mrc_path_space;
     bool _mrc_paths_ready;
     std::map<RocePacket::seq_t, uint32_t> _mrc_seq_ev;
+    std::vector<NmrcEv> _nmrc_evs;
+    std::map<RocePacket::seq_t, uint32_t> _nmrc_seq_ev;
+    uint32_t _nmrc_cursor;
+    uint32_t _nmrc_path_space;
+    nmrc_ev_mode_t _nmrc_initialized_mode;
+    bool _nmrc_evs_ready;
+    uint64_t _nmrc_select_ordinal;
+    uint64_t _nmrc_cooldown_starts;
+    uint64_t _nmrc_cooling_skips;
+    uint64_t _nmrc_cooling_recoveries;
+    uint64_t _nmrc_duplicate_notifications;
+    uint64_t _nmrc_all_cooling_fallbacks;
     simtime_picosec _conweave_last_reroute;
-    std::array<uint32_t, 3> _nmrc_cursor;
-    std::array<uint32_t, 3> _nmrc_stride;
-    std::array<bool, 3> _nmrc_cursor_ready;
+    std::array<uint32_t, 3> _selector_cursor;
+    std::array<uint32_t, 3> _selector_stride;
+    std::array<bool, 3> _selector_cursor_ready;
+    std::array<uint32_t, 3> _stor_weight_cursor;
+    std::array<uint32_t, 3> _stor_selections_since_probe;
+    std::array<uint32_t, 3> _stor_avoid_probe_cursor;
+    std::array<uint64_t, 3> _virtual_selector_counter;
     SpRtxQueue _rtx_queue;
+    std::map<RocePacket::seq_t, BoundedPacketState> _bounded_packets;
     RocePacket::seq_t _sack_rxt_psn;
     simtime_picosec _sack_rxt_psn_updated;
     bool _sack_rxt_psn_valid;
@@ -421,6 +817,7 @@ public:
     uint32_t _drops;
     uint64_t cumulative_ack() { return _cumulative_ack;}
     uint64_t total_received() const { return _cumulative_ack;}
+    uint64_t rx_rcvd_bytes() const { return _rx_rcvd_bytes;}
     uint32_t drops(){ return _src->_drops;}
     virtual const string& nodename() { return _nodename; }
 
@@ -459,30 +856,49 @@ private:
     RocePacket::seq_t _last_packet_seqno; //sequence number of the last
     //packet in the connection (or 0 if not known)
     uint64_t _total_received;
+    uint64_t _rx_rcvd_bytes;
     RocePacket::seq_t _highest_seqno;
-    map<RocePacket::seq_t, int> _ooo_packets;
+    struct OooPacketInfo {
+        OooPacketInfo() : size(0), path_id(0), mrc_ev(UINT32_MAX) {}
+        OooPacketInfo(int packet_size, uint32_t packet_path_id,
+                      uint32_t packet_mrc_ev)
+            : size(packet_size), path_id(packet_path_id),
+              mrc_ev(packet_mrc_ev) {}
+
+        int size;
+        uint32_t path_id;
+        uint32_t mrc_ev;
+    };
+    map<RocePacket::seq_t, OooPacketInfo> _ooo_packets;
     simtime_picosec _ooo_first_time;
     simtime_picosec _nack_silent_until;
     bool _ooo_nack_event_pending;
     simtime_picosec _ooo_nack_event_time;
     uint32_t _ooo_nack_path_id;
+    uint32_t _ooo_nack_mrc_ev;
     OooNackTimer _ooo_nack_timer;
  
     // Mechanism
-    void send_ack(const RocePacket& pkt, simtime_picosec ts);
+    void send_ack(const RocePacket& pkt, simtime_picosec ts,
+                  bool duplicate_ack = false,
+                  bool old_duplicate_ack = false);
     RoceNack* send_nack(simtime_picosec ts, RocePacket::seq_t ackno, uint32_t path_id = 0,
                         uint64_t sack_bitmap = 0, uint16_t sack_offset = 0,
                         bool has_sack = false,
                         RoceNack::nack_reason_t reason = RoceNack::LOSS,
                         uint64_t sack_bitmap_high = 0,
                         RocePacket::seq_t sack_bitmap_start_psn = 0,
-                        uint16_t sack_bitmap_valid_length = 0);
+                        uint16_t sack_bitmap_valid_length = 0,
+                        uint32_t mrc_ev = UINT32_MAX,
+                        RocePacket::seq_t missing_psn = 0,
+                        uint8_t missing_attempt_id = 0);
     void build_sack_bitmap(RocePacket::seq_t ackno, uint64_t& sack_bitmap_low,
                            uint64_t& sack_bitmap_high,
                            RocePacket::seq_t& sack_bitmap_start_psn,
                            uint16_t& sack_bitmap_valid_length,
                            uint16_t& sack_offset) const;
     bool should_send_sp_nack() const;
+    void refresh_ooo_nack_metadata();
     void arm_ooo_nack_timer(simtime_picosec when);
     void cancel_ooo_nack_timer();
     void ooo_nack_timer_hook();

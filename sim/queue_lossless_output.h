@@ -26,6 +26,7 @@ public:
 
     bool is_paused() { return _state_send == PAUSED || _state_send == PAUSE_RECEIVED;}
     uint64_t overflow_count() const { return _overflow_count; }
+    uint64_t ecn_mark_count() const { return _ecn_marks; }
 
     enum queue_state {PAUSED,READY,PAUSE_RECEIVED};
 
@@ -36,6 +37,7 @@ private:
     int _sending;
     uint64_t _txbytes;
     uint64_t _overflow_count;
+    uint64_t _ecn_marks;
 
     int _ecn_enabled;
     mem_b _ecn_minthresh;

@@ -6,7 +6,15 @@
 #include <vector>
 #include "network.h"
 
-typedef std::vector<uint8_t> NmrcBitmap;
+typedef std::vector<uint8_t> StorFeedbackLevels;
+typedef std::vector<uint8_t> NetawareFeedbackLevels;
+
+enum StorLevel {
+    STOR_LEVEL_GOOD = 0,
+    STOR_LEVEL_DEGRADED = 1,
+    STOR_LEVEL_BAD = 2,
+    STOR_LEVEL_AVOID = 3
+};
 
 // NdpPacket and NdpAck are subclasses of Packet.
 // They incorporate a packet database, to reuse packet objects that are no longer needed.
@@ -37,8 +45,11 @@ class RocePacket : public Packet {
                 p->_path_len = 0;
                 p->_direction = NONE;
                 p->_srcaddr = UINT32_MAX;
-                p->_has_nmrc_feedback = false;
-                p->_nmrc_bitmap.clear();
+                p->_has_stor_feedback = false;
+                p->_stor_feedback.clear();
+                p->_stor_peer = UINT32_MAX;
+                p->_mrc_ev = UINT32_MAX;
+                p->_attempt_id = 0;
                 p->set_dst(destination);
                 return p;
     }
@@ -58,8 +69,11 @@ class RocePacket : public Packet {
                 p->_last_packet = last_packet;
                 p->_path_len = route.size();
                 p->_srcaddr = UINT32_MAX;
-                p->_has_nmrc_feedback = false;
-                p->_nmrc_bitmap.clear();
+                p->_has_stor_feedback = false;
+                p->_stor_feedback.clear();
+                p->_stor_peer = UINT32_MAX;
+                p->_mrc_ev = UINT32_MAX;
+                p->_attempt_id = 0;
                 p->set_dst(destination);
                 return p;
     }
@@ -79,12 +93,19 @@ class RocePacket : public Packet {
     inline uint32_t src() const {return _srcaddr;}
     inline void set_src(uint32_t src) {_srcaddr = src;}
     inline uint32_t path_id() const {if (_pathid!=UINT32_MAX) return _pathid; else return _route->path_id();}
-    inline void set_nmrc_feedback(const NmrcBitmap& bitmap) {
-        _nmrc_bitmap = bitmap;
-        _has_nmrc_feedback = true;
+    inline void set_stor_feedback(const StorFeedbackLevels& levels) {
+        _stor_feedback = levels;
+        _has_stor_feedback = true;
     }
-    inline bool has_nmrc_feedback() const {return _has_nmrc_feedback;}
-    inline const NmrcBitmap& nmrc_bitmap() const {return _nmrc_bitmap;}
+    inline bool has_stor_feedback() const {return _has_stor_feedback;}
+    inline const StorFeedbackLevels& stor_feedback() const {return _stor_feedback;}
+    inline void set_stor_peer(uint32_t peer) {_stor_peer = peer;}
+    inline uint32_t stor_peer() const {return _stor_peer;}
+    inline void set_mrc_ev(uint32_t ev) {_mrc_ev = ev;}
+    inline uint32_t mrc_ev() const {return _mrc_ev;}
+    inline bool has_mrc_ev() const {return _mrc_ev != UINT32_MAX;}
+    inline void set_attempt_id(uint8_t attempt_id) {_attempt_id = attempt_id;}
+    inline uint8_t attempt_id() const {return _attempt_id;}
     virtual PktPriority priority() const {return Packet::PRIO_LO;}
     const static int ACKSIZE=64;
  protected:
@@ -93,8 +114,11 @@ class RocePacket : public Packet {
     bool _retransmitted;
     bool _last_packet;  // set to true in the last packet in a flow.
     uint32_t _srcaddr;
-    bool _has_nmrc_feedback;
-    NmrcBitmap _nmrc_bitmap;
+    bool _has_stor_feedback;
+    StorFeedbackLevels _stor_feedback;
+    uint32_t _stor_peer;
+    uint32_t _mrc_ev;
+    uint8_t _attempt_id;
     static PacketDB<RocePacket> _packetdb;
 };
 
@@ -112,8 +136,17 @@ class RoceAck : public Packet {
                 p->_ackno = ackno;
                 p->_path_len = 0;
                 p->_direction = NONE;
-                p->_has_nmrc_feedback = false;
-                p->_nmrc_bitmap.clear();
+                p->_has_stor_feedback = false;
+                p->_stor_feedback.clear();
+                p->_stor_peer = UINT32_MAX;
+                p->_has_netaware_feedback = false;
+                p->_netaware_feedback.clear();
+                p->_netaware_peer = UINT32_MAX;
+                p->_mrc_ev = UINT32_MAX;
+                p->_duplicate_ack = false;
+                p->_old_duplicate_ack = false;
+                p->_has_delivered_psn = false;
+                p->_delivered_psn = 0;
                 p->set_dst(destination);
                 return p;
     }
@@ -122,12 +155,41 @@ class RoceAck : public Packet {
     inline seq_t ackno() const {return _ackno;}
     inline simtime_picosec ts() const {return _ts;}
     inline void set_ts(simtime_picosec ts) {_ts = ts;}
-    inline void set_nmrc_feedback(const NmrcBitmap& bitmap) {
-        _nmrc_bitmap = bitmap;
-        _has_nmrc_feedback = true;
+    inline void set_stor_feedback(const StorFeedbackLevels& levels) {
+        _stor_feedback = levels;
+        _has_stor_feedback = true;
     }
-    inline bool has_nmrc_feedback() const {return _has_nmrc_feedback;}
-    inline const NmrcBitmap& nmrc_bitmap() const {return _nmrc_bitmap;}
+    inline bool has_stor_feedback() const {return _has_stor_feedback;}
+    inline const StorFeedbackLevels& stor_feedback() const {return _stor_feedback;}
+    inline void set_stor_peer(uint32_t peer) {_stor_peer = peer;}
+    inline uint32_t stor_peer() const {return _stor_peer;}
+    inline void set_netaware_feedback(const NetawareFeedbackLevels& levels) {
+        _netaware_feedback = levels;
+        _has_netaware_feedback = true;
+    }
+    inline bool has_netaware_feedback() const {return _has_netaware_feedback;}
+    inline const NetawareFeedbackLevels& netaware_feedback() const {return _netaware_feedback;}
+    inline void set_netaware_peer(uint32_t peer) {_netaware_peer = peer;}
+    inline uint32_t netaware_peer() const {return _netaware_peer;}
+    inline void set_mrc_ev(uint32_t ev) {_mrc_ev = ev;}
+    inline uint32_t mrc_ev() const {return _mrc_ev;}
+    inline bool has_mrc_ev() const {return _mrc_ev != UINT32_MAX;}
+    inline void set_duplicate_ack(bool duplicate = true) {
+        _duplicate_ack = duplicate;
+    }
+    inline bool is_duplicate_ack() const {return _duplicate_ack;}
+    inline void set_old_duplicate_ack(bool old_duplicate = true) {
+        _old_duplicate_ack = old_duplicate;
+        if (old_duplicate)
+            _duplicate_ack = true;
+    }
+    inline bool is_old_duplicate_ack() const {return _old_duplicate_ack;}
+    inline void set_delivered_psn(seq_t psn) {
+        _delivered_psn = psn;
+        _has_delivered_psn = true;
+    }
+    inline bool has_delivered_psn() const {return _has_delivered_psn;}
+    inline seq_t delivered_psn() const {return _delivered_psn;}
     virtual PktPriority priority() const {return Packet::PRIO_HI;}
 
     virtual ~RoceAck(){}
@@ -135,8 +197,17 @@ class RoceAck : public Packet {
  protected:
     seq_t _ackno;
     simtime_picosec _ts;
-    bool _has_nmrc_feedback;
-    NmrcBitmap _nmrc_bitmap;
+    bool _has_stor_feedback;
+    StorFeedbackLevels _stor_feedback;
+    uint32_t _stor_peer;
+    bool _has_netaware_feedback;
+    NetawareFeedbackLevels _netaware_feedback;
+    uint32_t _netaware_peer;
+    uint32_t _mrc_ev;
+    bool _duplicate_ack;
+    bool _old_duplicate_ack;
+    bool _has_delivered_psn;
+    seq_t _delivered_psn;
     static PacketDB<RoceAck> _packetdb;
 };
 
@@ -174,6 +245,13 @@ class RoceNack : public Packet {
                 p->_has_sack = has_sack;
                 p->_reason = LOSS;
                 p->_direction = NONE;
+                p->_has_stor_feedback = false;
+                p->_stor_feedback.clear();
+                p->_stor_peer = UINT32_MAX;
+                p->_mrc_ev = UINT32_MAX;
+                p->_missing_psn = 0;
+                p->_has_attempt_id = false;
+                p->_attempt_id = 0;
                 p->set_dst(destination);
                 return p;
     }
@@ -204,6 +282,26 @@ class RoceNack : public Packet {
     inline void set_reason(nack_reason_t reason) {_reason = reason;}
     inline simtime_picosec ts() const {return _ts;}
     inline void set_ts(simtime_picosec ts) {_ts = ts;}
+    inline void set_stor_feedback(const StorFeedbackLevels& levels) {
+        _stor_feedback = levels;
+        _has_stor_feedback = true;
+    }
+    inline bool has_stor_feedback() const {return _has_stor_feedback;}
+    inline const StorFeedbackLevels& stor_feedback() const {return _stor_feedback;}
+    inline void set_stor_peer(uint32_t peer) {_stor_peer = peer;}
+    inline uint32_t stor_peer() const {return _stor_peer;}
+    inline void set_mrc_ev(uint32_t ev) {_mrc_ev = ev;}
+    inline uint32_t mrc_ev() const {return _mrc_ev;}
+    inline bool has_mrc_ev() const {return _mrc_ev != UINT32_MAX;}
+    inline void set_missing_psn(seq_t psn) {_missing_psn = psn;}
+    inline seq_t missing_psn() const {return _missing_psn;}
+    inline bool has_missing_psn() const {return _missing_psn != 0;}
+    inline void set_attempt_id(uint8_t attempt_id) {
+        _attempt_id = attempt_id;
+        _has_attempt_id = true;
+    }
+    inline bool has_attempt_id() const {return _has_attempt_id;}
+    inline uint8_t attempt_id() const {return _attempt_id;}
     virtual PktPriority priority() const {return Packet::PRIO_HI;}
   
     virtual ~RoceNack(){}
@@ -218,7 +316,72 @@ protected:
     bool _has_sack;
     nack_reason_t _reason;
     simtime_picosec _ts;
+    bool _has_stor_feedback;
+    StorFeedbackLevels _stor_feedback;
+    uint32_t _stor_peer;
+    uint32_t _mrc_ev;
+    seq_t _missing_psn;
+    bool _has_attempt_id;
+    uint8_t _attempt_id;
     static PacketDB<RoceNack> _packetdb;
+};
+
+class RoceFastCnp : public Packet {
+public:
+    typedef RocePacket::seq_t seq_t;
+
+    inline static RoceFastCnp* newpkt(
+            PacketFlow& flow, const Route& route,
+            uint32_t source_host, uint32_t ev, seq_t psn,
+            uint32_t original_egress, uint32_t selected_egress,
+            uint8_t original_level, uint8_t selected_level,
+            uint32_t trigger_switch, simtime_picosec trigger_time) {
+        assert(ev <= 0xffffU);
+        RoceFastCnp* p = _packetdb.allocPacket();
+        p->set_route(flow, route, RocePacket::ACKSIZE, (packetid_t)psn);
+        p->_type = ROCEFASTCNP;
+        p->_is_header = true;
+        p->_direction = NONE;
+        p->_path_len = route.size();
+        p->_source_host = source_host;
+        p->_ev = (uint16_t)ev;
+        p->_psn = psn;
+        p->_original_egress = original_egress;
+        p->_selected_egress = selected_egress;
+        p->_original_level = original_level;
+        p->_selected_level = selected_level;
+        p->_trigger_switch = trigger_switch;
+        p->_trigger_time = trigger_time;
+        p->set_dst(source_host);
+        p->set_pathid(UINT32_MAX);
+        p->set_flags(0);
+        return p;
+    }
+
+    void free() {_packetdb.freePacket(this);}
+    inline uint32_t source_host() const {return _source_host;}
+    inline uint32_t ev() const {return _ev;}
+    inline seq_t psn() const {return _psn;}
+    inline uint32_t original_egress() const {return _original_egress;}
+    inline uint32_t selected_egress() const {return _selected_egress;}
+    inline uint8_t original_level() const {return _original_level;}
+    inline uint8_t selected_level() const {return _selected_level;}
+    inline uint32_t trigger_switch() const {return _trigger_switch;}
+    inline simtime_picosec trigger_time() const {return _trigger_time;}
+    virtual PktPriority priority() const {return Packet::PRIO_HI;}
+    virtual ~RoceFastCnp() {}
+
+protected:
+    uint32_t _source_host;
+    uint16_t _ev;
+    seq_t _psn;
+    uint32_t _original_egress;
+    uint32_t _selected_egress;
+    uint8_t _original_level;
+    uint8_t _selected_level;
+    uint32_t _trigger_switch;
+    simtime_picosec _trigger_time;
+    static PacketDB<RoceFastCnp> _packetdb;
 };
 
 

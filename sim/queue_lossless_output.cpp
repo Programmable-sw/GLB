@@ -12,7 +12,8 @@ LosslessOutputQueue::LosslessOutputQueue(linkspeed_bps bitrate, mem_b maxsize,
                                          EventList& eventlist, QueueLogger* logger, int ECN, mem_b Kmin, mem_b Kmax)
     : Queue(bitrate,maxsize,eventlist,logger),
       _state_send(READY),
-      _overflow_count(0)
+      _overflow_count(0),
+      _ecn_marks(0)
 {
     //assume worst case: PAUSE frame waits for one MSS packet to be sent to other switch, and there is 
     //an MSS just beginning to be sent when PAUSE frame arrives; this means 2 packets per incoming
@@ -139,8 +140,10 @@ void LosslessOutputQueue::completeService(){
     _vq.pop_back();
 
     // RED-style ECN marking on dequeue.
-    if (should_mark_ecn())
+    if (should_mark_ecn()) {
         pkt->set_flags(pkt->flags() | ECN_CE);
+        _ecn_marks++;
+    }
 
     if (pkt->type()==HPCC){
         //HPPC INT information adding to packet

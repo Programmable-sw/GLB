@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# 测试 GLB 五因子权重在默认 128 节点 3 层拓扑、tornado/permutation 流量和 32MiB 流下的表现。
+# 测试 SGLB 五因子权重在默认 128 节点 3 层拓扑、tornado/permutation 流量和 32MiB 流下的表现。
 import csv
 import math
 import os
@@ -19,26 +19,29 @@ import matplotlib.pyplot as plt
 ROOT = Path(__file__).resolve().parents[2]
 SIM = ROOT / "sim" / "datacenter" / "htsim_roce"
 OUT = Path(os.environ.get(
-    "GLB_FACTOR_OUT",
-    str(Path(__file__).resolve().parent / "output_glb_factor_compare" / "scenario_compare"),
+    "SGLB_FACTOR_OUT",
+    str(Path(__file__).resolve().parent / "output_sglb_factor_compare" / "scenario_compare"),
 )).resolve()
 
-NODES = int(os.environ.get("GLB_FACTOR_NODES", "128"))
-TIERS = int(os.environ.get("GLB_FACTOR_TIERS", "3"))
-LINKSPEED_MBPS = int(os.environ.get("GLB_FACTOR_LINKSPEED_MBPS", "400000"))
-MTU = int(os.environ.get("GLB_FACTOR_MTU", "4096"))
-PATHS = int(os.environ.get("GLB_FACTOR_PATHS", str(NODES)))
-SEED = int(os.environ.get("GLB_FACTOR_SEED", "13"))
-FLOW_SIZE = int(os.environ.get("GLB_FACTOR_FLOW_SIZE", str(32 * 1024 * 1024)))
-END_US = int(os.environ.get("GLB_FACTOR_END_US", "12000"))
-CC_MODE = os.environ.get("GLB_FACTOR_CC", "dcqcn_variant")
-SCENARIO = os.environ.get("GLB_FACTOR_SCENARIO", "tornado")
+NODES = int(os.environ.get("SGLB_FACTOR_NODES", "128"))
+TIERS = int(os.environ.get("SGLB_FACTOR_TIERS", "3"))
+LINKSPEED_MBPS = int(os.environ.get("SGLB_FACTOR_LINKSPEED_MBPS", "400000"))
+MTU = int(os.environ.get("SGLB_FACTOR_MTU", "4096"))
+PATHS = int(os.environ.get("SGLB_FACTOR_PATHS", str(NODES)))
+SEED = int(os.environ.get("SGLB_FACTOR_SEED", "13"))
+FLOW_SIZE = int(os.environ.get("SGLB_FACTOR_FLOW_SIZE", str(32 * 1024 * 1024)))
+END_US = int(os.environ.get("SGLB_FACTOR_END_US", "12000"))
+CC_MODE = os.environ.get("SGLB_FACTOR_CC", "dcqcn_variant")
+SCENARIO = os.environ.get("SGLB_FACTOR_SCENARIO", "tornado")
 KEEP_RAW = os.environ.get("KEEP_RAW_OUTPUT") == "1"
-NORMALIZE_GLB = os.environ.get("GLB_FACTOR_NORMALIZE") == "1"
+NORMALIZE_SGLB = os.environ.get("SGLB_FACTOR_NORMALIZE") == "1"
 QUALITY_BUCKET = float(os.environ.get(
-    "GLB_FACTOR_QUALITY_BUCKET",
-    "0.125" if NORMALIZE_GLB else "20",
+    "SGLB_FACTOR_QUALITY_BUCKET",
+    "0.125" if NORMALIZE_SGLB else "20",
 ))
+SGLB_LOCAL_UPDATE_US = float(os.environ.get("SGLB_FACTOR_LOCAL_UPDATE_US", "1"))
+SGLB_REMOTE_UPDATE_US = float(os.environ.get("SGLB_FACTOR_REMOTE_UPDATE_US", "15"))
+SGLB_REMOTE_AGING_US = float(os.environ.get("SGLB_FACTOR_REMOTE_AGING_US", "30"))
 
 FINISH_RE = re.compile(r"Flow Roce_(\d+)_(\d+) \d+ finished at ([0-9.]+)")
 
@@ -64,6 +67,10 @@ FACTOR_SETS = [
         "factors": (0.30, 0.03, 0.70, 0.07, 0.30),
     },
 ]
+
+
+def fmt_us(value):
+    return f"{value:g}"
 
 
 def pct(values, p):
@@ -107,7 +114,7 @@ def scenario_flows():
         return tornado_flows(NODES, FLOW_SIZE)
     if SCENARIO == "permutation":
         return permutation_flows(NODES, FLOW_SIZE, SEED)
-    raise ValueError(f"unsupported GLB_FACTOR_SCENARIO={SCENARIO}")
+    raise ValueError(f"unsupported SGLB_FACTOR_SCENARIO={SCENARIO}")
 
 
 def write_tm(path, flows):
@@ -164,7 +171,7 @@ def slow_tor_uplinks():
 
 def factors_for_run(item):
     factors = item["factors"]
-    if not NORMALIZE_GLB:
+    if not NORMALIZE_SGLB:
         return factors
 
     total = sum(factors)
@@ -189,19 +196,22 @@ def command_for(item, tm, dat_file, flow_count):
         "-end", str(END_US),
         "-paths", str(PATHS),
         "-seed", str(SEED),
-        "-lb", "glb",
+        "-lb", "sglb",
+        "-sglb_score_mode", "legacy",
         "-cc", CC_MODE,
         "-hop_latency", "0.5",
         "-switch_latency", "0.5",
         "-slow_tor_uplinks", str(slow_tor_uplinks()),
         "-slow_tor_uplink_divisor", "2",
-        "-glb_update_us", "5",
-        "-glb_quality_bucket", str(QUALITY_BUCKET),
-        "-glb_downstream_weight", "1.0",
-        "-glb_factors", str(lq), str(lu), str(rq), str(ru), str(rb),
+        "-sglb_update_us", fmt_us(SGLB_LOCAL_UPDATE_US),
+        "-sglb_gcn_update_us", fmt_us(SGLB_REMOTE_UPDATE_US),
+        "-sglb_gcn_aging_us", fmt_us(SGLB_REMOTE_AGING_US),
+        "-sglb_quality_bucket", str(QUALITY_BUCKET),
+        "-sglb_downstream_weight", "1.0",
+        "-sglb_factors", str(lq), str(lu), str(rq), str(ru), str(rb),
     ]
-    if NORMALIZE_GLB:
-        cmd.append("-glb_normalize")
+    if NORMALIZE_SGLB:
+        cmd.append("-sglb_normalize")
     return cmd
 
 
@@ -234,9 +244,9 @@ def plot_summary(rows, path):
         ax.bar_label(bars, fmt="%.0f", padding=3, fontsize=8)
 
     ax.set_ylabel("FCT (us)")
-    ax.set_xlabel("glb five-factor coefficient set")
-    mode = "normalized" if NORMALIZE_GLB else "raw"
-    ax.set_title(f"glb FCT under different quality coefficients ({SCENARIO}, {CC_MODE}, {mode})", pad=14)
+    ax.set_xlabel("sglb five-factor coefficient set")
+    mode = "normalized" if NORMALIZE_SGLB else "raw"
+    ax.set_title(f"sglb FCT under different quality coefficients ({SCENARIO}, {CC_MODE}, {mode})", pad=14)
     ax.set_xticks(x)
     ax.set_xticklabels(labels, rotation=12, ha="right")
     ax.grid(axis="y", linestyle="--", linewidth=0.6, alpha=0.45)
@@ -251,12 +261,13 @@ def plot_summary(rows, path):
 
 def write_report(rows, path, chart_name):
     lines = [
-        "# glb Five-Factor Sweep",
+        "# sglb Five-Factor Sweep",
         "",
         f"Scenario: `{SCENARIO}`, CC: `{CC_MODE}`, nodes: `{NODES}`, flow size: `{FLOW_SIZE}` bytes.",
-        f"glb score mode: `{'normalized' if NORMALIZE_GLB else 'raw'}`, quality bucket: `{QUALITY_BUCKET}`.",
+        f"sglb score mode: `{'normalized' if NORMALIZE_SGLB else 'raw'}`, quality bucket: `{QUALITY_BUCKET}`.",
+        f"sglb update intervals: local quality `{fmt_us(SGLB_LOCAL_UPDATE_US)}us`, remote GCN `{fmt_us(SGLB_REMOTE_UPDATE_US)}us`, aging `{fmt_us(SGLB_REMOTE_AGING_US)}us`.",
         "",
-        f"![glb factor FCT bars]({chart_name})",
+        f"![sglb factor FCT bars]({chart_name})",
         "",
         "| label | Q(L) | L(L) | Q(R) | L(R) | B(R) | avg FCT us | p99 FCT us | p99.9 FCT us |",
         "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
@@ -290,7 +301,7 @@ def main():
     run_dir.mkdir(parents=True, exist_ok=True)
 
     flows = scenario_flows()
-    tm = run_dir / f"glb_factor_{SCENARIO}.cm"
+    tm = run_dir / f"sglb_factor_{SCENARIO}.cm"
     write_tm(tm, flows)
     flow_map = {(item["src"], item["dst"]): item for item in flows}
 
@@ -315,7 +326,7 @@ def main():
             "scenario": SCENARIO,
             "label": label,
             "short_label": item["short_label"],
-            "normalized": NORMALIZE_GLB,
+            "normalized": NORMALIZE_SGLB,
             "quality_bucket": QUALITY_BUCKET,
             "alpha_local_queue": lq,
             "alpha_local_util": lu,
@@ -338,7 +349,7 @@ def main():
 
     summary_csv = OUT / "summary.csv"
     per_flow_csv = OUT / "per_flow.csv"
-    chart = OUT / "glb_factor_fct_bars.png"
+    chart = OUT / "sglb_factor_fct_bars.png"
     report = OUT / "comparison_report.md"
     write_csv(summary_csv, rows)
     write_csv(per_flow_csv, per_flow_rows)

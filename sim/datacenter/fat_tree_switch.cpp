@@ -5,22 +5,41 @@
 #include "callback_pipe.h"
 #include "queue_lossless.h"
 #include "queue_lossless_output.h"
+#include "compositequeue.h"
+#include "ecnqueue.h"
 #include "rocepacket.h"
 #include "ecn.h"
+#include <algorithm>
 #include <limits>
 
 unordered_map<BaseQueue*,uint32_t> FatTreeSwitch::_port_flow_counts;
 
-class GlbGcnTimer : public EventSource {
+class SglbGcnTimer : public EventSource {
 public:
-    GlbGcnTimer(EventList& eventlist, FatTreeSwitch* sw)
-        : EventSource(eventlist, "glb_gcn_timer"), _sw(sw) {}
+    SglbGcnTimer(EventList& eventlist, FatTreeSwitch* sw)
+        : EventSource(eventlist, "sglb_gcn_timer"), _sw(sw) {}
 
     void doNextEvent() {
         if (!_sw)
             return;
-        _sw->_glb_gcn_timer_pending = false;
-        _sw->glb_periodic_refresh_exports();
+        _sw->_sglb_gcn_timer_pending = false;
+        _sw->sglb_periodic_refresh_exports();
+    }
+
+private:
+    FatTreeSwitch* _sw;
+};
+
+class NetawareExportTimer : public EventSource {
+public:
+    NetawareExportTimer(EventList& eventlist, FatTreeSwitch* sw)
+        : EventSource(eventlist, "netaware_export_timer"), _sw(sw) {}
+
+    void doNextEvent() {
+        if (!_sw)
+            return;
+        _sw->_netaware_export_timer_pending = false;
+        _sw->netaware_periodic_refresh_exports();
     }
 
 private:
@@ -36,8 +55,10 @@ FatTreeSwitch::FatTreeSwitch(EventList& eventlist, string s, switch_type t, uint
     _crt_route = 0;
     _hash_salt = random();
     _last_choice = eventlist.now();
-    _glb_gcn_timer = NULL;
-    _glb_gcn_timer_pending = false;
+    _sglb_gcn_timer = NULL;
+    _sglb_gcn_timer_pending = false;
+    _netaware_export_timer = NULL;
+    _netaware_export_timer_pending = false;
     _fib = new RouteTable();
 }
 
@@ -344,31 +365,351 @@ uint16_t FatTreeSwitch::_ar_sticky = FatTreeSwitch::PER_PACKET;
 simtime_picosec FatTreeSwitch::_sticky_delta = timeFromUs((uint32_t)10);
 double FatTreeSwitch::_ecn_threshold_fraction = 1.0;
 double FatTreeSwitch::_speculative_threshold_fraction = 0.2;
-double FatTreeSwitch::_glb_downstream_weight = 0.25;
-double FatTreeSwitch::_glb_queue_weight = 0.5;
-double FatTreeSwitch::_glb_util_weight = 0.05;
-double FatTreeSwitch::_glb_remote_queue_weight = 0.5;
-double FatTreeSwitch::_glb_remote_util_weight = 0.05;
-double FatTreeSwitch::_glb_remote_busy_weight = 0.2;
-double FatTreeSwitch::_glb_quality_bucket = 20.0;
-uint32_t FatTreeSwitch::_glb_max_quality = 7;
-simtime_picosec FatTreeSwitch::_glb_update_interval = timeFromUs(1.0);
-uint32_t FatTreeSwitch::_glb_quality_levels = 8;
-uint32_t FatTreeSwitch::_glb_min_choices = 3;
-simtime_picosec FatTreeSwitch::_glb_gcn_update_interval = timeFromUs(1.0);
-simtime_picosec FatTreeSwitch::_glb_gcn_aging_interval = timeFromUs(20.0);
-bool FatTreeSwitch::_glb_normalize_scores = false;
-bool FatTreeSwitch::_glb_local_damping = false;
-uint32_t FatTreeSwitch::_nmrc_feedback_pkts = 100;
-simtime_picosec FatTreeSwitch::_nmrc_feedback_min_interval = timeFromUs(5.0);
-simtime_picosec FatTreeSwitch::_nmrc_feedback_max_interval = timeFromUs(20.0);
-uint32_t FatTreeSwitch::_nmrc_path_count = 1;
-bool FatTreeSwitch::_nmrc_feedback_observed_values = false;
-bool FatTreeSwitch::_nmrc_feedback_bad_only = false;
+double FatTreeSwitch::_sglb_downstream_weight = 0.25;
+double FatTreeSwitch::_sglb_queue_weight = 0.5;
+double FatTreeSwitch::_sglb_util_weight = 0.05;
+double FatTreeSwitch::_sglb_remote_queue_weight = 0.5;
+double FatTreeSwitch::_sglb_remote_util_weight = 0.05;
+double FatTreeSwitch::_sglb_remote_busy_weight = 0.2;
+double FatTreeSwitch::_sglb_quality_bucket = 20.0;
+uint32_t FatTreeSwitch::_sglb_max_quality = 7;
+simtime_picosec FatTreeSwitch::_sglb_update_interval = timeFromUs(1.0);
+uint32_t FatTreeSwitch::_sglb_quality_levels = 8;
+uint32_t FatTreeSwitch::_sglb_min_choices = 3;
+simtime_picosec FatTreeSwitch::_sglb_gcn_update_interval = timeFromUs(5.0);
+simtime_picosec FatTreeSwitch::_sglb_gcn_aging_interval = timeFromUs(30.0);
+bool FatTreeSwitch::_sglb_normalize_scores = false;
+bool FatTreeSwitch::_sglb_local_damping = false;
+FatTreeSwitch::SglbScoreMode FatTreeSwitch::_sglb_score_mode =
+    FatTreeSwitch::SGLB_SCORE_NMRC_QUANTIZED_TOPK;
+double FatTreeSwitch::_sglb_nmrc_q_min = 0.20;
+double FatTreeSwitch::_sglb_nmrc_q_max = 0.80;
+double FatTreeSwitch::_sglb_nmrc_degraded_threshold = 0.10;
+double FatTreeSwitch::_sglb_nmrc_bad_threshold = 0.40;
+double FatTreeSwitch::_sglb_nmrc_avoid_threshold = 0.60;
+uint32_t FatTreeSwitch::_sglb_nmrc_levels = 4;
+uint64_t FatTreeSwitch::_sglb_diag_route_calls = 0;
+uint64_t FatTreeSwitch::_sglb_diag_available_choices = 0;
+uint64_t FatTreeSwitch::_sglb_diag_candidate_choices = 0;
+uint64_t FatTreeSwitch::_sglb_diag_best_quality_choices = 0;
+uint64_t FatTreeSwitch::_sglb_diag_distinct_qualities = 0;
+uint64_t FatTreeSwitch::_sglb_diag_all_same_quality_calls = 0;
+uint64_t FatTreeSwitch::_sglb_diag_all_zero_quality_calls = 0;
+uint64_t FatTreeSwitch::_sglb_diag_selected_nonbest_quality = 0;
+uint64_t FatTreeSwitch::_sglb_diag_remote_snapshot_used = 0;
+uint64_t FatTreeSwitch::_sglb_diag_remote_snapshot_missing = 0;
+uint64_t FatTreeSwitch::_sglb_diag_observed_levels[4] = {0, 0, 0, 0};
+uint64_t FatTreeSwitch::_sglb_diag_selected_levels[4] = {0, 0, 0, 0};
+double FatTreeSwitch::_sglb_diag_score_spread_sum = 0.0;
+bool FatTreeSwitch::_nmrc_hybrid_enabled = false;
+bool FatTreeSwitch::_nmrc_fastcnp_enabled = true;
+FatTreeSwitch::NmrcReroutePolicy FatTreeSwitch::_nmrc_reroute_policy =
+    FatTreeSwitch::NMRC_REROUTE_BETTER_GE3;
+uint64_t FatTreeSwitch::_nmrc_diag_route_checks = 0;
+uint64_t FatTreeSwitch::_nmrc_diag_reroutes = 0;
+uint64_t FatTreeSwitch::_nmrc_diag_threshold_blocked = 0;
+uint64_t FatTreeSwitch::_nmrc_diag_fastcnp_generated = 0;
+uint64_t FatTreeSwitch::_nmrc_diag_fastcnp_route_missing = 0;
+uint64_t FatTreeSwitch::_nmrc_diag_better_count[33] = {0};
+uint64_t FatTreeSwitch::_nmrc_diag_level_transitions[4][4] = {{0}};
+std::set<uint64_t> FatTreeSwitch::_nmrc_diag_observed_flow_evs;
+std::set<uint64_t> FatTreeSwitch::_nmrc_diag_observed_flow_paths;
+bool FatTreeSwitch::_netaware_enabled = false;
+uint32_t FatTreeSwitch::_netaware_path_count = 1;
+uint32_t FatTreeSwitch::_netaware_feedback_pkts = 1;
+simtime_picosec FatTreeSwitch::_netaware_feedback_min_interval = timeFromUs(5.0);
+simtime_picosec FatTreeSwitch::_netaware_feedback_max_interval = timeFromUs(5.0);
+double FatTreeSwitch::_netaware_queue_threshold_fraction = 0.8;
+double FatTreeSwitch::_netaware_degraded_queue_fraction = 0.30;
+double FatTreeSwitch::_netaware_bad_queue_fraction = 0.60;
+double FatTreeSwitch::_netaware_degraded_utilization_fraction = 0.90;
+double FatTreeSwitch::_netaware_util_queue_floor_fraction = 0.10;
+double FatTreeSwitch::_netaware_slow_link_fraction = 0.90;
+simtime_picosec FatTreeSwitch::_netaware_state_update_interval = timeFromUs(1.0);
+simtime_picosec FatTreeSwitch::_netaware_remote_update_interval = timeFromUs(5.0);
+FatTreeSwitch::NetawareScoreMode FatTreeSwitch::_netaware_score_mode =
+    FatTreeSwitch::NETAWARE_SCORE_SGLB_QUANTIZED;
+FatTreeSwitch::NetawarePathCoupling FatTreeSwitch::_netaware_path_coupling =
+    FatTreeSwitch::NETAWARE_PATH_COUPLING_NOISY_OR;
+double FatTreeSwitch::_netaware_score_q_min = 0.20;
+double FatTreeSwitch::_netaware_score_q_max = 0.80;
+double FatTreeSwitch::_netaware_score_util_low = 0.90;
+double FatTreeSwitch::_netaware_score_util_high = 1.00;
+double FatTreeSwitch::_netaware_score_weight_local_q = 0.50;
+double FatTreeSwitch::_netaware_score_weight_remote_q = 0.50;
+double FatTreeSwitch::_netaware_score_weight_local_util = 0.00;
+double FatTreeSwitch::_netaware_score_weight_remote_util = 0.00;
+double FatTreeSwitch::_netaware_score_degraded_threshold = 0.10;
+double FatTreeSwitch::_netaware_score_bad_threshold = 0.40;
+double FatTreeSwitch::_netaware_score_avoid_threshold = 0.60;
+bool FatTreeSwitch::_stor_enabled = false;
+uint32_t FatTreeSwitch::_stor_path_count = 1;
+uint32_t FatTreeSwitch::_stor_feedback_pkts = 1;
+simtime_picosec FatTreeSwitch::_stor_feedback_min_interval = timeFromUs(5.0);
+simtime_picosec FatTreeSwitch::_stor_feedback_max_interval = timeFromUs(5.0);
+simtime_picosec FatTreeSwitch::_stor_trim_feedback_min_interval = timeFromUs(5.0);
+bool FatTreeSwitch::_stor_feedback_on_trim = true;
+bool FatTreeSwitch::_stor_binary_trim_bad = true;
+uint8_t FatTreeSwitch::_stor_clean_gain = 4;
+uint8_t FatTreeSwitch::_stor_ecn_acc_add = 24;
+uint8_t FatTreeSwitch::_stor_trim_acc_add = 48;
+uint8_t FatTreeSwitch::_stor_ecn_base_penalty = 16;
+uint8_t FatTreeSwitch::_stor_trim_base_penalty = 48;
+uint8_t FatTreeSwitch::_stor_ecn_decay_shift = 3;
+uint8_t FatTreeSwitch::_stor_trim_decay_shift = 2;
+uint8_t FatTreeSwitch::_stor_ecn_penalty_shift = 3;
+uint8_t FatTreeSwitch::_stor_trim_penalty_shift = 2;
+uint8_t FatTreeSwitch::_stor_good_threshold = 240;
+uint8_t FatTreeSwitch::_stor_degraded_threshold = 160;
+uint8_t FatTreeSwitch::_stor_bad_threshold = 80;
+uint8_t FatTreeSwitch::_stor_simple_max_score = 15;
+uint8_t FatTreeSwitch::_stor_simple_clean_gain = 1;
+uint8_t FatTreeSwitch::_stor_simple_congestion_penalty = 4;
+FatTreeSwitch::StorScoreProfile FatTreeSwitch::_stor_score_profile =
+    FatTreeSwitch::STOR_SCORE_PROFILE_BALANCED;
+FatTreeSwitch::StorAgingProfile FatTreeSwitch::_stor_aging_profile =
+    FatTreeSwitch::STOR_AGING_PACKET;
+simtime_picosec FatTreeSwitch::_stor_time_ecn_tau = timeFromUs(20.0);
+simtime_picosec FatTreeSwitch::_stor_time_trim_tau = timeFromUs(50.0);
+simtime_picosec FatTreeSwitch::_stor_time_score_tau = timeFromUs(50.0);
+simtime_picosec FatTreeSwitch::_stor_hybrid_bad_hold = timeFromUs(10.0);
+simtime_picosec FatTreeSwitch::_stor_hybrid_avoid_hold = timeFromUs(20.0);
+uint32_t FatTreeSwitch::_stor_hybrid_probe_interval_pkts = 64;
+uint32_t FatTreeSwitch::_stor_hybrid_probe_clean_promote = 2;
 bool FatTreeSwitch::_pathid_only_hash = false;
+
+void FatTreeSwitch::set_stor_score_profile(StorScoreProfile profile) {
+    _stor_score_profile = profile;
+
+    if (profile == STOR_SCORE_PROFILE_CUSTOM)
+        return;
+
+    if (profile == STOR_SCORE_PROFILE_BINARY) {
+        _stor_good_threshold = 1;
+        _stor_degraded_threshold = 1;
+        _stor_bad_threshold = 1;
+        return;
+    }
+
+    if (profile == STOR_SCORE_PROFILE_SIMPLE) {
+        _stor_simple_max_score = 15;
+        _stor_simple_clean_gain = 1;
+        _stor_simple_congestion_penalty = 4;
+        _stor_good_threshold = 12;
+        _stor_degraded_threshold = 7;
+        _stor_bad_threshold = 3;
+        return;
+    }
+
+    _stor_clean_gain = 4;
+    _stor_ecn_decay_shift = 3;
+    _stor_trim_decay_shift = 2;
+    _stor_ecn_penalty_shift = 3;
+    _stor_trim_penalty_shift = 2;
+
+    if (profile == STOR_SCORE_PROFILE_ORIGINAL) {
+        _stor_ecn_acc_add = 16;
+        _stor_trim_acc_add = 32;
+        _stor_ecn_base_penalty = 8;
+        _stor_trim_base_penalty = 32;
+        _stor_good_threshold = 200;
+        _stor_degraded_threshold = 120;
+        _stor_bad_threshold = 50;
+        return;
+    }
+
+    _stor_ecn_acc_add = 24;
+    _stor_trim_acc_add = 48;
+    _stor_ecn_base_penalty = 16;
+    _stor_trim_base_penalty = 48;
+    _stor_good_threshold = 240;
+    _stor_degraded_threshold = 160;
+    _stor_bad_threshold = 80;
+}
+
+const char* FatTreeSwitch::stor_score_profile_name() {
+    switch (_stor_score_profile) {
+    case STOR_SCORE_PROFILE_ORIGINAL:
+        return "original";
+    case STOR_SCORE_PROFILE_BALANCED:
+        return "balanced";
+    case STOR_SCORE_PROFILE_SIMPLE:
+        return "simple";
+    case STOR_SCORE_PROFILE_BINARY:
+        return "binary";
+    default:
+        return "custom";
+    }
+}
+
+void FatTreeSwitch::set_stor_aging_profile(StorAgingProfile profile) {
+    _stor_aging_profile = profile;
+}
+
+const char* FatTreeSwitch::stor_aging_profile_name() {
+    switch (_stor_aging_profile) {
+    case STOR_AGING_PACKET:
+        return "packet";
+    case STOR_AGING_TIME_EWMA:
+        return "time_ewma";
+    case STOR_AGING_HYBRID:
+        return "hybrid";
+    }
+    return "packet";
+}
+
+uint8_t FatTreeSwitch::stor_level_from_score(uint8_t score) {
+    if (_stor_score_profile == STOR_SCORE_PROFILE_BINARY)
+        return score ? STOR_LEVEL_GOOD : STOR_LEVEL_AVOID;
+    if (score >= _stor_good_threshold)
+        return STOR_LEVEL_GOOD;
+    if (score >= _stor_degraded_threshold)
+        return STOR_LEVEL_DEGRADED;
+    if (score >= _stor_bad_threshold)
+        return STOR_LEVEL_BAD;
+    return STOR_LEVEL_AVOID;
+}
+
+static uint8_t stor_decay(uint8_t value, uint8_t shift) {
+    return value - (value >> shift);
+}
+
+static uint8_t stor_add_sat(uint8_t value, uint32_t delta) {
+    uint32_t sum = (uint32_t)value + delta;
+    return sum > 255 ? 255 : (uint8_t)sum;
+}
+
+static uint8_t stor_sub_sat(uint8_t value, uint32_t delta) {
+    return value < delta ? 0 : (uint8_t)(value - delta);
+}
+
+void FatTreeSwitch::stor_apply_signal(StorEvState& state, StorSignal signal) {
+    if (_stor_score_profile == STOR_SCORE_PROFILE_BINARY) {
+        state.ecn_acc = 0;
+        state.trim_acc = 0;
+        if (signal == STOR_SIGNAL_ECN ||
+            (signal == STOR_SIGNAL_TRIM && _stor_binary_trim_bad))
+            state.score = 0;
+        return;
+    }
+    if (_stor_score_profile == STOR_SCORE_PROFILE_SIMPLE) {
+        if (state.score > _stor_simple_max_score)
+            state.score = _stor_simple_max_score;
+        state.ecn_acc = 0;
+        state.trim_acc = 0;
+        if (signal == STOR_SIGNAL_CLEAN) {
+            uint32_t recovered = state.score + _stor_simple_clean_gain;
+            state.score = recovered > _stor_simple_max_score ?
+                _stor_simple_max_score : (uint8_t)recovered;
+        } else {
+            state.score = stor_sub_sat(
+                state.score, _stor_simple_congestion_penalty);
+        }
+        return;
+    }
+
+    state.ecn_acc = stor_decay(state.ecn_acc, _stor_ecn_decay_shift);
+    state.trim_acc = stor_decay(state.trim_acc, _stor_trim_decay_shift);
+
+    if (signal == STOR_SIGNAL_CLEAN) {
+        state.score = stor_add_sat(state.score, _stor_clean_gain);
+        return;
+    }
+
+    if (signal == STOR_SIGNAL_ECN) {
+        state.ecn_acc = stor_add_sat(state.ecn_acc, _stor_ecn_acc_add);
+        uint32_t penalty = _stor_ecn_base_penalty +
+                           (state.ecn_acc >> _stor_ecn_penalty_shift);
+        state.score = stor_sub_sat(state.score, penalty);
+        return;
+    }
+
+    state.trim_acc = stor_add_sat(state.trim_acc, _stor_trim_acc_add);
+    uint32_t penalty = _stor_trim_base_penalty +
+                       (state.trim_acc >> _stor_trim_penalty_shift);
+    state.score = stor_sub_sat(state.score, penalty);
+}
+
+static uint8_t stor_time_decay_value(uint8_t value, simtime_picosec dt,
+                                     simtime_picosec tau) {
+    if (!value || dt == 0 || tau == 0)
+        return value;
+    uint64_t steps = dt / tau;
+    uint32_t out = value;
+    for (uint64_t i = 0; i < steps && out > 0; i++)
+        out -= (out + 1) / 2;
+    return (uint8_t)out;
+}
+
+static uint8_t stor_time_recover_score(uint8_t score, simtime_picosec dt,
+                                       simtime_picosec tau,
+                                       uint8_t max_score) {
+    if (dt == 0 || tau == 0 || score >= max_score)
+        return score;
+    uint64_t steps = dt / tau;
+    uint32_t out = score;
+    for (uint64_t i = 0; i < steps && out < max_score; i++)
+        out += (max_score - out + 1) / 2;
+    return out > max_score ? max_score : (uint8_t)out;
+}
+
+void FatTreeSwitch::stor_note_level_transition(StorEvState& ev,
+                                               uint8_t old_level) {
+    uint8_t new_level = stor_level_from_score(ev.score);
+    if (old_level != STOR_LEVEL_AVOID && new_level == STOR_LEVEL_AVOID)
+        ev.avoid_entries++;
+    if (old_level == STOR_LEVEL_AVOID && new_level != STOR_LEVEL_AVOID)
+        ev.avoid_exits++;
+    ev.last_level = new_level;
+}
+
+void FatTreeSwitch::stor_apply_time_aging(StorState& state,
+                                          simtime_picosec now) {
+    for (uint32_t i = 0; i < state.evs.size(); i++) {
+        StorEvState& ev = state.evs[i];
+        simtime_picosec last = ev.last_update ? ev.last_update : state.last_feedback;
+        simtime_picosec dt = now > last ? now - last : 0;
+        if (dt == 0)
+            continue;
+
+        uint8_t old_level = stor_level_from_score(ev.score);
+        if (_stor_aging_profile == STOR_AGING_TIME_EWMA) {
+            ev.ecn_acc = stor_time_decay_value(ev.ecn_acc, dt, _stor_time_ecn_tau);
+            ev.trim_acc = stor_time_decay_value(ev.trim_acc, dt, _stor_time_trim_tau);
+            uint8_t max_score = _stor_score_profile == STOR_SCORE_PROFILE_SIMPLE ?
+                _stor_simple_max_score : 255;
+            ev.score = stor_time_recover_score(
+                ev.score, dt, _stor_time_score_tau, max_score);
+        } else if (_stor_aging_profile == STOR_AGING_HYBRID) {
+            simtime_picosec hold = old_level == STOR_LEVEL_AVOID ?
+                _stor_hybrid_avoid_hold : _stor_hybrid_bad_hold;
+            uint32_t probe_interval = _stor_hybrid_probe_interval_pkts ?
+                _stor_hybrid_probe_interval_pkts : 1;
+            bool probe_due = probe_interval <= 1 ||
+                state.signals_seen - ev.last_probe_packet >= probe_interval;
+            if ((old_level == STOR_LEVEL_AVOID || old_level == STOR_LEVEL_BAD) &&
+                ev.has_bad_time && now >= ev.last_bad_time &&
+                now - ev.last_bad_time >= hold && probe_due) {
+                if (old_level == STOR_LEVEL_AVOID && ev.score < _stor_bad_threshold)
+                    ev.score = _stor_bad_threshold;
+                else if (old_level == STOR_LEVEL_BAD &&
+                         ev.score < _stor_degraded_threshold)
+                    ev.score = _stor_degraded_threshold;
+                ev.last_probe_time = now;
+                ev.last_probe_packet = state.signals_seen;
+            }
+        }
+
+        if (ev.score < ev.min_score_seen)
+            ev.min_score_seen = ev.score;
+        ev.last_update = now;
+        stor_note_level_transition(ev, old_level);
+    }
+}
+
 int8_t (*FatTreeSwitch::fn)(FibEntry*,FibEntry*)= &FatTreeSwitch::compare_queuesize;
 
-uint32_t FatTreeSwitch::glb_queue_kbytes(BaseQueue* q) {
+uint32_t FatTreeSwitch::sglb_queue_kbytes(BaseQueue* q) {
     if (!q)
         return 0;
 
@@ -379,7 +720,7 @@ uint32_t FatTreeSwitch::glb_queue_kbytes(BaseQueue* q) {
     return (uint32_t)q_kbytes;
 }
 
-double FatTreeSwitch::glb_queue_fraction(BaseQueue* q) {
+double FatTreeSwitch::sglb_queue_fraction(BaseQueue* q) {
     if (!q)
         return 0.0;
 
@@ -395,7 +736,7 @@ double FatTreeSwitch::glb_queue_fraction(BaseQueue* q) {
     return fraction;
 }
 
-uint32_t FatTreeSwitch::glb_utilization_percent(BaseQueue* q) {
+uint32_t FatTreeSwitch::sglb_utilization_percent(BaseQueue* q) {
     if (!q)
         return 0;
 
@@ -410,19 +751,234 @@ uint32_t FatTreeSwitch::glb_utilization_percent(BaseQueue* q) {
     return utilization;
 }
 
-double FatTreeSwitch::glb_port_score(BaseQueue* q, double queue_weight, double util_weight) {
+const char* FatTreeSwitch::netaware_score_mode_name() {
+    switch (_netaware_score_mode) {
+    case NETAWARE_SCORE_GATED:
+        return "gated";
+    case NETAWARE_SCORE_WORST_HOP:
+        return "worst_hop";
+    case NETAWARE_SCORE_SGLB_QUANTIZED:
+    default:
+        return "sglb_quantized";
+    }
+}
+
+const char* FatTreeSwitch::netaware_path_coupling_name() {
+    switch (_netaware_path_coupling) {
+    case NETAWARE_PATH_COUPLING_BOTTLENECK:
+        return "bottleneck";
+    case NETAWARE_PATH_COUPLING_NOISY_OR:
+        return "noisy_or";
+    case NETAWARE_PATH_COUPLING_ADDITIVE:
+    default:
+        return "additive";
+    }
+}
+
+uint32_t FatTreeSwitch::netaware_default_feedback_pkts(uint32_t path_count) {
+    (void)path_count;
+    return 1;
+}
+
+double FatTreeSwitch::netaware_default_feedback_min_us(uint32_t path_count) {
+    (void)path_count;
+    return 5.0;
+}
+
+double FatTreeSwitch::netaware_default_feedback_max_us(uint32_t path_count) {
+    (void)path_count;
+    return 5.0;
+}
+
+uint32_t FatTreeSwitch::avail_default_feedback_pkts(uint32_t path_count) {
+    (void)path_count;
+    return 1;
+}
+
+uint32_t FatTreeSwitch::grade_default_feedback_pkts(uint32_t path_count) {
+    (void)path_count;
+    return 1;
+}
+
+double FatTreeSwitch::netaware_pressure_from_range(double value, double low,
+                                               double high) {
+    if (value <= low)
+        return 0.0;
+    if (high <= low)
+        return value > low ? 1.0 : 0.0;
+    if (value >= high)
+        return 1.0;
+    return (value - low) / (high - low);
+}
+
+double FatTreeSwitch::netaware_composite_score(double local_q_pressure,
+                                           double remote_q_pressure,
+                                           double local_util_pressure,
+                                           double remote_util_pressure) {
+    return _netaware_score_weight_local_q * local_q_pressure +
+           _netaware_score_weight_remote_q * remote_q_pressure +
+           _netaware_score_weight_local_util * local_util_pressure +
+           _netaware_score_weight_remote_util * remote_util_pressure;
+}
+
+double FatTreeSwitch::netaware_couple_hop_scores(double local_q_pressure,
+                                             double remote_q_pressure,
+                                             double local_util_pressure,
+                                             double remote_util_pressure) {
+    if (_netaware_path_coupling == NETAWARE_PATH_COUPLING_ADDITIVE) {
+        return netaware_composite_score(local_q_pressure, remote_q_pressure,
+                                    local_util_pressure, remote_util_pressure);
+    }
+
+    double local_weight =
+        _netaware_score_weight_local_q + _netaware_score_weight_local_util;
+    double remote_weight =
+        _netaware_score_weight_remote_q + _netaware_score_weight_remote_util;
+    double local_score = local_weight > 0.0
+        ? (_netaware_score_weight_local_q * local_q_pressure +
+           _netaware_score_weight_local_util * local_util_pressure) / local_weight
+        : 0.0;
+    double remote_score = remote_weight > 0.0
+        ? (_netaware_score_weight_remote_q * remote_q_pressure +
+           _netaware_score_weight_remote_util * remote_util_pressure) / remote_weight
+        : 0.0;
+
+    if (_netaware_path_coupling == NETAWARE_PATH_COUPLING_BOTTLENECK)
+        return local_score > remote_score ? local_score : remote_score;
+    return 1.0 - (1.0 - local_score) * (1.0 - remote_score);
+}
+
+uint8_t FatTreeSwitch::netaware_level_from_score(double score) {
+    if (score < _netaware_score_degraded_threshold)
+        return STOR_LEVEL_GOOD;
+    if (score < _netaware_score_bad_threshold)
+        return STOR_LEVEL_DEGRADED;
+    if (score < _netaware_score_avoid_threshold)
+        return STOR_LEVEL_BAD;
+    return STOR_LEVEL_AVOID;
+}
+
+uint8_t FatTreeSwitch::netaware_gated_level_from_inputs(bool paused,
+                                                    double rate_ratio,
+                                                    double queue_fraction,
+                                                    double util_fraction,
+                                                    bool grade_queues) {
+    if (paused)
+        return STOR_LEVEL_AVOID;
+
+    bool slow_port = rate_ratio < _netaware_slow_link_fraction;
+    if (slow_port)
+        return STOR_LEVEL_BAD;
+
+    if (!grade_queues)
+        return STOR_LEVEL_GOOD;
+
+    double avoid = _netaware_queue_threshold_fraction;
+    if (avoid < 0.0)
+        avoid = 0.0;
+    if (avoid > 1.0)
+        avoid = 1.0;
+
+    if (queue_fraction >= avoid)
+        return STOR_LEVEL_AVOID;
+    if (queue_fraction >= _netaware_bad_queue_fraction)
+        return STOR_LEVEL_BAD;
+    if (queue_fraction >= _netaware_degraded_queue_fraction)
+        return STOR_LEVEL_DEGRADED;
+    if (queue_fraction >= _netaware_util_queue_floor_fraction &&
+        util_fraction >= _netaware_degraded_utilization_fraction)
+        return STOR_LEVEL_DEGRADED;
+
+    return STOR_LEVEL_GOOD;
+}
+
+void FatTreeSwitch::reset_sglb_route_diag() {
+    _sglb_diag_route_calls = 0;
+    _sglb_diag_available_choices = 0;
+    _sglb_diag_candidate_choices = 0;
+    _sglb_diag_best_quality_choices = 0;
+    _sglb_diag_distinct_qualities = 0;
+    _sglb_diag_all_same_quality_calls = 0;
+    _sglb_diag_all_zero_quality_calls = 0;
+    _sglb_diag_selected_nonbest_quality = 0;
+    _sglb_diag_remote_snapshot_used = 0;
+    _sglb_diag_remote_snapshot_missing = 0;
+    for (uint32_t level = 0; level < 4; level++) {
+        _sglb_diag_observed_levels[level] = 0;
+        _sglb_diag_selected_levels[level] = 0;
+    }
+    _sglb_diag_score_spread_sum = 0.0;
+}
+
+void FatTreeSwitch::reset_nmrc_hybrid_diag() {
+    _nmrc_diag_route_checks = 0;
+    _nmrc_diag_reroutes = 0;
+    _nmrc_diag_threshold_blocked = 0;
+    _nmrc_diag_fastcnp_generated = 0;
+    _nmrc_diag_fastcnp_route_missing = 0;
+    _nmrc_diag_observed_flow_evs.clear();
+    _nmrc_diag_observed_flow_paths.clear();
+    for (uint32_t count = 0; count <= 32; count++)
+        _nmrc_diag_better_count[count] = 0;
+    for (uint32_t original = 0; original < 4; original++) {
+        for (uint32_t selected = 0; selected < 4; selected++)
+            _nmrc_diag_level_transitions[original][selected] = 0;
+    }
+}
+
+double FatTreeSwitch::sglb_port_score(BaseQueue* q, double queue_weight, double util_weight) {
     if (!q)
         return 0.0;
 
-    double queue = _glb_normalize_scores ? glb_queue_fraction(q) : (double)glb_queue_kbytes(q);
-    double utilization = _glb_normalize_scores ?
-        (double)glb_utilization_percent(q) / 100.0 :
-        (double)glb_utilization_percent(q);
+    double queue = _sglb_normalize_scores ? sglb_queue_fraction(q) : (double)sglb_queue_kbytes(q);
+    double utilization = _sglb_normalize_scores ?
+        (double)sglb_utilization_percent(q) / 100.0 :
+        (double)sglb_utilization_percent(q);
 
     return queue_weight * queue + util_weight * utilization;
 }
 
-void FatTreeSwitch::glb_candidate_queues(uint32_t dst, vector<BaseQueue*>& queues) {
+double FatTreeSwitch::sglb_nmrc_queue_pressure(double queue_fraction) {
+    return netaware_pressure_from_range(queue_fraction, _sglb_nmrc_q_min,
+                                    _sglb_nmrc_q_max);
+}
+
+double FatTreeSwitch::sglb_nmrc_noisy_or(double local, double remote) {
+    return 1.0 - (1.0 - local) * (1.0 - remote);
+}
+
+uint8_t FatTreeSwitch::sglb_nmrc_level(double score) {
+    if (score < _sglb_nmrc_degraded_threshold)
+        return STOR_LEVEL_GOOD;
+    if (score < _sglb_nmrc_bad_threshold)
+        return STOR_LEVEL_DEGRADED;
+    if (score < _sglb_nmrc_avoid_threshold)
+        return STOR_LEVEL_BAD;
+    return STOR_LEVEL_AVOID;
+}
+
+uint8_t FatTreeSwitch::sglb_nmrc_quantized_level(double score,
+                                                  uint32_t levels) {
+    if (levels == 8) {
+        static const double thresholds[7] = {
+            0.05, 0.10, 0.25, 0.40, 0.50, 0.60, 0.80
+        };
+        for (uint8_t level = 0; level < 7; level++) {
+            if (score < thresholds[level])
+                return level;
+        }
+        return 7;
+    }
+    return sglb_nmrc_level(score);
+}
+
+const char* FatTreeSwitch::sglb_score_mode_name() {
+    if (_sglb_score_mode == SGLB_SCORE_NMRC_QUANTIZED_TOPK)
+        return "nmrc_quantized_topk";
+    return "legacy";
+}
+
+void FatTreeSwitch::sglb_candidate_queues(uint32_t dst, vector<BaseQueue*>& queues) {
     if (_type == TOR) {
         if (_ft->HOST_POD_SWITCH(dst) == _id) {
             for (uint32_t b = 0; b < _ft->bundlesize(TOR_TIER); b++) {
@@ -488,84 +1044,98 @@ void FatTreeSwitch::glb_candidate_queues(uint32_t dst, vector<BaseQueue*>& queue
     }
 }
 
-FatTreeSwitch::GlbPathState FatTreeSwitch::glb_compute_export_state(uint32_t dst) {
-    GlbPathState state;
+FatTreeSwitch::SglbPathState FatTreeSwitch::sglb_compute_export_state(uint32_t dst) {
+    SglbPathState state;
     vector<BaseQueue*> queues;
-    glb_candidate_queues(dst, queues);
+    sglb_candidate_queues(dst, queues);
     if (queues.empty())
         return state;
 
     double best = std::numeric_limits<double>::max();
+    double best_queue_fraction = std::numeric_limits<double>::max();
     double busy = 0.0;
     for (uint32_t i = 0; i < queues.size(); i++) {
-        double score = glb_port_score(queues[i], _glb_remote_queue_weight, _glb_remote_util_weight);
+        double queue_fraction = sglb_queue_fraction(queues[i]);
+        double score = sglb_port_score(queues[i], _sglb_remote_queue_weight, _sglb_remote_util_weight);
         if (score < best)
             best = score;
-        busy += _glb_normalize_scores ? glb_queue_fraction(queues[i]) : (double)glb_queue_kbytes(queues[i]);
+        if (queue_fraction < best_queue_fraction)
+            best_queue_fraction = queue_fraction;
+        busy += _sglb_normalize_scores ? sglb_queue_fraction(queues[i]) : (double)sglb_queue_kbytes(queues[i]);
     }
 
     double avg_busy = busy / queues.size();
+    if (best_queue_fraction == std::numeric_limits<double>::max())
+        best_queue_fraction = 0.0;
+    state.queue_fraction = best_queue_fraction;
+    state.queue_pressure = sglb_nmrc_queue_pressure(best_queue_fraction);
     state.best_score = best == std::numeric_limits<double>::max() ? 0.0 : best;
     state.avg_busy = avg_busy;
-    state.score = state.best_score + _glb_remote_busy_weight * state.avg_busy;
+    if (_sglb_score_mode == SGLB_SCORE_LEGACY) {
+        state.score = state.best_score + _sglb_remote_busy_weight * state.avg_busy;
+        state.quality = sglb_quality(state.score);
+    } else {
+        state.best_score = state.queue_pressure;
+        state.score = state.queue_pressure;
+        state.quality = sglb_nmrc_level(state.score);
+    }
     state.candidate_count = queues.size();
-    state.quality = glb_quality(state.score);
     state.link_available = true;
     state.valid = true;
     return state;
 }
 
-void FatTreeSwitch::glb_maybe_refresh_export(uint32_t dst) {
+void FatTreeSwitch::sglb_maybe_refresh_export(uint32_t dst) {
     simtime_picosec now = eventlist().now();
-    GlbPathState& cached = _glb_exported_state[dst];
-    if (cached.valid && _glb_gcn_update_interval > 0 &&
+    SglbPathState& cached = _sglb_exported_state[dst];
+    if (cached.valid && _sglb_gcn_update_interval > 0 &&
         now >= cached.last_update &&
-        now - cached.last_update < _glb_gcn_update_interval) {
-        glb_schedule_periodic_gcn();
+        now - cached.last_update < _sglb_gcn_update_interval) {
+        sglb_schedule_periodic_gcn();
         return;
     }
 
-    GlbPathState state = glb_compute_export_state(dst);
+    SglbPathState state = sglb_compute_export_state(dst);
     state.last_update = now;
     cached = state;
-    glb_schedule_periodic_gcn();
+    sglb_schedule_periodic_gcn();
 }
 
-void FatTreeSwitch::glb_schedule_periodic_gcn() {
-    if (_strategy != GLB || _glb_gcn_update_interval == 0 ||
-        _glb_gcn_timer_pending || _glb_exported_state.empty()) {
+void FatTreeSwitch::sglb_schedule_periodic_gcn() {
+    if (_strategy != SGLB || _sglb_gcn_update_interval == 0 ||
+        _sglb_gcn_timer_pending || _sglb_exported_state.empty()) {
         return;
     }
 
-    if (!_glb_gcn_timer)
-        _glb_gcn_timer = new GlbGcnTimer(eventlist(), this);
-    eventlist().sourceIsPendingRel(*_glb_gcn_timer, _glb_gcn_update_interval);
-    _glb_gcn_timer_pending = true;
+    if (!_sglb_gcn_timer)
+        _sglb_gcn_timer = new SglbGcnTimer(eventlist(), this);
+    eventlist().sourceIsPendingRel(*_sglb_gcn_timer, _sglb_gcn_update_interval);
+    _sglb_gcn_timer_pending = true;
 }
 
-void FatTreeSwitch::glb_periodic_refresh_exports() {
-    if (_strategy != GLB || _glb_gcn_update_interval == 0 ||
-        _glb_exported_state.empty()) {
+void FatTreeSwitch::sglb_periodic_refresh_exports() {
+    if (_strategy != SGLB || _sglb_gcn_update_interval == 0 ||
+        _sglb_exported_state.empty()) {
         return;
     }
 
     simtime_picosec now = eventlist().now();
     vector<uint32_t> dsts;
-    dsts.reserve(_glb_exported_state.size());
-    for (unordered_map<uint32_t,GlbPathState>::const_iterator it = _glb_exported_state.begin();
-         it != _glb_exported_state.end(); ++it) {
+    dsts.reserve(_sglb_exported_state.size());
+    for (unordered_map<uint32_t,SglbPathState>::const_iterator it = _sglb_exported_state.begin();
+         it != _sglb_exported_state.end(); ++it) {
         dsts.push_back(it->first);
     }
 
     for (size_t i = 0; i < dsts.size(); i++) {
-        GlbPathState state = glb_compute_export_state(dsts[i]);
+        SglbPathState state = sglb_compute_export_state(dsts[i]);
         state.last_update = now;
-        _glb_exported_state[dsts[i]] = state;
+        _sglb_exported_state[dsts[i]] = state;
     }
-    glb_schedule_periodic_gcn();
+    sglb_schedule_periodic_gcn();
 }
 
-uint32_t FatTreeSwitch::glb_next_hop_id(FibEntry* entry) const {
+uint32_t FatTreeSwitch::sglb_next_hop_id(FibEntry* entry) const {
     if (!entry)
         return UINT32_MAX;
 
@@ -580,18 +1150,18 @@ uint32_t FatTreeSwitch::glb_next_hop_id(FibEntry* entry) const {
     return next->getID();
 }
 
-bool FatTreeSwitch::glb_entry_available(FibEntry* entry) const {
-    uint32_t next_id = glb_next_hop_id(entry);
+bool FatTreeSwitch::sglb_entry_available(FibEntry* entry) const {
+    uint32_t next_id = sglb_next_hop_id(entry);
     if (next_id == UINT32_MAX)
         return true;
 
-    unordered_map<uint32_t,bool>::const_iterator it = _glb_neighbor_available.find(next_id);
-    return it == _glb_neighbor_available.end() || it->second;
+    unordered_map<uint32_t,bool>::const_iterator it = _sglb_neighbor_available.find(next_id);
+    return it == _sglb_neighbor_available.end() || it->second;
 }
 
-const FatTreeSwitch::GlbPathState* FatTreeSwitch::glb_neighbor_snapshot(FibEntry* entry,
+const FatTreeSwitch::SglbPathState* FatTreeSwitch::sglb_neighbor_snapshot(FibEntry* entry,
                                                                         uint32_t dst) const {
-    if (!glb_entry_available(entry))
+    if (!sglb_entry_available(entry))
         return NULL;
 
     Route *r = entry->getEgressPort();
@@ -602,23 +1172,23 @@ const FatTreeSwitch::GlbPathState* FatTreeSwitch::glb_neighbor_snapshot(FibEntry
     if (!next)
         return NULL;
 
-    unordered_map<uint32_t,GlbPathState>::const_iterator it = next->_glb_exported_state.find(dst);
-    if (it == next->_glb_exported_state.end())
+    unordered_map<uint32_t,SglbPathState>::const_iterator it = next->_sglb_exported_state.find(dst);
+    if (it == next->_sglb_exported_state.end())
         return NULL;
 
     simtime_picosec now = eventlist().now();
-    if (!glb_snapshot_usable(it->second, now, _glb_gcn_aging_interval))
+    if (!sglb_snapshot_usable(it->second, now, _sglb_gcn_aging_interval))
         return NULL;
 
     return &it->second;
 }
 
-void FatTreeSwitch::glb_mark_neighbor_link(uint32_t neighbor_id, bool available) {
-    _glb_neighbor_available[neighbor_id] = available;
+void FatTreeSwitch::sglb_mark_neighbor_link(uint32_t neighbor_id, bool available) {
+    _sglb_neighbor_available[neighbor_id] = available;
 }
 
-double FatTreeSwitch::glb_score(FibEntry* entry, uint32_t dst, uint32_t depth) {
-    if (!glb_entry_available(entry))
+double FatTreeSwitch::sglb_compute_score(FibEntry* entry, uint32_t dst, uint32_t depth) {
+    if (!sglb_entry_available(entry))
         return std::numeric_limits<double>::max();
 
     Route *r = entry->getEgressPort();
@@ -628,60 +1198,294 @@ double FatTreeSwitch::glb_score(FibEntry* entry, uint32_t dst, uint32_t depth) {
     if (!q)
         return std::numeric_limits<double>::max();
 
-    double score = glb_port_score(q, _glb_queue_weight, _glb_util_weight);
+    double score = sglb_port_score(q, _sglb_queue_weight, _sglb_util_weight);
     double local_score = score;
 
     if (depth > 0) {
-        const GlbPathState* remote = glb_neighbor_snapshot(entry, dst);
+        const SglbPathState* remote = sglb_neighbor_snapshot(entry, dst);
         if (remote) {
-            double downstream_scale = _glb_local_damping ?
-                glb_downstream_scale_for_score(local_score,
-                                               _glb_quality_bucket,
-                                               _glb_normalize_scores) :
+            _sglb_diag_remote_snapshot_used++;
+            double downstream_scale = _sglb_local_damping ?
+                sglb_downstream_scale_for_score(local_score,
+                                               _sglb_quality_bucket,
+                                               _sglb_normalize_scores) :
                 1.0;
-            score += _glb_downstream_weight * downstream_scale * remote->score;
+            score += _sglb_downstream_weight * downstream_scale * remote->score;
+        } else {
+            _sglb_diag_remote_snapshot_missing++;
         }
     }
     return score;
 }
 
-uint8_t FatTreeSwitch::glb_quality(double score) {
-    uint32_t levels = _glb_quality_levels ? _glb_quality_levels : (_glb_max_quality + 1);
-    return glb_quality_from_score(score, _glb_quality_bucket, levels);
+double FatTreeSwitch::sglb_compute_nmrc_score(FibEntry* entry, uint32_t dst,
+                                              uint32_t depth) {
+    if (!sglb_entry_available(entry))
+        return std::numeric_limits<double>::max();
+
+    Route *r = entry->getEgressPort();
+    assert(r && r->size() > 0);
+    BaseQueue* q = dynamic_cast<BaseQueue*>(r->at(0));
+    if (!q)
+        return std::numeric_limits<double>::max();
+
+    double local_fraction = sglb_queue_fraction(q);
+    double local_pressure = sglb_nmrc_queue_pressure(local_fraction);
+    double remote_pressure = 0.0;
+    if (depth > 0) {
+        const SglbPathState* remote = sglb_neighbor_snapshot(entry, dst);
+        if (remote) {
+            _sglb_diag_remote_snapshot_used++;
+            remote_pressure = remote->queue_pressure;
+        } else {
+            _sglb_diag_remote_snapshot_missing++;
+        }
+    }
+    return sglb_nmrc_noisy_or(local_pressure, remote_pressure);
 }
 
-uint32_t FatTreeSwitch::glb_best_score(uint32_t dst, uint32_t depth) {
+const FatTreeSwitch::SglbQualitySnapshot&
+FatTreeSwitch::sglb_quality_snapshot(FibEntry* entry, uint32_t dst, uint32_t depth) {
+    simtime_picosec now = eventlist().now();
+    SglbQualitySnapshot& cached = _sglb_quality_table[dst][entry];
+
+    if (cached.valid && _sglb_update_interval > 0 &&
+        now >= cached.last_update &&
+        now - cached.last_update < _sglb_update_interval) {
+        return cached;
+    }
+
+    if (_sglb_score_mode == SGLB_SCORE_LEGACY) {
+        cached.score = sglb_compute_score(entry, dst, depth);
+        cached.quality = sglb_quality(cached.score);
+    } else {
+        cached.score = sglb_compute_nmrc_score(entry, dst, depth);
+        cached.quality = sglb_nmrc_quantized_level(
+            cached.score, _sglb_nmrc_levels);
+    }
+    cached.last_update = now;
+    cached.valid = true;
+    return cached;
+}
+
+uint8_t FatTreeSwitch::sglb_quality(double score) {
+    uint32_t levels = _sglb_quality_levels ? _sglb_quality_levels : (_sglb_max_quality + 1);
+    return sglb_quality_from_score(score, _sglb_quality_bucket, levels);
+}
+
+FatTreeSwitch::NmrcRerouteDecision
+FatTreeSwitch::nmrc_select_better_path(
+        uint32_t original_index,
+        const vector<uint8_t>& levels,
+        const vector<bool>& available,
+        NmrcReroutePolicy policy,
+        uint32_t min_choices,
+        uint32_t selection_value) {
+    NmrcRerouteDecision decision;
+    if (original_index >= levels.size() || levels.size() != available.size())
+        return decision;
+
+    decision.original_level = levels[original_index];
+    for (uint32_t i = 0; i < levels.size(); i++) {
+        if (i != original_index && available[i] &&
+            levels[i] < decision.original_level)
+            decision.better_count++;
+    }
+
+    uint32_t required = policy == NMRC_REROUTE_BETTER_GE3 ? 3 : 1;
+    if (decision.better_count < required)
+        return decision;
+
+    if (min_choices == 0)
+        min_choices = 1;
+    vector<uint32_t> candidates;
+    for (uint32_t level = STOR_LEVEL_GOOD;
+         level < decision.original_level &&
+             candidates.size() < min_choices;
+         level++) {
+        for (uint32_t i = 0; i < levels.size(); i++) {
+            if (i != original_index && available[i] &&
+                levels[i] == level)
+                candidates.push_back(i);
+        }
+    }
+    decision.candidate_count = candidates.size();
+    if (candidates.empty())
+        return decision;
+
+    decision.selected_index =
+        candidates[selection_value % candidates.size()];
+    decision.selected_level = levels[decision.selected_index];
+    decision.reroute = decision.selected_index != original_index &&
+        decision.selected_level < decision.original_level;
+    return decision;
+}
+
+bool FatTreeSwitch::nmrc_is_source_leaf_data(
+        Packet& pkt, vector<FibEntry*>* available_hops) const {
+    if (!_nmrc_hybrid_enabled || _type != TOR || !_ft ||
+        pkt.type() != ROCE || !available_hops || available_hops->empty())
+        return false;
+    if (pkt.get_direction() != ::NONE ||
+        (*available_hops)[0]->getDirection() != UP)
+        return false;
+    RocePacket* data = dynamic_cast<RocePacket*>(&pkt);
+    if (!data || !data->has_mrc_ev() || data->src() == UINT32_MAX)
+        return false;
+    return _ft->HOST_POD_SWITCH(data->src()) == _id;
+}
+
+bool FatTreeSwitch::nmrc_inject_fastcnp(
+        const RocePacket& data,
+        uint32_t original_egress,
+        uint32_t selected_egress,
+        uint8_t original_level,
+        uint8_t selected_level) {
+    HostFibEntry* host = _fib->getHostRoute(data.src(), data.flow_id());
+    if (!host || !host->getEgressPort()) {
+        _nmrc_diag_fastcnp_route_missing++;
+        return false;
+    }
+
+    Route* route = host->getEgressPort();
+    RoceFastCnp* fast_cnp = RoceFastCnp::newpkt(
+        data.flow(), *route, data.src(), data.mrc_ev(), data.seqno(),
+        original_egress, selected_egress,
+        original_level, selected_level, _id, eventlist().now());
+    _nmrc_diag_fastcnp_generated++;
+    receivePacket(*fast_cnp);
+    return true;
+}
+
+uint32_t FatTreeSwitch::nmrc_maybe_reroute(
+        Packet& pkt, vector<FibEntry*>* available_hops,
+        uint32_t original_choice) {
+    if (!nmrc_is_source_leaf_data(pkt, available_hops) ||
+        original_choice >= available_hops->size())
+        return original_choice;
+
+    _nmrc_diag_route_checks++;
+    uint64_t flow_key = ((uint64_t)pkt.flow_id()) << 32;
+    RocePacket& data = (RocePacket&)pkt;
+    _nmrc_diag_observed_flow_evs.insert(flow_key | data.mrc_ev());
+    _nmrc_diag_observed_flow_paths.insert(flow_key | original_choice);
+    vector<uint8_t> levels(available_hops->size(), STOR_LEVEL_AVOID);
+    vector<bool> available(available_hops->size(), false);
+    for (uint32_t i = 0; i < available_hops->size(); i++) {
+        available[i] = sglb_entry_available((*available_hops)[i]);
+        const SglbQualitySnapshot& snapshot =
+            sglb_quality_snapshot((*available_hops)[i], pkt.dst(), 1);
+        levels[i] = snapshot.quality;
+        if (_sglb_score_mode == SGLB_SCORE_NMRC_QUANTIZED_TOPK &&
+            _sglb_nmrc_levels == 8)
+            levels[i] /= 2;
+        if (levels[i] > STOR_LEVEL_AVOID)
+            levels[i] = STOR_LEVEL_AVOID;
+    }
+
+    uint32_t selection_value = freeBSDHash(
+        pkt.flow_id(), data.mrc_ev(),
+        (uint32_t)data.seqno() ^ _hash_salt);
+    NmrcRerouteDecision decision = nmrc_select_better_path(
+        original_choice, levels, available, _nmrc_reroute_policy,
+        _sglb_min_choices, selection_value);
+    uint32_t better_bucket = std::min(decision.better_count, 32U);
+    _nmrc_diag_better_count[better_bucket]++;
+    if (!decision.reroute) {
+        if (decision.better_count > 0)
+            _nmrc_diag_threshold_blocked++;
+        return original_choice;
+    }
+
+    if (_nmrc_fastcnp_enabled &&
+        !nmrc_inject_fastcnp(data, original_choice,
+                             decision.selected_index,
+                             decision.original_level,
+                             decision.selected_level)) {
+        // PATH_REROUTE FastCNP is the endpoint's only indication that its EV
+        // was overridden.  With signalling enabled, do not create an
+        // unobservable reroute when the reverse host route is unavailable.
+        return original_choice;
+    }
+
+    _nmrc_diag_reroutes++;
+    if (decision.original_level <= STOR_LEVEL_AVOID &&
+        decision.selected_level <= STOR_LEVEL_AVOID) {
+        _nmrc_diag_level_transitions[decision.original_level]
+                                    [decision.selected_level]++;
+    }
+    return decision.selected_index;
+}
+
+uint32_t FatTreeSwitch::sglb_best_score(uint32_t dst, uint32_t depth) {
     vector<FibEntry*> *available_hops = _fib->getRoutes(dst);
     if (!available_hops || available_hops->empty())
         return 0;
 
     double best = std::numeric_limits<double>::max();
     for (uint32_t i = 0; i < available_hops->size(); i++) {
-        double score = glb_score((*available_hops)[i], dst, depth);
-        if (score < best)
-            best = score;
+        const SglbQualitySnapshot& snapshot =
+            sglb_quality_snapshot((*available_hops)[i], dst, depth);
+        if (snapshot.score < best)
+            best = snapshot.score;
     }
     return best == std::numeric_limits<double>::max() ? 0 : (uint32_t)best;
 }
 
-uint32_t FatTreeSwitch::glb_route(vector<FibEntry*>* ecmp_set, uint32_t dst) {
+uint32_t FatTreeSwitch::sglb_route(vector<FibEntry*>* ecmp_set, uint32_t dst) {
     vector<uint8_t> qualities(ecmp_set->size(), 255);
+    vector<double> scores(ecmp_set->size(), 0.0);
     vector<bool> available(ecmp_set->size(), false);
     uint8_t best_quality = 255;
+    double min_score = std::numeric_limits<double>::max();
+    double max_score = 0.0;
+    uint32_t available_count = 0;
 
     for (uint32_t i = 0; i < ecmp_set->size(); i++) {
-        available[i] = glb_entry_available((*ecmp_set)[i]);
+        available[i] = sglb_entry_available((*ecmp_set)[i]);
         if (!available[i])
             continue;
-        qualities[i] = glb_quality(glb_score((*ecmp_set)[i], dst, 1));
+        const SglbQualitySnapshot& snapshot =
+            sglb_quality_snapshot((*ecmp_set)[i], dst, 1);
+        qualities[i] = snapshot.quality;
+        scores[i] = snapshot.score;
+        uint8_t diagnostic_level = snapshot.quality;
+        if (_sglb_score_mode == SGLB_SCORE_NMRC_QUANTIZED_TOPK &&
+            _sglb_nmrc_levels == 8) {
+            diagnostic_level /= 2;
+        }
+        if (diagnostic_level <= STOR_LEVEL_AVOID)
+            _sglb_diag_observed_levels[diagnostic_level]++;
+        available_count++;
+        if (snapshot.score < min_score)
+            min_score = snapshot.score;
+        if (snapshot.score > max_score)
+            max_score = snapshot.score;
         if (qualities[i] < best_quality)
             best_quality = qualities[i];
     }
 
+    uint32_t distinct_quality_count = 0;
+    uint32_t best_quality_count = 0;
+    bool seen_quality[256] = {false};
+    for (uint32_t i = 0; i < ecmp_set->size(); i++) {
+        if (!available[i])
+            continue;
+        if (!seen_quality[qualities[i]]) {
+            seen_quality[qualities[i]] = true;
+            distinct_quality_count++;
+        }
+        if (qualities[i] == best_quality)
+            best_quality_count++;
+    }
+
     vector<uint32_t> best_choices;
-    uint32_t min_choices = _glb_min_choices ? _glb_min_choices : 1;
-    uint32_t levels = _glb_quality_levels ? _glb_quality_levels : (_glb_max_quality + 1);
-    for (uint32_t q = best_quality; q < levels && best_choices.size() < min_choices; q++) {
+    uint32_t min_choices = _sglb_min_choices ? _sglb_min_choices : 1;
+    uint32_t levels = _sglb_score_mode == SGLB_SCORE_LEGACY ?
+        (_sglb_quality_levels ? _sglb_quality_levels :
+         (_sglb_max_quality + 1)) : _sglb_nmrc_levels;
+    for (uint32_t q = best_quality;
+         q < levels && best_choices.size() < min_choices; q++) {
         for (uint32_t i = 0; i < ecmp_set->size(); i++) {
             if (available[i] && qualities[i] == q)
                 best_choices.push_back(i);
@@ -690,7 +1494,28 @@ uint32_t FatTreeSwitch::glb_route(vector<FibEntry*>* ecmp_set, uint32_t dst) {
 
     if (best_choices.empty())
         return random() % ecmp_set->size();
-    return best_choices[random() % best_choices.size()];
+    uint32_t selected = best_choices[random() % best_choices.size()];
+    _sglb_diag_route_calls++;
+    _sglb_diag_available_choices += available_count;
+    _sglb_diag_candidate_choices += best_choices.size();
+    _sglb_diag_best_quality_choices += best_quality_count;
+    _sglb_diag_distinct_qualities += distinct_quality_count;
+    if (distinct_quality_count == 1)
+        _sglb_diag_all_same_quality_calls++;
+    if (distinct_quality_count == 1 && best_quality == 0)
+        _sglb_diag_all_zero_quality_calls++;
+    if (qualities[selected] > best_quality)
+        _sglb_diag_selected_nonbest_quality++;
+    uint8_t selected_diagnostic_level = qualities[selected];
+    if (_sglb_score_mode == SGLB_SCORE_NMRC_QUANTIZED_TOPK &&
+        _sglb_nmrc_levels == 8) {
+        selected_diagnostic_level /= 2;
+    }
+    if (selected_diagnostic_level <= STOR_LEVEL_AVOID)
+        _sglb_diag_selected_levels[selected_diagnostic_level]++;
+    if (min_score != std::numeric_limits<double>::max())
+        _sglb_diag_score_spread_sum += max_score - min_score;
+    return selected;
 }
 
 uint32_t FatTreeSwitch::drill_route(vector<FibEntry*>* ecmp_set, uint32_t dst) {
@@ -753,50 +1578,850 @@ uint32_t FatTreeSwitch::pathid_ecmp_choice(Packet& pkt, uint32_t hop_count, pack
     return pathid % hop_count;
 }
 
-void FatTreeSwitch::maybe_update_nmrc_feedback(Packet& pkt) {
-    if (_type != TOR || pkt.type() != ROCE)
-        return;
+BaseQueue* FatTreeSwitch::netaware_local_queue_for_ev(uint32_t dst, uint32_t ev) {
+    vector<FibEntry*>* hops = _fib->getRoutes(dst);
+    if (!hops || hops->empty())
+        return NULL;
 
-    RocePacket* roce = dynamic_cast<RocePacket*>(&pkt);
-    if (!roce || roce->src() == UINT32_MAX)
-        return;
+    FibEntry* entry = hops->at(ev % hops->size());
+    if (!entry)
+        return NULL;
 
-    uint32_t src_tor = _ft->HOST_POD_SWITCH(roce->src());
-    if (src_tor == _id)
-        return;
+    Route* route = entry->getEgressPort();
+    if (!route || route->size() == 0)
+        return NULL;
 
-    NmrcState& state = _nmrc_states[src_tor];
-    uint32_t path_count = _nmrc_path_count ? _nmrc_path_count : 1;
-    if (state.bitmap.size() != path_count) {
-        state.bitmap.assign(path_count, 1);
-        state.packets = 0;
+    return dynamic_cast<BaseQueue*>(route->at(0));
+}
+
+BaseQueue* FatTreeSwitch::netaware_trace_spine_queue_for_ev(uint32_t dst,
+                                                        uint32_t ev) {
+    vector<FibEntry*>* hops = _fib->getRoutes(dst);
+    if (!hops || hops->empty())
+        return NULL;
+
+    FibEntry* entry = hops->at(ev % hops->size());
+    if (!entry)
+        return NULL;
+
+    Route* route = entry->getEgressPort();
+    if (!route || route->size() <= 2)
+        return NULL;
+
+    FatTreeSwitch* spine = dynamic_cast<FatTreeSwitch*>(route->at(2));
+    if (!spine)
+        return NULL;
+
+    vector<FibEntry*>* spine_hops = spine->_fib->getRoutes(dst);
+    if (!spine_hops || spine_hops->empty())
+        return NULL;
+
+    uint32_t tor_choices = _ft->radix_up(TOR_TIER);
+    if (tor_choices == 0)
+        tor_choices = 1;
+    uint32_t spine_choice = (ev / tor_choices) % spine_hops->size();
+    FibEntry* spine_entry = spine_hops->at(spine_choice);
+    if (!spine_entry)
+        return NULL;
+
+    Route* spine_route = spine_entry->getEgressPort();
+    if (!spine_route || spine_route->size() == 0)
+        return NULL;
+
+    return dynamic_cast<BaseQueue*>(spine_route->at(0));
+}
+
+FatTreeSwitch::NetawarePortSnapshot
+FatTreeSwitch::netaware_read_port_snapshot(BaseQueue* q) {
+    NetawarePortSnapshot snapshot;
+    if (!q)
+        return snapshot;
+
+    snapshot.queue_fraction = sglb_queue_fraction(q);
+    snapshot.utilization_fraction =
+        (double)sglb_utilization_percent(q) / 100.0;
+    snapshot.bitrate = q->bitrate();
+    LosslessOutputQueue* lq = dynamic_cast<LosslessOutputQueue*>(q);
+    snapshot.paused = lq && lq->is_paused();
+    snapshot.last_update = eventlist().now();
+    snapshot.valid = true;
+    return snapshot;
+}
+
+FatTreeSwitch::NetawarePortSnapshot
+FatTreeSwitch::netaware_local_snapshot(BaseQueue* q) {
+    if (!q)
+        return NetawarePortSnapshot();
+
+    NetawarePortSnapshot& cached = _netaware_local_state[q];
+    simtime_picosec now = eventlist().now();
+    if (netaware_snapshot_refresh_due(cached, now,
+                                  _netaware_state_update_interval))
+        cached = netaware_read_port_snapshot(q);
+    return cached;
+}
+
+FatTreeSwitch::NetawareExportState
+FatTreeSwitch::netaware_compute_export_state(uint32_t dst) {
+    NetawareExportState state;
+    vector<FibEntry*>* hops = _fib->getRoutes(dst);
+    if (!hops || hops->empty())
+        return state;
+
+    state.ports.reserve(hops->size());
+    for (size_t i = 0; i < hops->size(); i++) {
+        BaseQueue* q = NULL;
+        FibEntry* entry = hops->at(i);
+        if (entry) {
+            Route* route = entry->getEgressPort();
+            if (route && route->size() > 0)
+                q = dynamic_cast<BaseQueue*>(route->at(0));
+        }
+        state.ports.push_back(netaware_read_port_snapshot(q));
+    }
+    state.last_update = eventlist().now();
+    state.valid = true;
+    return state;
+}
+
+void FatTreeSwitch::netaware_maybe_refresh_export(uint32_t dst) {
+    simtime_picosec now = eventlist().now();
+    NetawareExportState& cached = _netaware_exported_state[dst];
+    bool due = !cached.valid || _netaware_remote_update_interval == 0 ||
+               now < cached.last_update ||
+               now - cached.last_update >= _netaware_remote_update_interval;
+    if (due)
+        cached = netaware_compute_export_state(dst);
+    netaware_schedule_periodic_export();
+}
+
+void FatTreeSwitch::netaware_schedule_periodic_export() {
+    if (!_netaware_enabled || _netaware_remote_update_interval == 0 ||
+        _netaware_export_timer_pending || _netaware_exported_state.empty()) {
+        return;
     }
 
-    uint32_t path = pkt.pathid() % path_count;
-    bool ecn = (pkt.flags() & ECN_CE) != 0;
-    state.packets++;
-    if (ecn)
-        state.bitmap[path] = 0;
-    else if (!_nmrc_feedback_bad_only)
-        state.bitmap[path] = _nmrc_feedback_observed_values ? 2 : 1;
+    if (!_netaware_export_timer)
+        _netaware_export_timer = new NetawareExportTimer(eventlist(), this);
+    eventlist().sourceIsPendingRel(*_netaware_export_timer,
+                                  _netaware_remote_update_interval);
+    _netaware_export_timer_pending = true;
+}
+
+void FatTreeSwitch::netaware_periodic_refresh_exports() {
+    if (!_netaware_enabled || _netaware_remote_update_interval == 0 ||
+        _netaware_exported_state.empty()) {
+        return;
+    }
+
+    vector<uint32_t> destinations;
+    destinations.reserve(_netaware_exported_state.size());
+    for (unordered_map<uint32_t,NetawareExportState>::const_iterator it =
+             _netaware_exported_state.begin(); it != _netaware_exported_state.end();
+         ++it) {
+        destinations.push_back(it->first);
+    }
+    for (size_t i = 0; i < destinations.size(); i++)
+        _netaware_exported_state[destinations[i]] =
+            netaware_compute_export_state(destinations[i]);
+    netaware_schedule_periodic_export();
+}
+
+const FatTreeSwitch::NetawarePortSnapshot*
+FatTreeSwitch::netaware_neighbor_snapshot(uint32_t dst, uint32_t ev) {
+    vector<FibEntry*>* hops = _fib->getRoutes(dst);
+    if (!hops || hops->empty())
+        return NULL;
+
+    FibEntry* entry = hops->at(ev % hops->size());
+    if (!entry)
+        return NULL;
+    Route* route = entry->getEgressPort();
+    if (!route || route->size() <= 2)
+        return NULL;
+    FatTreeSwitch* spine = dynamic_cast<FatTreeSwitch*>(route->at(2));
+    if (!spine)
+        return NULL;
+
+    spine->netaware_maybe_refresh_export(dst);
+    unordered_map<uint32_t,NetawareExportState>::const_iterator it =
+        spine->_netaware_exported_state.find(dst);
+    if (it == spine->_netaware_exported_state.end() || !it->second.valid ||
+        it->second.ports.empty()) {
+        return NULL;
+    }
+
+    uint32_t tor_choices = _ft ? _ft->radix_up(TOR_TIER) : 1;
+    if (tor_choices == 0)
+        tor_choices = 1;
+    uint32_t spine_choice =
+        (ev / tor_choices) % (uint32_t)it->second.ports.size();
+    const NetawarePortSnapshot& snapshot = it->second.ports[spine_choice];
+    return snapshot.valid ? &snapshot : NULL;
+}
+
+uint8_t FatTreeSwitch::netaware_port_level(const NetawarePortSnapshot& snapshot,
+                                       linkspeed_bps normal_bitrate,
+                                       bool grade_queues) {
+    if (!snapshot.valid)
+        return STOR_LEVEL_GOOD;
+    (void)normal_bitrate;
+
+    if (snapshot.paused)
+        return STOR_LEVEL_AVOID;
+
+    double queue = snapshot.queue_fraction;
+
+    if (!grade_queues)
+        return STOR_LEVEL_GOOD;
+
+    double avoid = _netaware_queue_threshold_fraction;
+    if (avoid < 0.0)
+        avoid = 0.0;
+    if (avoid > 1.0)
+        avoid = 1.0;
+
+    if (queue >= avoid)
+        return STOR_LEVEL_AVOID;
+
+    if (queue >= _netaware_bad_queue_fraction)
+        return STOR_LEVEL_BAD;
+    if (queue >= _netaware_degraded_queue_fraction)
+        return STOR_LEVEL_DEGRADED;
+
+    double util = snapshot.utilization_fraction;
+    if (queue >= _netaware_util_queue_floor_fraction &&
+        util >= _netaware_degraded_utilization_fraction)
+        return STOR_LEVEL_DEGRADED;
+
+    return STOR_LEVEL_GOOD;
+}
+
+uint8_t FatTreeSwitch::netaware_gated_port_level(const NetawarePortSnapshot& snapshot,
+                                             linkspeed_bps normal_bitrate,
+                                             bool grade_queues) {
+    if (!snapshot.valid)
+        return STOR_LEVEL_GOOD;
+
+    double rate_ratio = 1.0;
+    if (normal_bitrate > 0)
+        rate_ratio = (double)snapshot.bitrate / (double)normal_bitrate;
+
+    return netaware_gated_level_from_inputs(
+        snapshot.paused, rate_ratio, snapshot.queue_fraction,
+        snapshot.utilization_fraction, grade_queues);
+}
+
+static const char* netaware_dominant_reason(double local_q_contribution,
+                                        double remote_q_contribution,
+                                        double local_util_contribution,
+                                        double remote_util_contribution) {
+    const char* reason = "local_q";
+    double best = local_q_contribution;
+    if (remote_q_contribution > best) {
+        best = remote_q_contribution;
+        reason = "remote_q";
+    }
+    if (local_util_contribution > best) {
+        best = local_util_contribution;
+        reason = "local_util";
+    }
+    if (remote_util_contribution > best) {
+        reason = "remote_util";
+    }
+    return reason;
+}
+
+FatTreeSwitch::NetawarePathScore FatTreeSwitch::netaware_path_score(
+        const NetawarePortSnapshot& local,
+        const NetawarePortSnapshot& remote) {
+    NetawarePathScore score;
+    if (!local.valid || !remote.valid) {
+        score.reason = "missing_queue";
+        return score;
+    }
+
+    score.local_q_pressure =
+        netaware_pressure_from_range(local.queue_fraction,
+                                 _netaware_score_q_min,
+                                 _netaware_score_q_max);
+    score.remote_q_pressure =
+        netaware_pressure_from_range(remote.queue_fraction,
+                                 _netaware_score_q_min,
+                                 _netaware_score_q_max);
+    score.local_util_pressure =
+        netaware_pressure_from_range(local.utilization_fraction,
+                                 _netaware_score_util_low,
+                                 _netaware_score_util_high);
+    score.remote_util_pressure =
+        netaware_pressure_from_range(remote.utilization_fraction,
+                                 _netaware_score_util_low,
+                                 _netaware_score_util_high);
+    score.path_score =
+        netaware_couple_hop_scores(score.local_q_pressure,
+                               score.remote_q_pressure,
+                               score.local_util_pressure,
+                               score.remote_util_pressure);
+    score.level = netaware_level_from_score(score.path_score);
+
+    if (score.level == STOR_LEVEL_GOOD) {
+        score.reason = "good";
+    } else {
+        double local_q_contribution =
+            _netaware_score_weight_local_q * score.local_q_pressure;
+        double remote_q_contribution =
+            _netaware_score_weight_remote_q * score.remote_q_pressure;
+        double local_util_contribution =
+            _netaware_score_weight_local_util * score.local_util_pressure;
+        double remote_util_contribution =
+            _netaware_score_weight_remote_util * score.remote_util_pressure;
+        score.reason = netaware_dominant_reason(local_q_contribution,
+                                            remote_q_contribution,
+                                            local_util_contribution,
+                                            remote_util_contribution);
+    }
+
+    return score;
+}
+
+StorFeedbackLevels FatTreeSwitch::netaware_compute_levels(uint32_t dst,
+                                                       uint32_t path_count) {
+    if (path_count == 0)
+        path_count = 1;
+
+    vector<NetawarePortSnapshot> local(path_count);
+    vector<NetawarePortSnapshot> remote(path_count);
+    for (uint32_t ev = 0; ev < path_count; ev++) {
+        local[ev] = netaware_local_snapshot(netaware_local_queue_for_ev(dst, ev));
+        const NetawarePortSnapshot* neighbor = netaware_neighbor_snapshot(dst, ev);
+        if (neighbor)
+            remote[ev] = *neighbor;
+    }
+
+    if (_netaware_score_mode == NETAWARE_SCORE_SGLB_QUANTIZED) {
+        StorFeedbackLevels levels(path_count, STOR_LEVEL_GOOD);
+        for (uint32_t ev = 0; ev < path_count; ev++) {
+            NetawarePathScore score = netaware_path_score(local[ev], remote[ev]);
+            levels[ev] = score.level;
+        }
+        return levels;
+    }
+
+    linkspeed_bps normal_bitrate = 0;
+    for (uint32_t ev = 0; ev < path_count; ev++) {
+        if (local[ev].valid && local[ev].bitrate > normal_bitrate)
+            normal_bitrate = local[ev].bitrate;
+        if (remote[ev].valid && remote[ev].bitrate > normal_bitrate)
+            normal_bitrate = remote[ev].bitrate;
+    }
+
+    bool grade_queues = false;
+    if (normal_bitrate > 0) {
+        for (uint32_t ev = 0; ev < path_count; ev++) {
+            if ((local[ev].valid &&
+                 (double)local[ev].bitrate / (double)normal_bitrate <
+                     _netaware_slow_link_fraction) ||
+                (remote[ev].valid &&
+                 (double)remote[ev].bitrate / (double)normal_bitrate <
+                     _netaware_slow_link_fraction)) {
+                grade_queues = true;
+                break;
+            }
+        }
+    }
+
+    StorFeedbackLevels levels(path_count, STOR_LEVEL_GOOD);
+    for (uint32_t ev = 0; ev < path_count; ev++) {
+        uint8_t local_level = STOR_LEVEL_GOOD;
+        uint8_t spine_level = STOR_LEVEL_GOOD;
+        if (_netaware_score_mode == NETAWARE_SCORE_GATED) {
+            local_level = netaware_gated_port_level(local[ev], normal_bitrate,
+                                                grade_queues);
+            spine_level = netaware_gated_port_level(remote[ev], normal_bitrate,
+                                                grade_queues);
+        } else {
+            local_level = netaware_port_level(local[ev], normal_bitrate,
+                                          grade_queues);
+            spine_level = netaware_port_level(remote[ev], normal_bitrate,
+                                          grade_queues);
+        }
+        levels[ev] = local_level > spine_level ? local_level : spine_level;
+    }
+    return levels;
+}
+
+void FatTreeSwitch::netaware_refresh_levels(NetawareState& state, uint32_t dst,
+                                         uint32_t path_count,
+                                         simtime_picosec now) {
+    if (path_count == 0)
+        path_count = 1;
+
+    bool size_changed = state.levels.size() != path_count;
+    bool stale = !state.levels_valid ||
+                 now - state.last_level_update >= _netaware_state_update_interval;
+    if (!size_changed && !stale)
+        return;
+
+    state.levels = netaware_compute_levels(dst, path_count);
+    state.levels_valid = true;
+    state.last_level_update = now;
+}
+
+static uint32_t netaware_zero_bits(const StorFeedbackLevels& levels) {
+    uint32_t zero_bits = 0;
+    for (size_t i = 0; i < levels.size(); i++) {
+        if (levels[i] >= STOR_LEVEL_BAD)
+            zero_bits++;
+    }
+    return zero_bits;
+}
+
+static bool netaware_all_good(const StorFeedbackLevels& levels) {
+    for (size_t i = 0; i < levels.size(); i++) {
+        if (levels[i] != STOR_LEVEL_GOOD)
+            return false;
+    }
+    return true;
+}
+
+static uint64_t netaware_trace_queue_ecn(BaseQueue* q) {
+    if (!q)
+        return 0;
+
+    LosslessOutputQueue* lossless_output = dynamic_cast<LosslessOutputQueue*>(q);
+    if (lossless_output)
+        return lossless_output->ecn_mark_count();
+
+    CompositeQueue* composite_queue = dynamic_cast<CompositeQueue*>(q);
+    if (composite_queue)
+        return composite_queue->ecn_mark_count();
+
+    ECNQueue* ecn_queue = dynamic_cast<ECNQueue*>(q);
+    if (ecn_queue)
+        return ecn_queue->ecn_mark_count();
+
+    return 0;
+}
+
+static uint64_t netaware_trace_queue_trims(BaseQueue* q) {
+    if (!q)
+        return 0;
+
+    CompositeQueue* composite_queue = dynamic_cast<CompositeQueue*>(q);
+    if (composite_queue)
+        return composite_queue->trim_count();
+
+    return 0;
+}
+
+static uint64_t netaware_trace_queue_drops(BaseQueue* q) {
+    if (!q)
+        return 0;
+
+    CompositeQueue* composite_queue = dynamic_cast<CompositeQueue*>(q);
+    if (composite_queue)
+        return composite_queue->drop_count();
+
+    ECNQueue* ecn_queue = dynamic_cast<ECNQueue*>(q);
+    if (ecn_queue)
+        return ecn_queue->drop_count();
+
+    Queue* queue = dynamic_cast<Queue*>(q);
+    if (queue)
+        return queue->num_drops();
+
+    return 0;
+}
+
+bool FatTreeSwitch::netaware_trace_path_state(uint32_t dst,
+                                          uint32_t ev,
+                                          uint32_t path_count,
+                                          NetawarePathTraceSample& sample) {
+    sample = NetawarePathTraceSample();
+    if (!_ft)
+        return false;
+
+    BaseQueue* local_q = netaware_local_queue_for_ev(dst, ev);
+    BaseQueue* spine_q = netaware_trace_spine_queue_for_ev(dst, ev);
+    if (!local_q || !spine_q) {
+        sample.link_down = true;
+        return false;
+    }
+
+    vector<FibEntry*>* hops = _fib->getRoutes(dst);
+    if (hops && !hops->empty()) {
+        FibEntry* entry = hops->at(ev % hops->size());
+        if (entry) {
+            Route* route = entry->getEgressPort();
+            if (route && route->size() > 2) {
+                FatTreeSwitch* spine = dynamic_cast<FatTreeSwitch*>(route->at(2));
+                if (spine)
+                    sample.spine_id = spine->getID();
+            }
+        }
+    }
+
+    sample.q_leaf_to_spine = local_q->queuesize();
+    sample.q_spine_to_dst_leaf = spine_q->queuesize();
+    sample.q_leaf_to_spine_max = local_q->maxsize();
+    sample.q_spine_to_dst_leaf_max = spine_q->maxsize();
+    sample.util_leaf_to_spine =
+        (double)local_q->peek_average_utilization() / 100.0;
+    sample.util_spine_to_dst_leaf =
+        (double)spine_q->peek_average_utilization() / 100.0;
+    sample.link_rate_leaf_to_spine = local_q->bitrate();
+    sample.link_rate_spine_to_dst_leaf = spine_q->bitrate();
+    sample.link_down = false;
+    sample.ecn_marks_on_path =
+        netaware_trace_queue_ecn(local_q) + netaware_trace_queue_ecn(spine_q);
+    sample.trimmed_packets_on_path =
+        netaware_trace_queue_trims(local_q) + netaware_trace_queue_trims(spine_q);
+    sample.dropped_packets_on_path =
+        netaware_trace_queue_drops(local_q) + netaware_trace_queue_drops(spine_q);
+    sample.bytes_sent_on_path =
+        local_q->bytes_sent_count() + spine_q->bytes_sent_count();
+
+    // Build trace-only snapshots without refreshing NetAware's live local or
+    // remote caches. A periodic diagnostic must not change feedback cadence.
+    const auto trace_snapshot = [this](BaseQueue* q) {
+        NetawarePortSnapshot snapshot;
+        if (!q)
+            return snapshot;
+        snapshot.queue_fraction = sglb_queue_fraction(q);
+        snapshot.utilization_fraction =
+            (double)q->peek_average_utilization() / 100.0;
+        snapshot.bitrate = q->bitrate();
+        LosslessOutputQueue* lossless =
+            dynamic_cast<LosslessOutputQueue*>(q);
+        snapshot.paused = lossless && lossless->is_paused();
+        snapshot.last_update = eventlist().now();
+        snapshot.valid = true;
+        return snapshot;
+    };
+
+    NetawarePortSnapshot local = trace_snapshot(local_q);
+    NetawarePortSnapshot remote = trace_snapshot(spine_q);
+    NetawarePathScore score = netaware_path_score(local, remote);
+    sample.local_q_pressure = score.local_q_pressure;
+    sample.remote_q_pressure = score.remote_q_pressure;
+    sample.local_util_pressure = score.local_util_pressure;
+    sample.remote_util_pressure = score.remote_util_pressure;
+    sample.path_score = score.path_score;
+    sample.netaware_level_reason = score.reason;
+
+    if (_netaware_score_mode == NETAWARE_SCORE_SGLB_QUANTIZED) {
+        sample.path_grade = score.level;
+    } else {
+        linkspeed_bps normal_bitrate = 0;
+        vector<NetawarePortSnapshot> trace_local(path_count);
+        vector<NetawarePortSnapshot> trace_remote(path_count);
+        for (uint32_t path = 0; path < path_count; path++) {
+            trace_local[path] = trace_snapshot(
+                netaware_local_queue_for_ev(dst, path));
+            trace_remote[path] = trace_snapshot(
+                netaware_trace_spine_queue_for_ev(dst, path));
+            if (trace_local[path].valid &&
+                trace_local[path].bitrate > normal_bitrate)
+                normal_bitrate = trace_local[path].bitrate;
+            if (trace_remote[path].valid &&
+                trace_remote[path].bitrate > normal_bitrate)
+                normal_bitrate = trace_remote[path].bitrate;
+        }
+
+        bool grade_queues = false;
+        if (normal_bitrate > 0) {
+            for (uint32_t path = 0; path < path_count; path++) {
+                if ((trace_local[path].valid &&
+                     (double)trace_local[path].bitrate /
+                         (double)normal_bitrate <
+                             _netaware_slow_link_fraction) ||
+                    (trace_remote[path].valid &&
+                     (double)trace_remote[path].bitrate /
+                         (double)normal_bitrate <
+                             _netaware_slow_link_fraction)) {
+                    grade_queues = true;
+                    break;
+                }
+            }
+        }
+
+        uint8_t local_level = STOR_LEVEL_GOOD;
+        uint8_t remote_level = STOR_LEVEL_GOOD;
+        if (_netaware_score_mode == NETAWARE_SCORE_GATED) {
+            local_level = netaware_gated_port_level(
+                trace_local[ev], normal_bitrate, grade_queues);
+            remote_level = netaware_gated_port_level(
+                trace_remote[ev], normal_bitrate, grade_queues);
+        } else {
+            local_level = netaware_port_level(
+                trace_local[ev], normal_bitrate, grade_queues);
+            remote_level = netaware_port_level(
+                trace_remote[ev], normal_bitrate, grade_queues);
+        }
+        sample.path_grade = std::max(local_level, remote_level);
+        sample.netaware_level_reason = "worst_hop";
+    }
+
+    return true;
+}
+
+void FatTreeSwitch::maybe_update_netaware_feedback(Packet& pkt) {
+    if (!_netaware_enabled || _type != TOR || !_ft || pkt.type() != ROCEACK)
+        return;
+    if (pkt.dst() == UINT32_MAX || _ft->HOST_POD_SWITCH(pkt.dst()) != _id)
+        return;
+
+    RoceAck* ack = dynamic_cast<RoceAck*>(&pkt);
+    if (!ack || ack->netaware_peer() == UINT32_MAX)
+        return;
+
+    uint32_t path_count = _netaware_path_count ? _netaware_path_count : 1;
+    uint32_t peer_key = _ft->HOST_POD_SWITCH(ack->netaware_peer());
+    NetawareState& state = _netaware_states[peer_key];
+    if (state.levels.size() != path_count) {
+        state.levels.assign(path_count, STOR_LEVEL_GOOD);
+        state.levels_valid = false;
+        state.packets = 0;
+        state.last_feedback = 0;
+    }
 
     simtime_picosec now = eventlist().now();
-    bool packet_trigger = state.packets >= _nmrc_feedback_pkts;
-    bool time_trigger = state.packets > 0 &&
-                        now - state.last_feedback >= _nmrc_feedback_max_interval;
+    netaware_refresh_levels(state, ack->netaware_peer(), path_count, now);
+    uint32_t zero_bits = netaware_zero_bits(state.levels);
+    state.samples++;
+    state.sample_zero_bits += zero_bits;
+    state.packets++;
 
-    bool min_elapsed = now - state.last_feedback >= _nmrc_feedback_min_interval;
-    if ((packet_trigger && min_elapsed) || time_trigger) {
-        roce->set_nmrc_feedback(state.bitmap);
-        state.bitmap.assign(path_count, 1);
+    uint32_t feedback_pkts = _netaware_feedback_pkts ? _netaware_feedback_pkts : 1;
+    bool packet_trigger = state.packets >= feedback_pkts;
+    bool time_trigger = state.packets > 0 &&
+                        now - state.last_feedback >= _netaware_feedback_max_interval;
+    bool min_elapsed = now - state.last_feedback >= _netaware_feedback_min_interval;
+
+    bool packet_ready = packet_trigger && min_elapsed;
+    bool time_ready = time_trigger && !packet_ready;
+    if (packet_ready || time_ready) {
+        ack->set_netaware_feedback(state.levels);
+        state.feedbacks++;
+        if (packet_ready)
+            state.packet_feedbacks++;
+        else
+            state.time_feedbacks++;
+        state.feedback_packets_sum += state.packets;
+        state.feedback_zero_bits += zero_bits;
+        if (netaware_all_good(state.levels))
+            state.all_good_feedbacks++;
         state.packets = 0;
         state.last_feedback = now;
     }
 }
 
+StorFeedbackLevels FatTreeSwitch::stor_feedback_after_signal(uint32_t src_host,
+                                                             uint32_t peer_host,
+                                                             uint32_t pathid,
+                                                             uint32_t path_count,
+                                                             StorSignal signal) {
+    (void)src_host;
+    if (path_count == 0)
+        path_count = 1;
+
+    uint32_t peer_key = peer_host;
+    if (_ft && peer_host != UINT32_MAX)
+        peer_key = _ft->HOST_POD_SWITCH(peer_host);
+
+    StorState& state = _stor_states[peer_key];
+    if (state.evs.size() != path_count) {
+        state.evs.assign(path_count, StorEvState());
+        if (_stor_score_profile == STOR_SCORE_PROFILE_SIMPLE) {
+            for (uint32_t i = 0; i < state.evs.size(); i++) {
+                state.evs[i].score = _stor_simple_max_score;
+                state.evs[i].min_score_seen = _stor_simple_max_score;
+            }
+        }
+        state.packets = 0;
+        state.last_feedback = 0;
+        state.signals_seen = 0;
+        state.dirty = false;
+    }
+
+    simtime_picosec now = eventlist().now();
+    if (_stor_score_profile != STOR_SCORE_PROFILE_BINARY &&
+        _stor_aging_profile != STOR_AGING_PACKET)
+        stor_apply_time_aging(state, now);
+
+    uint32_t ev = pathid % path_count;
+    StorEvState& ev_state = state.evs[ev];
+    uint8_t old_level = stor_level_from_score(ev_state.score);
+    stor_apply_signal(ev_state, signal);
+    ev_state.last_update = now;
+    if (signal == STOR_SIGNAL_CLEAN) {
+        ev_state.clean_signals++;
+        if (_stor_aging_profile == STOR_AGING_HYBRID &&
+            (old_level == STOR_LEVEL_AVOID || old_level == STOR_LEVEL_BAD)) {
+            ev_state.probe_clean_streak++;
+            if (ev_state.probe_clean_streak >= _stor_hybrid_probe_clean_promote) {
+                if (old_level == STOR_LEVEL_AVOID && ev_state.score < _stor_bad_threshold)
+                    ev_state.score = _stor_bad_threshold;
+                else if (old_level == STOR_LEVEL_BAD &&
+                         ev_state.score < _stor_degraded_threshold)
+                    ev_state.score = _stor_degraded_threshold;
+                ev_state.last_probe_packet = state.signals_seen;
+                ev_state.last_probe_time = now;
+                ev_state.probe_clean_streak = 0;
+            }
+        }
+    } else if (signal == STOR_SIGNAL_ECN) {
+        ev_state.ecn_signals++;
+        ev_state.last_bad_time = now;
+        ev_state.has_bad_time = true;
+        ev_state.probe_clean_streak = 0;
+    } else {
+        ev_state.trim_signals++;
+        ev_state.last_bad_time = now;
+        ev_state.has_bad_time = true;
+        ev_state.probe_clean_streak = 0;
+    }
+    if (ev_state.score < ev_state.min_score_seen)
+        ev_state.min_score_seen = ev_state.score;
+    stor_note_level_transition(ev_state, old_level);
+    state.signals_seen++;
+    state.packets++;
+    state.dirty = true;
+
+    uint32_t feedback_pkts = _stor_feedback_pkts ? _stor_feedback_pkts : 1;
+    bool packet_trigger = state.packets >= feedback_pkts;
+    bool trim_trigger = signal == STOR_SIGNAL_TRIM && _stor_feedback_on_trim &&
+                        _stor_score_profile != STOR_SCORE_PROFILE_BINARY;
+    bool time_trigger = state.dirty &&
+                        now - state.last_feedback >= _stor_feedback_max_interval;
+    bool min_elapsed = now - state.last_feedback >= _stor_feedback_min_interval;
+    bool trim_min_elapsed =
+        now - state.last_feedback >= _stor_trim_feedback_min_interval;
+
+    if (!((packet_trigger && min_elapsed) ||
+          (trim_trigger && trim_min_elapsed) ||
+          time_trigger))
+        return StorFeedbackLevels();
+
+    StorFeedbackLevels levels;
+    levels.reserve(path_count);
+    for (uint32_t i = 0; i < path_count; i++)
+        levels.push_back(stor_level_from_score(state.evs[i].score));
+    if (_stor_score_profile == STOR_SCORE_PROFILE_BINARY) {
+        for (uint32_t i = 0; i < path_count; i++) {
+            state.evs[i].score = 255;
+            state.evs[i].ecn_acc = 0;
+            state.evs[i].trim_acc = 0;
+        }
+    }
+    state.packets = 0;
+    state.last_feedback = now;
+    state.dirty = false;
+    return levels;
+}
+
+void FatTreeSwitch::collect_stor_diag(uint8_t& min_score,
+                                      uint64_t& avoid_entries,
+                                      uint64_t& avoid_exits,
+                                      uint64_t& clean_signals,
+                                      uint64_t& ecn_signals,
+                                      uint64_t& trim_signals) const {
+    for (auto const& peer : _stor_states) {
+        for (auto const& ev : peer.second.evs) {
+            if (ev.min_score_seen < min_score)
+                min_score = ev.min_score_seen;
+            avoid_entries += ev.avoid_entries;
+            avoid_exits += ev.avoid_exits;
+            clean_signals += ev.clean_signals;
+            ecn_signals += ev.ecn_signals;
+            trim_signals += ev.trim_signals;
+        }
+    }
+}
+
+void FatTreeSwitch::collect_netaware_diag(uint64_t& samples,
+                                      uint64_t& sample_zero_bits,
+                                      uint64_t& feedbacks,
+                                      uint64_t& packet_feedbacks,
+                                      uint64_t& time_feedbacks,
+                                      uint64_t& feedback_packets_sum,
+                                      uint64_t& feedback_zero_bits,
+                                      uint64_t& all_good_feedbacks) const {
+    for (auto const& peer : _netaware_states) {
+        samples += peer.second.samples;
+        sample_zero_bits += peer.second.sample_zero_bits;
+        feedbacks += peer.second.feedbacks;
+        packet_feedbacks += peer.second.packet_feedbacks;
+        time_feedbacks += peer.second.time_feedbacks;
+        feedback_packets_sum += peer.second.feedback_packets_sum;
+        feedback_zero_bits += peer.second.feedback_zero_bits;
+        all_good_feedbacks += peer.second.all_good_feedbacks;
+    }
+}
+
+const FatTreeSwitch::StorEvState* FatTreeSwitch::stor_state_for_test(
+        uint32_t peer_host, uint32_t pathid) const {
+    uint32_t peer_key = peer_host;
+    if (_ft && peer_host != UINT32_MAX)
+        peer_key = _ft->HOST_POD_SWITCH(peer_host);
+    auto it = _stor_states.find(peer_key);
+    if (it == _stor_states.end() || it->second.evs.empty())
+        return NULL;
+    return &it->second.evs[pathid % it->second.evs.size()];
+}
+
+void FatTreeSwitch::stor_apply_time_aging_for_test(uint32_t peer_host,
+                                                   simtime_picosec now) {
+    uint32_t peer_key = peer_host;
+    if (_ft && peer_host != UINT32_MAX)
+        peer_key = _ft->HOST_POD_SWITCH(peer_host);
+    auto it = _stor_states.find(peer_key);
+    if (it == _stor_states.end())
+        return;
+    stor_apply_time_aging(it->second, now);
+}
+
+void FatTreeSwitch::maybe_update_stor_feedback(Packet& pkt) {
+    if (!_stor_enabled || _type != TOR || !_ft)
+        return;
+    if (pkt.dst() == UINT32_MAX || _ft->HOST_POD_SWITCH(pkt.dst()) != _id)
+        return;
+
+    uint32_t path_count = _stor_path_count ? _stor_path_count : 1;
+
+    if (pkt.type() == ROCEACK) {
+        RoceAck* ack = dynamic_cast<RoceAck*>(&pkt);
+        if (!ack || ack->stor_peer() == UINT32_MAX)
+            return;
+        StorSignal signal = (ack->flags() & ECN_ECHO) ?
+            STOR_SIGNAL_ECN : STOR_SIGNAL_CLEAN;
+        StorFeedbackLevels levels =
+            stor_feedback_after_signal(pkt.dst(), ack->stor_peer(),
+                                       pkt.pathid(), path_count, signal);
+        if (!levels.empty())
+            ack->set_stor_feedback(levels);
+        return;
+    }
+
+    if (pkt.type() == ROCENACK) {
+        RoceNack* nack = dynamic_cast<RoceNack*>(&pkt);
+        if (!nack || nack->stor_peer() == UINT32_MAX ||
+            nack->reason() != RoceNack::TRIM) {
+            return;
+        }
+        StorFeedbackLevels levels =
+            stor_feedback_after_signal(pkt.dst(), nack->stor_peer(),
+                                       pkt.pathid(), path_count,
+                                       STOR_SIGNAL_TRIM);
+        if (!levels.empty())
+            nack->set_stor_feedback(levels);
+    }
+}
+
 Route* FatTreeSwitch::getNextHop(Packet& pkt, BaseQueue* ingress_port){
-    if (_strategy == GLB)
-        glb_maybe_refresh_export(pkt.dst());
+    if (_strategy == SGLB ||
+        (_nmrc_hybrid_enabled && pkt.type() == ROCE))
+        sglb_maybe_refresh_export(pkt.dst());
 
     vector<FibEntry*> * available_hops = _fib->getRoutes(pkt.dst());
 
@@ -809,6 +2434,8 @@ Route* FatTreeSwitch::getNextHop(Packet& pkt, BaseQueue* ingress_port){
                 abort();
             case ECMP:
                 ecmp_choice = pathid_ecmp_choice(pkt, available_hops->size(), (*available_hops)[0]->getDirection());
+                ecmp_choice = nmrc_maybe_reroute(
+                    pkt, available_hops, ecmp_choice);
                 break;
             case ADAPTIVE_ROUTING:
                 if (_ar_sticky==FatTreeSwitch::PER_PACKET){
@@ -870,8 +2497,8 @@ Route* FatTreeSwitch::getNextHop(Packet& pkt, BaseQueue* ingress_port){
                 else ecmp_choice = freeBSDHash(pkt.flow_id(),pkt.pathid(),_hash_salt) % available_hops->size();
                 
                 break;
-            case GLB:
-                ecmp_choice = glb_route(available_hops, pkt.dst());
+            case SGLB:
+                ecmp_choice = sglb_route(available_hops, pkt.dst());
                 break;
             case DRILL:
                 ecmp_choice = drill_route(available_hops, pkt.dst());
@@ -891,7 +2518,8 @@ Route* FatTreeSwitch::getNextHop(Packet& pkt, BaseQueue* ingress_port){
             HostFibEntry* fe = _fib->getHostRoute(pkt.dst(),pkt.flow_id());
             assert(fe);
             pkt.set_direction(DOWN);
-            maybe_update_nmrc_feedback(pkt);
+            maybe_update_netaware_feedback(pkt);
+            maybe_update_stor_feedback(pkt);
             return fe->getEgressPort();
         } else {
             //route packet up!

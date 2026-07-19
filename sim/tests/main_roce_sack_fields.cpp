@@ -140,6 +140,10 @@ static void test_128bit_sack_packet_preserves_high_word_coverage(EventList& even
 static void test_rxtpsn_suppresses_duplicate_sack_retransmission(EventList& eventlist) {
     RoceSrc::setSackBitmapBits(64);
     RoceSrc::setReceiveMode(RoceSrc::RX_SP_RETX_QUEUE);
+    // This case exercises the legacy RxtPSN duplicate-SACK queue directly.
+    // Exact-bounded recovery requires per-PSN attempt state populated by real
+    // sends and is covered by main_roce_exact_bounded_recovery.cpp.
+    RoceSrc::setTransportSemantics(RoceSrc::TRANSPORT_LEGACY);
     RoceSrc::setCongestionControl(RoceSrc::CC_NONE);
 
     DataCaptureSink data;

@@ -1,8 +1,13 @@
 // -*- c-basic-offset: 4; indent-tabs-mode: nil -*-
 #include "config.h"
 #include <sstream>
+#include <fstream>
 
+#include <cerrno>
+#include <cmath>
+#include <cstdlib>
 #include <iostream>
+#include <limits>
 #include <string.h>
 #include <math.h>
 #include <algorithm>
@@ -31,6 +36,8 @@
 
 #include <list>
 #include <set>
+#include <functional>
+#include <array>
 
 // Simulation params
 
@@ -55,6 +62,7 @@ EventList eventlist;
 
 struct QueueDiag {
     uint64_t lossless_overflows;
+    uint64_t lossless_ecn_marks;
     uint64_t lossy_drops;
     uint64_t lossy_ecn_marks;
     uint64_t composite_trims;
@@ -63,12 +71,111 @@ struct QueueDiag {
 
     QueueDiag()
         : lossless_overflows(0),
+          lossless_ecn_marks(0),
           lossy_drops(0),
           lossy_ecn_marks(0),
           composite_trims(0),
           composite_drops(0),
           composite_ecn_marks(0) {}
 };
+
+struct StorDiag {
+    uint8_t min_score;
+    uint64_t avoid_entries;
+    uint64_t avoid_exits;
+    uint64_t clean_signals;
+    uint64_t ecn_signals;
+    uint64_t trim_signals;
+
+    StorDiag()
+        : min_score(255), avoid_entries(0), avoid_exits(0),
+          clean_signals(0), ecn_signals(0), trim_signals(0) {}
+};
+
+struct NetawareDiag {
+    uint64_t samples;
+    uint64_t sample_zero_bits;
+    uint64_t feedbacks;
+    uint64_t packet_feedbacks;
+    uint64_t time_feedbacks;
+    uint64_t feedback_packets_sum;
+    uint64_t feedback_zero_bits;
+    uint64_t all_good_feedbacks;
+
+    NetawareDiag()
+        : samples(0), sample_zero_bits(0), feedbacks(0),
+          packet_feedbacks(0), time_feedbacks(0),
+          feedback_packets_sum(0), feedback_zero_bits(0),
+          all_good_feedbacks(0) {}
+};
+
+static string format_u32_vector(const vector<uint32_t>& values,
+                                size_t limit = 128) {
+    stringstream out;
+    size_t n = values.size() < limit ? values.size() : limit;
+    for (size_t i = 0; i < n; i++) {
+        if (i)
+            out << "/";
+        out << values[i];
+    }
+    return out.str();
+}
+
+static string format_u32_u64_hist(const map<uint32_t, uint64_t>& hist,
+                                  size_t limit = 0) {
+    if (hist.empty())
+        return "none";
+
+    stringstream out;
+    size_t emitted = 0;
+    for (map<uint32_t, uint64_t>::const_iterator it = hist.begin();
+         it != hist.end(); ++it) {
+        if (limit && emitted >= limit)
+            break;
+        if (emitted)
+            out << "/";
+        out << it->first << ":" << it->second;
+        emitted++;
+    }
+    return out.str();
+}
+
+static string format_nmrc_level_transitions() {
+    stringstream out;
+    for (uint32_t original = 0; original < 4; original++) {
+        if (original)
+            out << "/";
+        for (uint32_t selected = 0; selected < 4; selected++) {
+            if (selected)
+                out << ",";
+            out << FatTreeSwitch::_nmrc_diag_level_transitions
+                    [original][selected];
+        }
+    }
+    return out.str();
+}
+
+static string format_top_u32_u64_hist(const map<uint32_t, uint64_t>& hist,
+                                      size_t limit) {
+    if (hist.empty())
+        return "none";
+
+    vector<pair<uint64_t, uint32_t> > sorted;
+    for (map<uint32_t, uint64_t>::const_iterator it = hist.begin();
+         it != hist.end(); ++it) {
+        sorted.push_back(make_pair(it->second, it->first));
+    }
+    sort(sorted.begin(), sorted.end(), greater<pair<uint64_t, uint32_t> >());
+
+    stringstream out;
+    size_t n = sorted.size() < limit ? sorted.size() : limit;
+    for (size_t i = 0; i < n; i++) {
+        if (i)
+            out << "/";
+        out << sorted[i].second << ":" << sorted[i].first;
+    }
+    return out.str();
+}
 
 static void add_queue_diag(BaseQueue* queue, set<BaseQueue*>& seen, QueueDiag& diag) {
     if (!queue || !seen.insert(queue).second) {
@@ -78,6 +185,7 @@ static void add_queue_diag(BaseQueue* queue, set<BaseQueue*>& seen, QueueDiag& d
     LosslessOutputQueue* lossless_output = dynamic_cast<LosslessOutputQueue*>(queue);
     if (lossless_output) {
         diag.lossless_overflows += lossless_output->overflow_count();
+        diag.lossless_ecn_marks += lossless_output->ecn_mark_count();
     }
 
     LosslessQueue* lossless_queue = dynamic_cast<LosslessQueue*>(queue);
@@ -121,6 +229,58 @@ static QueueDiag collect_queue_diag(FatTreeTopology* top) {
     add_queue_diag(top->queues_nlp_nup, seen, diag);
     add_queue_diag(top->queues_ns_nlp, seen, diag);
 
+    return diag;
+}
+
+static void add_stor_diag(Switch* sw, StorDiag& diag) {
+    FatTreeSwitch* fat_switch = dynamic_cast<FatTreeSwitch*>(sw);
+    if (!fat_switch)
+        return;
+    fat_switch->collect_stor_diag(diag.min_score,
+                                  diag.avoid_entries,
+                                  diag.avoid_exits,
+                                  diag.clean_signals,
+                                  diag.ecn_signals,
+                                  diag.trim_signals);
+}
+
+static void add_netaware_diag(Switch* sw, NetawareDiag& diag) {
+    FatTreeSwitch* fat_switch = dynamic_cast<FatTreeSwitch*>(sw);
+    if (!fat_switch)
+        return;
+    fat_switch->collect_netaware_diag(diag.samples,
+                                  diag.sample_zero_bits,
+                                  diag.feedbacks,
+                                  diag.packet_feedbacks,
+                                  diag.time_feedbacks,
+                                  diag.feedback_packets_sum,
+                                  diag.feedback_zero_bits,
+                                  diag.all_good_feedbacks);
+}
+
+static void add_stor_diag(const vector<Switch*>& switches, StorDiag& diag) {
+    for (size_t i = 0; i < switches.size(); i++)
+        add_stor_diag(switches[i], diag);
+}
+
+static void add_netaware_diag(const vector<Switch*>& switches, NetawareDiag& diag) {
+    for (size_t i = 0; i < switches.size(); i++)
+        add_netaware_diag(switches[i], diag);
+}
+
+static StorDiag collect_stor_diag(FatTreeTopology* top) {
+    StorDiag diag;
+    add_stor_diag(top->switches_lp, diag);
+    add_stor_diag(top->switches_up, diag);
+    add_stor_diag(top->switches_c, diag);
+    return diag;
+}
+
+static NetawareDiag collect_netaware_diag(FatTreeTopology* top) {
+    NetawareDiag diag;
+    add_netaware_diag(top->switches_lp, diag);
+    add_netaware_diag(top->switches_up, diag);
+    add_netaware_diag(top->switches_c, diag);
     return diag;
 }
 
@@ -214,7 +374,11 @@ public:
         : EventSource(eventlist, "sglb_queue_cv_sampler"),
           _top(top),
           _period(period),
-          _samples(0) {}
+          _samples(0),
+          _peak_bytes(0),
+          _observations(0) {
+        _queue_fraction_hist.fill(0);
+    }
 
     void start() {
         if (_top && _period > 0)
@@ -266,15 +430,45 @@ public:
         return (uint32_t)_sums.size();
     }
 
+    uint64_t peak_bytes() const {
+        return _peak_bytes;
+    }
+
+    double queue_fraction_percentile(double quantile) const {
+        if (!_observations)
+            return 0.0;
+        uint64_t target = (uint64_t)ceil(
+            quantile * (double)_observations);
+        if (!target)
+            target = 1;
+        uint64_t cumulative = 0;
+        for (uint32_t bin = 0; bin < _queue_fraction_hist.size(); bin++) {
+            cumulative += _queue_fraction_hist[bin];
+            if (cumulative >= target)
+                return (double)bin / 100.0;
+        }
+        return 2.0;
+    }
+
 private:
     void collect_spine_queues(vector<double>& sample) {
-        const vector< vector< vector<BaseQueue*> > >& queues = _top->queues_nc_nup;
+        const vector< vector< vector<BaseQueue*> > >& queues =
+            _top->get_tiers() == 2 ? _top->queues_nup_nlp : _top->queues_nc_nup;
         for (size_t core = 0; core < queues.size(); core++) {
             for (size_t agg = 0; agg < queues[core].size(); agg++) {
                 for (size_t b = 0; b < queues[core][agg].size(); b++) {
                     BaseQueue* q = queues[core][agg][b];
-                    if (q)
-                        sample.push_back((double)q->queuesize());
+                    if (q) {
+                        uint64_t bytes = q->queuesize();
+                        sample.push_back((double)bytes);
+                        _peak_bytes = std::max(_peak_bytes, bytes);
+                        double fraction = q->maxsize() ?
+                            (double)bytes / (double)q->maxsize() : 0.0;
+                        uint32_t bin = (uint32_t)floor(fraction * 100.0);
+                        bin = std::min(bin, 200U);
+                        _queue_fraction_hist[bin]++;
+                        _observations++;
+                    }
                 }
             }
         }
@@ -284,6 +478,97 @@ private:
     simtime_picosec _period;
     vector<double> _sums;
     uint64_t _samples;
+    uint64_t _peak_bytes;
+    uint64_t _observations;
+    std::array<uint64_t, 201> _queue_fraction_hist;
+};
+
+class NetawarePathStateTracer : public EventSource {
+public:
+    NetawarePathStateTracer(EventList& eventlist,
+                        FatTreeTopology* top,
+                        simtime_picosec period,
+                        uint32_t path_count,
+                        ostream* out)
+        : EventSource(eventlist, "netaware_path_state_tracer"),
+          _top(top),
+          _period(period),
+          _path_count(path_count ? path_count : 1),
+          _out(out) {}
+
+    void start() {
+        if (_top && _out && _period > 0)
+            eventlist().sourceIsPendingRel(*this, _period);
+    }
+
+    void doNextEvent() {
+        write_sample();
+        eventlist().sourceIsPendingRel(*this, _period);
+    }
+
+private:
+    void write_sample() {
+        if (!_top || !_out)
+            return;
+
+        uint32_t hosts_per_tor = _top->radix_down(TOR_TIER);
+        if (!hosts_per_tor)
+            hosts_per_tor = 1;
+
+        double now_us = timeAsUs(eventlist().now());
+        for (size_t s = 0; s < _top->switches_lp.size(); s++) {
+            FatTreeSwitch* src =
+                dynamic_cast<FatTreeSwitch*>(_top->switches_lp[s]);
+            if (!src)
+                continue;
+
+            for (size_t d = 0; d < _top->switches_lp.size(); d++) {
+                FatTreeSwitch* dst =
+                    dynamic_cast<FatTreeSwitch*>(_top->switches_lp[d]);
+                if (!dst || src->getID() == dst->getID())
+                    continue;
+
+                uint32_t dst_host = dst->getID() * hosts_per_tor;
+                for (uint32_t ev = 0; ev < _path_count; ev++) {
+                    FatTreeSwitch::NetawarePathTraceSample sample;
+                    src->netaware_trace_path_state(dst_host, ev, _path_count, sample);
+                    uint32_t weight = RoceSrc::netawareLevelWeight(sample.path_grade);
+                    (*_out)
+                        << now_us << ","
+                        << src->getID() << ","
+                        << dst->getID() << ","
+                        << ev << ","
+                        << sample.spine_id << ","
+                        << sample.q_leaf_to_spine << ","
+                        << sample.q_spine_to_dst_leaf << ","
+                        << sample.q_leaf_to_spine_max << ","
+                        << sample.q_spine_to_dst_leaf_max << ","
+                        << sample.util_leaf_to_spine << ","
+                        << sample.util_spine_to_dst_leaf << ","
+                        << sample.link_rate_leaf_to_spine << ","
+                        << sample.link_rate_spine_to_dst_leaf << ","
+                        << (sample.link_down ? 1 : 0) << ","
+                        << sample.ecn_marks_on_path << ","
+                        << sample.trimmed_packets_on_path << ","
+                        << sample.dropped_packets_on_path << ","
+                        << sample.bytes_sent_on_path << ","
+                        << sample.local_q_pressure << ","
+                        << sample.remote_q_pressure << ","
+                        << sample.local_util_pressure << ","
+                        << sample.remote_util_pressure << ","
+                        << sample.path_score << ","
+                        << sample.netaware_level_reason << ","
+                        << (uint32_t)sample.path_grade << ","
+                        << weight << "\n";
+                }
+            }
+        }
+    }
+
+    FatTreeTopology* _top;
+    simtime_picosec _period;
+    uint32_t _path_count;
+    ostream* _out;
 };
 
 static Route* make_sglb_background_route(BaseQueue* queue, Pipe* pipe, PacketSink* drop) {
@@ -294,20 +579,24 @@ static Route* make_sglb_background_route(BaseQueue* queue, Pipe* pipe, PacketSin
     return route;
 }
 
-static bool add_first_sglb_background_link(
+static uint32_t add_sglb_background_links(
         vector<SglbBackgroundSource*>& sources,
         EventList& eventlist,
         SglbBackgroundDropSink* drop,
         const string& label,
         const vector< vector< vector<BaseQueue*> > >& queues,
         const vector< vector< vector<Pipe*> > >& pipes,
+        uint32_t max_links,
         double rate_gbps,
         uint32_t packet_size,
         simtime_picosec on_time,
         simtime_picosec off_time) {
-    for (size_t i = 0; i < queues.size(); i++) {
-        for (size_t j = 0; j < queues[i].size(); j++) {
-            for (size_t b = 0; b < queues[i][j].size(); b++) {
+    uint32_t added = 0;
+    set<pair<BaseQueue*, Pipe*> > selected;
+    for (size_t i = 0; i < queues.size() && added < max_links; i++) {
+        for (size_t j = 0; j < queues[i].size() && added < max_links; j++) {
+            for (size_t b = 0;
+                 b < queues[i][j].size() && added < max_links; b++) {
                 BaseQueue* queue = queues[i][j][b];
                 Pipe* pipe = NULL;
                 if (i < pipes.size() && j < pipes[i].size() && b < pipes[i][j].size())
@@ -315,65 +604,189 @@ static bool add_first_sglb_background_link(
                 if (!queue || !pipe)
                     continue;
 
+                if (!selected.insert(make_pair(queue, pipe)).second)
+                    continue;
+
+                stringstream link_label;
+                link_label << label;
+                if (max_links > 1)
+                    link_label << "_" << added;
                 Route* route = make_sglb_background_route(queue, pipe, drop);
                 SglbBackgroundSource* source =
-                    new SglbBackgroundSource(eventlist, "sglb_bg_" + label, route,
+                    new SglbBackgroundSource(eventlist,
+                                             "sglb_bg_" + link_label.str(), route,
                                              rate_gbps, packet_size, on_time, off_time);
                 sources.push_back(source);
                 source->start();
-                cout << "SGLB background " << label
+                cout << "SGLB background " << link_label.str()
                      << " on " << queue->nodename()
                      << " rate " << rate_gbps
                      << "Gbps on " << timeAsUs(on_time)
                      << "us off " << timeAsUs(off_time)
                      << "us packet " << packet_size
                      << " bytes" << endl;
-                return true;
+                added++;
             }
         }
     }
-    cout << "SGLB background " << label << " skipped: no live link" << endl;
-    return false;
+    if (!added)
+        cout << "SGLB background " << label << " skipped: no live link" << endl;
+    return added;
+}
+
+static bool add_fixed_link_background(
+        vector<SglbBackgroundSource*>& sources,
+        EventList& eventlist,
+        SglbBackgroundDropSink* drop,
+        const string& name,
+        BaseQueue* queue,
+        Pipe* pipe,
+        double rate_gbps,
+        uint32_t packet_size,
+        simtime_picosec on_time,
+        simtime_picosec off_time) {
+    if (!queue || !pipe || rate_gbps <= 0.0 || packet_size == 0 || on_time == 0)
+        return false;
+    Route* route = make_sglb_background_route(queue, pipe, drop);
+    SglbBackgroundSource* source =
+        new SglbBackgroundSource(eventlist, name, route, rate_gbps,
+                                 packet_size, on_time, off_time);
+    sources.push_back(source);
+    source->start();
+    return true;
+}
+
+static uint32_t install_path_hotspot_background(
+        FatTreeTopology* top,
+        EventList& eventlist,
+        vector<SglbBackgroundSource*>& sources,
+        SglbBackgroundDropSink* drop,
+        uint32_t hot_spines,
+        double rate_gbps,
+        uint32_t packet_size,
+        simtime_picosec on_time,
+        simtime_picosec off_time) {
+    uint32_t added = 0;
+    uint32_t selected = std::min(hot_spines, top->getNAGG());
+
+    for (size_t leaf = 0; leaf < top->queues_nlp_nup.size(); leaf++) {
+        for (uint32_t spine = 0; spine < selected; spine++) {
+            if (spine >= top->queues_nlp_nup[leaf].size())
+                continue;
+            for (size_t bundle = 0;
+                 bundle < top->queues_nlp_nup[leaf][spine].size(); bundle++) {
+                BaseQueue* queue = top->queues_nlp_nup[leaf][spine][bundle];
+                Pipe* pipe = NULL;
+                if (leaf < top->pipes_nlp_nup.size() &&
+                    spine < top->pipes_nlp_nup[leaf].size() &&
+                    bundle < top->pipes_nlp_nup[leaf][spine].size())
+                    pipe = top->pipes_nlp_nup[leaf][spine][bundle];
+                if (add_fixed_link_background(
+                        sources, eventlist, drop, "path_hotspot_leaf_to_spine",
+                        queue, pipe, rate_gbps, packet_size, on_time, off_time))
+                    added++;
+            }
+        }
+    }
+
+    for (uint32_t spine = 0;
+         spine < selected && spine < top->queues_nup_nlp.size(); spine++) {
+        for (size_t leaf = 0; leaf < top->queues_nup_nlp[spine].size(); leaf++) {
+            for (size_t bundle = 0;
+                 bundle < top->queues_nup_nlp[spine][leaf].size(); bundle++) {
+                BaseQueue* queue = top->queues_nup_nlp[spine][leaf][bundle];
+                Pipe* pipe = NULL;
+                if (spine < top->pipes_nup_nlp.size() &&
+                    leaf < top->pipes_nup_nlp[spine].size() &&
+                    bundle < top->pipes_nup_nlp[spine][leaf].size())
+                    pipe = top->pipes_nup_nlp[spine][leaf][bundle];
+                if (add_fixed_link_background(
+                        sources, eventlist, drop, "path_hotspot_spine_to_leaf",
+                        queue, pipe, rate_gbps, packet_size, on_time, off_time))
+                    added++;
+            }
+        }
+    }
+    return added;
 }
 
 static uint32_t install_sglb_background(FatTreeTopology* top,
                                         EventList& eventlist,
                                         vector<SglbBackgroundSource*>& sources,
                                         SglbBackgroundDropSink* drop,
+                                        uint32_t links_per_direction,
                                         double rate_gbps,
                                         uint32_t packet_size,
                                         simtime_picosec on_time,
                                         simtime_picosec off_time) {
     uint32_t added = 0;
-    if (add_first_sglb_background_link(sources, eventlist, drop, "tor_to_leaf",
-                                       top->queues_nlp_nup, top->pipes_nlp_nup,
-                                       rate_gbps, packet_size, on_time, off_time))
-        added++;
-    if (add_first_sglb_background_link(sources, eventlist, drop, "leaf_to_tor",
-                                       top->queues_nup_nlp, top->pipes_nup_nlp,
-                                       rate_gbps, packet_size, on_time, off_time))
-        added++;
+    added += add_sglb_background_links(
+        sources, eventlist, drop, "tor_to_leaf",
+        top->queues_nlp_nup, top->pipes_nlp_nup, links_per_direction,
+        rate_gbps, packet_size, on_time, off_time);
+    added += add_sglb_background_links(
+        sources, eventlist, drop, "leaf_to_tor",
+        top->queues_nup_nlp, top->pipes_nup_nlp, links_per_direction,
+        rate_gbps, packet_size, on_time, off_time);
     if (top->get_tiers() == 3) {
-        if (add_first_sglb_background_link(sources, eventlist, drop, "leaf_to_spine",
-                                           top->queues_nup_nc, top->pipes_nup_nc,
-                                           rate_gbps, packet_size, on_time, off_time))
-            added++;
-        if (add_first_sglb_background_link(sources, eventlist, drop, "spine_to_leaf",
-                                           top->queues_nc_nup, top->pipes_nc_nup,
-                                           rate_gbps, packet_size, on_time, off_time))
-            added++;
+        added += add_sglb_background_links(
+            sources, eventlist, drop, "leaf_to_spine",
+            top->queues_nup_nc, top->pipes_nup_nc, links_per_direction,
+            rate_gbps, packet_size, on_time, off_time);
+        added += add_sglb_background_links(
+            sources, eventlist, drop, "spine_to_leaf",
+            top->queues_nc_nup, top->pipes_nc_nup, links_per_direction,
+            rate_gbps, packet_size, on_time, off_time);
     }
     return added;
 }
 
 void exit_error(char* progr) {
-    cout << "Usage " << progr << " [-nodes N]\n\t[-conns C]\n\t[-q queue_size]\n\t[-queue_type composite|composite_ecn|composite_ecn_lb|lossless|lossless_input|lossless_input_ecn|lossy_input_ecn|lossy_ecn]\n\t[-tm traffic_matrix_file]\n\t[-lb ecmp|ecmp_rr|adaptive-routing|glb|drill|reps|n-mrc|mrc|rr|ops|conweave|ndp]\n\t[-cc none|dcqcn|dcqcn_variant|mprdma]\n\t[-cc_iw_pkts pkts]\n\t[-cc_min_cwnd_pkts pkts]\n\t[-cc_max_cwnd_pkts pkts]\n\t[-dcqcn_g x]\n\t[-dcqcn_initial_alpha x]\n\t[-dcqcn_ai_mbps x]\n\t[-dcqcn_min_rate_mbps x]\n\t[-dcqcn_alpha_us x]\n\t[-dcqcn_rate_us x]\n\t[-dcqcn_cnp_us x]\n\t[-dcqcn_byte_counter bytes]\n\t[-dcqcn_fast_recovery_steps N]\n\t[-roce_rx_mode gbn|sp]\n\t[-roce_ooo_us x]\n\t[-roce_loss_trace_window_pkts N]\n\t[-roce_loss_trace_window_ratio x]\n\t[-roce_ooo_window_pkts N]\n\t[-roce_ooo_window_ratio x]\n\t[-roce_bdp_bytes bytes]\n\t[-roce_nack_interval_us x]\n\t[-roce_rto_us x]\n\t[-roce_rto_high_us x]\n\t[-strat route_strategy (single,\n\tecmp_host,ecmp_ar,\n\tecmp_host_ar ar_thresh)]\n\t[-log log_level]\n\t[-seed random_seed]\n\t[-end end_time_in_usec]\n\t[-mtu MTU] default 4096\n\t[-linkspeed Mbps] default 400000\n\t[-hop_latency x] per hop wire latency in us, default 0.5\n\t[-switch_latency x] switching latency in us, default 0.5\n\t[-start_delta] time in us to randomly delay the start of connections\n\t[-slow_core_downlinks N]\n\t[-slow_core_downlink_divisor N]\n\t[-slow_tor_uplinks N]\n\t[-slow_tor_uplink_divisor N]\n\t[-slow_tor_uplink_select spaced|random-sparse]\n\t[-ecn_thresh fraction]\n\t[-nmrc_bad_hold_down_us x]\n\t[-nmrc_state_mode default|4-state]\n\t[-nmrc_weak_sample_pkts N]\n\t[-nmrc_ecn_degrade aggressive|graded]\n\t[-mrc_active_paths N]\n\t[-mrc_backup_paths N]\n\t[-mrc_min_active_paths N]\n\t[-mrc_ecn_cooldown_us x]\n\t[-mrc_failed_retry_us x]\n\t[-mrc_probe_interval_pkts N]\n\t[-glb_update_us x]\n\t[-glb_gcn_update_us x]\n\t[-glb_gcn_aging_us x]\n\t[-glb_weights q_weight util_weight remote_busy_weight]\n\t[-glb_factors local_q local_util remote_q remote_util remote_busy]\n\t[-glb_normalize]\n\t[-glb_downstream_weight x]\n\t[-glb_quality_bucket x]\n\t[-glb_quality_levels N]\n\t[-glb_min_choices N]\n\t[-conweave_rtt_us x]\n\t[-ndp_cwnd pkts]\n\t[-pfc_thresholds low high]" << endl;
+    cout << "Usage " << progr << " [-nodes N]\n\t[-conns C]\n\t[-q queue_size]\n\t[-queue_type composite|composite_ecn|composite_ecn_lb|lossless|lossless_input|lossless_input_ecn]\n\t[-tm traffic_matrix_file]\n\t[-lb ecmp|ecmp_rr|adaptive-routing|sglb|drill|reps|avail|grade|mrc|netaware|n-mrc|rr|ops|conweave|ndp]\n\t[-cc none|dcqcn|dcqcn_variant|mprdma]\n\t[-cc_iw_pkts pkts]\n\t[-cc_min_cwnd_pkts pkts]\n\t[-cc_max_cwnd_pkts pkts]\n\t[-dcqcn_g x]\n\t[-dcqcn_initial_alpha x]\n\t[-dcqcn_ai_mbps x]\n\t[-dcqcn_min_rate_mbps x]\n\t[-dcqcn_alpha_us x]\n\t[-dcqcn_rate_us x]\n\t[-dcqcn_cnp_us x]\n\t[-dcqcn_byte_counter bytes]\n\t[-dcqcn_fast_recovery_steps N]\n\t[-roce_rx_mode gbn|sp]\n\t[-roce_ooo_us x]\n\t[-roce_loss_trace_window_pkts N]\n\t[-roce_ooo_window_pkts N]\n\t[-roce_bdp_bytes bytes]\n\t[-roce_nack_interval_us x]\n\t[-roce_rto_us x]\n\t[-roce_rto_high_us x]\n\t[-seed random_seed]\n\t[-end end_time_in_usec]\n\t[-mtu MTU]\n\t[-linkspeed Mbps]\n\t[-hop_latency us]\n\t[-switch_latency us]\n\t[-slow_tor_uplinks N]\n\t[-slow_tor_uplink_divisor N]\n\t[-slow_tor_uplink_select spaced|random-sparse]\n\t[-ecn_thresh kmax_fraction]\n\t[-mrc_cooldown_mode cwnd_scaled|one_cycle]\n\t[-mrc_cooldown_reference_pkts N]\n\t[-mrc_all_cooling_fallback earliest|round_robin]\n\t[-mrc_failed_retry_us x]\n\t[-mrc_probe_interval_pkts N]\n\t[-conweave_rtt_us x]\n\t[-ndp_cwnd pkts]\n\t[-pfc_thresholds low high]" << endl;
     cout << "\t[-roce_sack_bitmap_bits 64|128]" << endl;
+    cout << "\t[-roce_transport_semantics legacy|mrc_exact_bounded]" << endl;
+    cout << "\t[-roce_trim_recovery cumulative|exact]" << endl;
+    cout << "\t[-cc dcqcn_variant_nodup_old]" << endl;
     cout << "\t[-dcqcn_nack_reaction cnp|ignore|rate_cut]" << endl;
-    cout << "\t[-nmrc_unknown_reopen]" << endl;
-    cout << "\t[-glb_local_damping]" << endl;
-    cout << "\t[-sglb_background] [-sglb_bg_rate_gbps x] [-sglb_bg_on_us x] "
+    cout << "\t[-sglb_local_damping]" << endl;
+    cout << "\t[-sglb_score_mode legacy|nmrc_quantized_topk]" << endl;
+    cout << "\t[-sglb_nmrc_q_range qmin qmax]" << endl;
+    cout << "\t[-sglb_nmrc_level_thresholds degraded bad avoid]" << endl;
+    cout << "\t[-sglb_nmrc_levels 4|8]" << endl;
+    cout << "\t[-sglb_background] [-sglb_bg_links_per_direction N] "
+         << "[-sglb_bg_rate_gbps x] [-sglb_bg_on_us x] "
          << "[-sglb_bg_off_us x] [-sglb_bg_packet_size bytes]" << endl;
+    cout << "\t[-path_hotspot_spines N] [-path_hotspot_bg_rate_gbps x] "
+         << "[-path_hotspot_bg_on_us x] [-path_hotspot_bg_off_us x]" << endl;
+    cout << "\t[-stor_feedback_pkts N] [-stor_feedback_min_us x] [-stor_feedback_max_us x]" << endl;
+    cout << "\t[-stor_trim_feedback_min_us x]" << endl;
+    cout << "\t[-avail_ecn_only]" << endl;
+    cout << "\t[-grade_complex_score]" << endl;
+    cout << "\t[-stor_score_profile original|balanced|simple|binary]" << endl;
+    cout << "\t[-stor_score_params clean ecn_add trim_add ecn_base trim_base]" << endl;
+    cout << "\t[-stor_simple_score_params clean penalty good degraded bad]" << endl;
+    cout << "\t[-stor_level_thresholds good degraded bad]" << endl;
+    cout << "\t[-stor_level_weights good degraded bad avoid]" << endl;
+    cout << "\t[-stor_aging packet|time_ewma|hybrid]" << endl;
+    cout << "\t[-stor_time_ewma_us ecn_tau trim_tau score_tau]" << endl;
+    cout << "\t[-stor_hybrid_hold_us bad_hold avoid_hold]" << endl;
+    cout << "\t[-stor_hybrid_probe interval_pkts clean_promote]" << endl;
+    cout << "\t[-netaware_queue_threshold x]" << endl;
+    cout << "\t[-netaware_queue_level_thresholds degraded bad avoid]" << endl;
+    cout << "\t[-netaware_degraded_util_thresholds queue_floor util]" << endl;
+    cout << "\t[-netaware_score_mode gated|worst_hop|sglb_quantized]" << endl;
+    cout << "\t[-netaware_path_coupling additive|bottleneck|noisy_or]" << endl;
+    cout << "\t[-netaware_score_q_range kmin kmax]" << endl;
+    cout << "\t[-netaware_score_util_range low high]" << endl;
+    cout << "\t[-netaware_score_weights w_lq w_rq w_lu w_ru]" << endl;
+    cout << "\t[-netaware_score_level_thresholds degraded bad avoid]" << endl;
+    cout << "\t[-netaware_level_weights good degraded bad avoid]" << endl;
+    cout << "\t[-netaware_wrr_mode shuffled_bucket|bucket|direct]" << endl;
+    cout << "\t[-netaware_weight_adaptation off|good_share_cap]" << endl;
+    cout << "\t[-netaware_trace_prefix prefix] [-netaware_trace_period_us x]" << endl;
+    cout << "\t[-nmrc_ev_mode encoded|random_matched|random32]" << endl;
+    cout << "\t[-nmrc_reroute_policy any_better|better_ge3]" << endl;
+    cout << "\t[-nmrc_fastcnp on|off]" << endl;
     cout << "\t[-queue_cv_sample_us x]" << endl;
     exit(1);
 }
@@ -400,9 +813,11 @@ int main(int argc, char **argv) {
     bool queue_type_user_set = false;
     bool roce_rx_mode_user_set = false;
     bool roce_cc_mode_user_set = false;
+    bool roce_trim_recovery_user_set = false;
     bool ecn_thresh_user_set = false;
     bool path_entropy_user_set = false;
     bool source_pathid_lb = false;
+    string lb_scheme_name = "ecmp";
 
     queue_type snd_type = FAIR_PRIO;
 
@@ -416,6 +831,8 @@ int main(int argc, char **argv) {
     uint32_t cc_min_cwnd_pkts = 1;
     uint32_t cc_max_cwnd_pkts = 0;
     RoceSrc::rx_mode_t roce_rx_mode = RoceSrc::RX_GBN;
+    RoceSrc::transport_semantics_t roce_transport_semantics =
+        RoceSrc::TRANSPORT_MRC_EXACT_BOUNDED;
     uint32_t roce_sack_bitmap_bits = ROCE_SACK_BITMAP_BITS_DEFAULT;
     double roce_ooo_us = 15.0;
     uint32_t roce_ooo_window_pkts = 32;
@@ -439,20 +856,79 @@ int main(int argc, char **argv) {
     double sglb_bg_on_us = 200.0;
     double sglb_bg_off_us = 200.0;
     uint32_t sglb_bg_packet_size = 0;
+    uint32_t sglb_bg_links_per_direction = 1;
+    uint32_t path_hotspot_spines = 0;
+    double path_hotspot_bg_rate_gbps = 300.0;
+    double path_hotspot_bg_on_us = 1000.0;
+    double path_hotspot_bg_off_us = 0.0;
     double queue_cv_sample_us = 0.0;
-    double nmrc_bad_hold_down_us = 0.0;
-    uint32_t nmrc_state_mode = 3;
-    uint32_t nmrc_bad_cache_windows = 1;
-    uint32_t nmrc_weak_sample_pkts = 0;
-    uint32_t nmrc_ecn_degrade_mode = 0;
-    bool nmrc_unknown_reopen = true;
-    double nmrc_feedback_min_us = 5.0;
-    double nmrc_feedback_max_us = 20.0;
+    double stor_feedback_min_us = 5.0;
+    double stor_feedback_max_us = 5.0;
+    double stor_trim_feedback_min_us = 5.0;
+    uint32_t stor_feedback_pkts = 0;
+    bool stor_feedback_pkts_user_set = false;
+    bool stor_score_profile_user_set = false;
+    bool grade_complex_score = false;
+    bool avail_ecn_only = false;
+    FatTreeSwitch::StorAgingProfile stor_aging =
+        FatTreeSwitch::STOR_AGING_PACKET;
+    double stor_time_ecn_tau_us = 20.0;
+    double stor_time_trim_tau_us = 50.0;
+    double stor_time_score_tau_us = 50.0;
+    double stor_hybrid_bad_hold_us = 10.0;
+    double stor_hybrid_avoid_hold_us = 20.0;
+    uint32_t stor_hybrid_probe_interval_pkts = 64;
+    uint32_t stor_hybrid_probe_clean_promote = 2;
+    double netaware_degraded_queue_threshold =
+        FatTreeSwitch::_netaware_degraded_queue_fraction;
+    double netaware_bad_queue_threshold =
+        FatTreeSwitch::_netaware_bad_queue_fraction;
+    double netaware_queue_threshold = 0.8;
+    double netaware_util_queue_floor_threshold =
+        FatTreeSwitch::_netaware_util_queue_floor_fraction;
+    double netaware_degraded_utilization_threshold =
+        FatTreeSwitch::_netaware_degraded_utilization_fraction;
+    FatTreeSwitch::NetawareScoreMode netaware_score_mode =
+        FatTreeSwitch::_netaware_score_mode;
+    FatTreeSwitch::NetawarePathCoupling netaware_path_coupling =
+        FatTreeSwitch::_netaware_path_coupling;
+    double netaware_score_q_min = FatTreeSwitch::_netaware_score_q_min;
+    double netaware_score_q_max = FatTreeSwitch::_netaware_score_q_max;
+    double netaware_score_util_low = FatTreeSwitch::_netaware_score_util_low;
+    double netaware_score_util_high = FatTreeSwitch::_netaware_score_util_high;
+    double netaware_score_weight_local_q =
+        FatTreeSwitch::_netaware_score_weight_local_q;
+    double netaware_score_weight_remote_q =
+        FatTreeSwitch::_netaware_score_weight_remote_q;
+    double netaware_score_weight_local_util =
+        FatTreeSwitch::_netaware_score_weight_local_util;
+    double netaware_score_weight_remote_util =
+        FatTreeSwitch::_netaware_score_weight_remote_util;
+    double netaware_score_degraded_threshold =
+        FatTreeSwitch::_netaware_score_degraded_threshold;
+    double netaware_score_bad_threshold =
+        FatTreeSwitch::_netaware_score_bad_threshold;
+    double netaware_score_avoid_threshold =
+        FatTreeSwitch::_netaware_score_avoid_threshold;
+    string netaware_trace_prefix;
+    double netaware_trace_period_us = 10.0;
+    RoceSrc::nmrc_ev_mode_t nmrc_ev_mode = RoceSrc::NMRC_EV_ENCODED;
+    FatTreeSwitch::NmrcReroutePolicy nmrc_reroute_policy =
+        FatTreeSwitch::NMRC_REROUTE_BETTER_GE3;
+    bool nmrc_fastcnp = true;
+    bool nmrc_option_user_set = false;
     double ecn_thresh = 1.0;
-    uint32_t mrc_active_paths = 256;
-    uint32_t mrc_backup_paths = 256;
-    uint32_t mrc_min_active_paths = 16;
-    double mrc_ecn_cooldown_us = 20.0;
+    uint32_t mrc_logical_evs = 0;
+    uint32_t mrc_active_paths = 0;
+    uint32_t mrc_backup_paths = 0;
+    uint32_t mrc_min_active_paths = 1;
+    uint32_t mrc_path_bits = 0;
+    RoceSrc::mrc_cooldown_mode_t mrc_cooldown_mode =
+        RoceSrc::MRC_COOLDOWN_ONE_CYCLE;
+    uint32_t mrc_cooldown_reference_pkts = 0;
+    bool mrc_cooldown_reference_user_set = false;
+    RoceSrc::mrc_all_cooling_fallback_t mrc_all_cooling_fallback =
+        RoceSrc::MRC_ALL_COOLING_EARLIEST;
     double mrc_failed_retry_us = 100.0;
     uint32_t mrc_probe_interval_pkts = 256;
 
@@ -462,6 +938,7 @@ int main(int argc, char **argv) {
     bool log_traffic = false;
     bool log_switches = false;
     bool log_queue_usage = false;
+    set<flowid_t> debug_flow_ids;
     RouteStrategy route_strategy = NOT_SET;
     int seed = 13;
     int i = 1;
@@ -514,10 +991,6 @@ int main(int argc, char **argv) {
             else if (!strcmp(argv[i+1], "lossless_input_ecn")) {
                 qt = LOSSLESS_INPUT_ECN;
             }
-            else if (!strcmp(argv[i+1], "lossy_input_ecn") ||
-                     !strcmp(argv[i+1], "lossy_ecn")) {
-                qt = LOSSY_INPUT_ECN;
-            }
             else {
                 cout << "Unknown queue type " << argv[i+1] << endl;
                 exit_error(argv[0]);
@@ -566,6 +1039,15 @@ int main(int argc, char **argv) {
                 exit_error(argv[0]);
             }
             i++;
+        } else if (!strcmp(argv[i],"-roce_debug_flow_id")) {
+            if (i + 1 >= argc) {
+                cerr << "Missing RoCE debug flow id" << endl;
+                exit(1);
+            }
+            flowid_t flow_id = (flowid_t)strtoul(argv[i+1], NULL, 10);
+            debug_flow_ids.insert(flow_id);
+            cout << "RoCE debug flow id " << flow_id << endl;
+            i++;
         } else if (!strcmp(argv[i],"-tm")){
             tm_file = argv[i+1];
             cout << "traffic matrix input file: "<< tm_file << endl;
@@ -579,7 +1061,6 @@ int main(int argc, char **argv) {
             queue_user_set = true;
             i++;
         } else if (!strcmp(argv[i],"-lb")){
-            const char* lb_scheme_name = "ecmp";
             if (!strcmp(argv[i+1], "ecmp")) {
                 route_strategy = ECMP_FIB;
                 FatTreeSwitch::set_strategy(FatTreeSwitch::ECMP);
@@ -591,16 +1072,31 @@ int main(int argc, char **argv) {
                 FatTreeSwitch::set_strategy(FatTreeSwitch::RR);
                 roce_lb_mode = RoceSrc::LB_ECMP;
                 lb_scheme_name = "ecmp_rr";
-            } else if (!strcmp(argv[i+1], "glb")) {
+            } else if (!strcmp(argv[i+1], "sglb")) {
                 route_strategy = ECMP_FIB;
-                FatTreeSwitch::set_strategy(FatTreeSwitch::GLB);
+                FatTreeSwitch::set_strategy(FatTreeSwitch::SGLB);
                 roce_lb_mode = RoceSrc::LB_ECMP;
-                lb_scheme_name = "glb";
+                lb_scheme_name = "sglb";
             } else if (!strcmp(argv[i+1], "reps")) {
                 route_strategy = ECMP_FIB;
                 FatTreeSwitch::set_strategy(FatTreeSwitch::ECMP);
                 roce_lb_mode = RoceSrc::LB_REPS;
                 lb_scheme_name = "reps";
+            } else if (!strcmp(argv[i+1], "avail")) {
+                route_strategy = ECMP_FIB;
+                FatTreeSwitch::set_strategy(FatTreeSwitch::ECMP);
+                roce_lb_mode = RoceSrc::LB_STOR;
+                lb_scheme_name = "avail";
+            } else if (!strcmp(argv[i+1], "grade")) {
+                route_strategy = ECMP_FIB;
+                FatTreeSwitch::set_strategy(FatTreeSwitch::ECMP);
+                roce_lb_mode = RoceSrc::LB_STOR;
+                lb_scheme_name = "grade";
+            } else if (!strcmp(argv[i+1], "netaware")) {
+                route_strategy = ECMP_FIB;
+                FatTreeSwitch::set_strategy(FatTreeSwitch::ECMP);
+                roce_lb_mode = RoceSrc::LB_NETAWARE;
+                lb_scheme_name = "netaware";
             } else if (!strcmp(argv[i+1], "n-mrc")) {
                 route_strategy = ECMP_FIB;
                 FatTreeSwitch::set_strategy(FatTreeSwitch::ECMP);
@@ -652,6 +1148,9 @@ int main(int argc, char **argv) {
                 roce_cc_mode = RoceSrc::CC_NONE;
             } else if (!strcmp(argv[i+1], "dcqcn")) {
                 roce_cc_mode = RoceSrc::CC_DCQCN;
+            } else if (!strcmp(argv[i+1], "dcqcn_variant_nodup_old") ||
+                       !strcmp(argv[i+1], "dcqcn-variant-nodup-old")) {
+                roce_cc_mode = RoceSrc::CC_DCQCN_VARIANT_NODUP_OLD;
             } else if (!strcmp(argv[i+1], "dcqcn_variant") ||
                        !strcmp(argv[i+1], "dcqcn-variant") ||
                        !strcmp(argv[i+1], "mprdma") ||
@@ -663,6 +1162,43 @@ int main(int argc, char **argv) {
             }
             cout << "cc mode " << argv[i+1] << endl;
             roce_cc_mode_user_set = true;
+            i++;
+        } else if (!strcmp(argv[i],"-roce_trim_recovery")){
+            if (i + 1 >= argc) {
+                cerr << "Missing RoCE TRIM recovery mode" << endl;
+                exit(1);
+            }
+            if (!strcmp(argv[i+1], "cumulative")) {
+                RoceSrc::setTrimRecoveryMode(
+                    RoceSrc::TRIM_RECOVERY_CUMULATIVE);
+            } else if (!strcmp(argv[i+1], "exact")) {
+                RoceSrc::setTrimRecoveryMode(
+                    RoceSrc::TRIM_RECOVERY_EXACT_PSN);
+            } else {
+                cerr << "Invalid RoCE TRIM recovery mode " << argv[i+1]
+                     << "; expected cumulative or exact" << endl;
+                exit(1);
+            }
+            cout << "RoCE TRIM recovery mode "
+                 << RoceSrc::trimRecoveryModeName() << endl;
+            roce_trim_recovery_user_set = true;
+            i++;
+        } else if (!strcmp(argv[i],"-roce_transport_semantics")){
+            if (i + 1 >= argc) {
+                cerr << "Missing RoCE transport semantics" << endl;
+                exit(1);
+            }
+            if (!strcmp(argv[i+1], "legacy")) {
+                roce_transport_semantics = RoceSrc::TRANSPORT_LEGACY;
+            } else if (!strcmp(argv[i+1], "mrc_exact_bounded") ||
+                       !strcmp(argv[i+1], "exact_bounded")) {
+                roce_transport_semantics =
+                    RoceSrc::TRANSPORT_MRC_EXACT_BOUNDED;
+            } else {
+                cerr << "Invalid RoCE transport semantics " << argv[i+1]
+                     << "; expected legacy or mrc_exact_bounded" << endl;
+                exit(1);
+            }
             i++;
         } else if (!strcmp(argv[i],"-logtime")){
             logtime = atof(argv[i+1]);            
@@ -734,27 +1270,40 @@ int main(int argc, char **argv) {
             if (ecn_thresh < 0.0)
                 ecn_thresh = 0.0;
             ecn_thresh_user_set = true;
-            cout << "Composite ECN threshold fraction " << ecn_thresh << endl;
+            cout << "Composite RED ECN Kmax fraction " << ecn_thresh << endl;
             i++;
-        } else if (!strcmp(argv[i],"-mrc_active_paths")){
-            mrc_active_paths = atoi(argv[i+1]);
-            cout << "MRC active EV set size " << mrc_active_paths << endl;
+        } else if (!strcmp(argv[i],"-mrc_cooldown_mode")){
+            if (!strcmp(argv[i+1], "cwnd_scaled"))
+                mrc_cooldown_mode = RoceSrc::MRC_COOLDOWN_CWND_SCALED;
+            else if (!strcmp(argv[i+1], "one_cycle"))
+                mrc_cooldown_mode = RoceSrc::MRC_COOLDOWN_ONE_CYCLE;
+            else {
+                cout << "Unknown MRC cooldown mode " << argv[i+1] << endl;
+                exit_error(argv[0]);
+            }
+            cout << "MRC cooldown mode " << argv[i+1] << endl;
             i++;
-        } else if (!strcmp(argv[i],"-mrc_backup_paths")){
-            mrc_backup_paths = atoi(argv[i+1]);
-            cout << "MRC backup EV set size " << mrc_backup_paths << endl;
+        } else if (!strcmp(argv[i],"-mrc_all_cooling_fallback")){
+            if (!strcmp(argv[i+1], "earliest"))
+                mrc_all_cooling_fallback =
+                    RoceSrc::MRC_ALL_COOLING_EARLIEST;
+            else if (!strcmp(argv[i+1], "round_robin"))
+                mrc_all_cooling_fallback =
+                    RoceSrc::MRC_ALL_COOLING_ROUND_ROBIN;
+            else {
+                cout << "Unknown MRC all-cooling fallback "
+                     << argv[i+1] << endl;
+                exit_error(argv[0]);
+            }
+            cout << "MRC all-cooling fallback " << argv[i+1] << endl;
             i++;
-        } else if (!strcmp(argv[i],"-mrc_min_active_paths")){
-            mrc_min_active_paths = atoi(argv[i+1]);
-            if (!mrc_min_active_paths)
-                mrc_min_active_paths = 1;
-            cout << "MRC minimum active EVs " << mrc_min_active_paths << endl;
-            i++;
-        } else if (!strcmp(argv[i],"-mrc_ecn_cooldown_us")){
-            mrc_ecn_cooldown_us = atof(argv[i+1]);
-            if (mrc_ecn_cooldown_us < 0)
-                mrc_ecn_cooldown_us = 0;
-            cout << "MRC ECN cooldown " << mrc_ecn_cooldown_us << "us" << endl;
+        } else if (!strcmp(argv[i],"-mrc_cooldown_reference_pkts")){
+            mrc_cooldown_reference_pkts = atoi(argv[i+1]);
+            if (!mrc_cooldown_reference_pkts)
+                mrc_cooldown_reference_pkts = 1;
+            mrc_cooldown_reference_user_set = true;
+            cout << "MRC cooldown reference "
+                 << mrc_cooldown_reference_pkts << " packets" << endl;
             i++;
         } else if (!strcmp(argv[i],"-mrc_failed_retry_us")){
             mrc_failed_retry_us = atof(argv[i+1]);
@@ -961,6 +1510,24 @@ int main(int argc, char **argv) {
         } else if (!strcmp(argv[i],"-sglb_background")){
             sglb_background = true;
             cout << "SGLB fixed-link background enabled" << endl;
+        } else if (!strcmp(argv[i],"-sglb_bg_links_per_direction")){
+            if (i + 1 >= argc || argv[i+1][0] == '-') {
+                cerr << "SGLB background links per direction must be an integer >= 1"
+                     << endl;
+                exit_error(argv[0]);
+            }
+            char* end = NULL;
+            errno = 0;
+            unsigned long requested = strtoul(argv[i+1], &end, 10);
+            if (errno == ERANGE || end == argv[i+1] || *end != '\0' ||
+                requested < 1 ||
+                requested > numeric_limits<uint32_t>::max()) {
+                cerr << "SGLB background links per direction must be an integer >= 1"
+                     << endl;
+                exit_error(argv[0]);
+            }
+            sglb_bg_links_per_direction = (uint32_t)requested;
+            i++;
         } else if (!strcmp(argv[i],"-sglb_bg_rate_gbps")){
             sglb_bg_rate_gbps = atof(argv[i+1]);
             if (sglb_bg_rate_gbps < 0.0)
@@ -983,177 +1550,615 @@ int main(int argc, char **argv) {
             sglb_bg_packet_size = atoi(argv[i+1]);
             cout << "SGLB background packet size " << sglb_bg_packet_size << " bytes" << endl;
             i++;
+        } else if (!strcmp(argv[i],"-path_hotspot_spines")){
+            int requested = atoi(argv[i+1]);
+            if (requested < 0) {
+                cerr << "Path hotspot spine count must be non-negative" << endl;
+                exit(1);
+            }
+            path_hotspot_spines = (uint32_t)requested;
+            cout << "Path hotspot spines " << path_hotspot_spines << endl;
+            i++;
+        } else if (!strcmp(argv[i],"-path_hotspot_bg_rate_gbps")){
+            path_hotspot_bg_rate_gbps = atof(argv[i+1]);
+            if (path_hotspot_bg_rate_gbps < 0.0)
+                path_hotspot_bg_rate_gbps = 0.0;
+            cout << "Path hotspot background rate "
+                 << path_hotspot_bg_rate_gbps << "Gbps" << endl;
+            i++;
+        } else if (!strcmp(argv[i],"-path_hotspot_bg_on_us")){
+            path_hotspot_bg_on_us = atof(argv[i+1]);
+            if (path_hotspot_bg_on_us < 0.0)
+                path_hotspot_bg_on_us = 0.0;
+            cout << "Path hotspot background ON "
+                 << path_hotspot_bg_on_us << "us" << endl;
+            i++;
+        } else if (!strcmp(argv[i],"-path_hotspot_bg_off_us")){
+            path_hotspot_bg_off_us = atof(argv[i+1]);
+            if (path_hotspot_bg_off_us < 0.0)
+                path_hotspot_bg_off_us = 0.0;
+            cout << "Path hotspot background OFF "
+                 << path_hotspot_bg_off_us << "us" << endl;
+            i++;
         } else if (!strcmp(argv[i],"-queue_cv_sample_us")){
             queue_cv_sample_us = atof(argv[i+1]);
             if (queue_cv_sample_us < 0.0)
                 queue_cv_sample_us = 0.0;
             cout << "Queue CV sample interval " << queue_cv_sample_us << "us" << endl;
             i++;
-        } else if (!strcmp(argv[i],"-glb_update_us")){
-            double glb_update_us = atof(argv[i+1]);
-            if (glb_update_us < 0)
-                glb_update_us = 0;
-            FatTreeSwitch::_glb_update_interval = timeFromUs(glb_update_us);
-            FatTreeSwitch::_glb_gcn_update_interval = FatTreeSwitch::_glb_update_interval;
-            cout << "glb GCN export update interval " << glb_update_us << "us" << endl;
+        } else if (!strcmp(argv[i],"-sglb_update_us")){
+            double sglb_update_us = atof(argv[i+1]);
+            if (sglb_update_us < 0)
+                sglb_update_us = 0;
+            FatTreeSwitch::_sglb_update_interval = timeFromUs(sglb_update_us);
+            cout << "sglb local quality update interval " << sglb_update_us << "us" << endl;
             i++;
-        } else if (!strcmp(argv[i],"-glb_gcn_update_us")){
-            double glb_update_us = atof(argv[i+1]);
-            if (glb_update_us < 0)
-                glb_update_us = 0;
-            FatTreeSwitch::_glb_gcn_update_interval = timeFromUs(glb_update_us);
-            FatTreeSwitch::_glb_update_interval = FatTreeSwitch::_glb_gcn_update_interval;
-            cout << "glb GCN export update interval " << glb_update_us << "us" << endl;
+        } else if (!strcmp(argv[i],"-sglb_gcn_update_us")){
+            double sglb_update_us = atof(argv[i+1]);
+            if (sglb_update_us < 0)
+                sglb_update_us = 0;
+            FatTreeSwitch::_sglb_gcn_update_interval = timeFromUs(sglb_update_us);
+            cout << "sglb GCN export update interval " << sglb_update_us << "us" << endl;
             i++;
-        } else if (!strcmp(argv[i],"-glb_gcn_aging_us")){
-            double glb_aging_us = atof(argv[i+1]);
-            if (glb_aging_us < 0)
-                glb_aging_us = 0;
-            FatTreeSwitch::_glb_gcn_aging_interval = timeFromUs(glb_aging_us);
-            cout << "glb GCN aging interval " << glb_aging_us << "us" << endl;
+        } else if (!strcmp(argv[i],"-sglb_gcn_aging_us")){
+            double sglb_aging_us = atof(argv[i+1]);
+            if (sglb_aging_us < 0)
+                sglb_aging_us = 0;
+            FatTreeSwitch::_sglb_gcn_aging_interval = timeFromUs(sglb_aging_us);
+            cout << "sglb GCN aging interval " << sglb_aging_us << "us" << endl;
             i++;
-        } else if (!strcmp(argv[i],"-glb_weights")){
-            FatTreeSwitch::_glb_queue_weight = atof(argv[i+1]);
-            FatTreeSwitch::_glb_util_weight = atof(argv[i+2]);
-            FatTreeSwitch::_glb_remote_queue_weight = FatTreeSwitch::_glb_queue_weight;
-            FatTreeSwitch::_glb_remote_util_weight = FatTreeSwitch::_glb_util_weight;
-            FatTreeSwitch::_glb_remote_busy_weight = atof(argv[i+3]);
-            cout << "glb weights queue " << FatTreeSwitch::_glb_queue_weight
-                 << " util " << FatTreeSwitch::_glb_util_weight
-                 << " remote_busy " << FatTreeSwitch::_glb_remote_busy_weight << endl;
+        } else if (!strcmp(argv[i],"-sglb_score_mode")){
+            if (!strcmp(argv[i+1], "legacy")) {
+                FatTreeSwitch::_sglb_score_mode =
+                    FatTreeSwitch::SGLB_SCORE_LEGACY;
+            } else if (!strcmp(argv[i+1], "nmrc_quantized_topk")) {
+                FatTreeSwitch::_sglb_score_mode =
+                    FatTreeSwitch::SGLB_SCORE_NMRC_QUANTIZED_TOPK;
+            } else {
+                cerr << "unknown SGLB score mode " << argv[i+1] << endl;
+                exit(1);
+            }
+            cout << "sglb score mode "
+                 << FatTreeSwitch::sglb_score_mode_name() << endl;
+            i++;
+        } else if (!strcmp(argv[i],"-sglb_nmrc_q_range")){
+            double q_min = atof(argv[i+1]);
+            double q_max = atof(argv[i+2]);
+            if (q_min < 0.0 || q_max > 1.0 || q_min >= q_max) {
+                cerr << "invalid SGLB n-MRC q range " << q_min
+                     << " " << q_max << endl;
+                exit(1);
+            }
+            FatTreeSwitch::_sglb_nmrc_q_min = q_min;
+            FatTreeSwitch::_sglb_nmrc_q_max = q_max;
+            cout << "sglb n-MRC q range " << q_min << " " << q_max << endl;
+            i += 2;
+        } else if (!strcmp(argv[i],"-sglb_nmrc_level_thresholds")){
+            double degraded = atof(argv[i+1]);
+            double bad = atof(argv[i+2]);
+            double avoid = atof(argv[i+3]);
+            if (degraded < 0.0 || degraded >= bad || bad >= avoid ||
+                avoid > 1.0) {
+                cerr << "invalid SGLB n-MRC level thresholds "
+                     << degraded << " " << bad << " " << avoid << endl;
+                exit(1);
+            }
+            FatTreeSwitch::_sglb_nmrc_degraded_threshold = degraded;
+            FatTreeSwitch::_sglb_nmrc_bad_threshold = bad;
+            FatTreeSwitch::_sglb_nmrc_avoid_threshold = avoid;
+            cout << "sglb n-MRC level thresholds " << degraded << " "
+                 << bad << " " << avoid << endl;
             i += 3;
-        } else if (!strcmp(argv[i],"-glb_factors")){
-            FatTreeSwitch::_glb_queue_weight = atof(argv[i+1]);
-            FatTreeSwitch::_glb_util_weight = atof(argv[i+2]);
-            FatTreeSwitch::_glb_remote_queue_weight = atof(argv[i+3]);
-            FatTreeSwitch::_glb_remote_util_weight = atof(argv[i+4]);
-            FatTreeSwitch::_glb_remote_busy_weight = atof(argv[i+5]);
-            cout << "glb factors local_q " << FatTreeSwitch::_glb_queue_weight
-                 << " local_util " << FatTreeSwitch::_glb_util_weight
-                 << " remote_q " << FatTreeSwitch::_glb_remote_queue_weight
-                 << " remote_util " << FatTreeSwitch::_glb_remote_util_weight
-                 << " remote_busy " << FatTreeSwitch::_glb_remote_busy_weight << endl;
+        } else if (!strcmp(argv[i],"-sglb_nmrc_levels")) {
+            uint32_t levels = atoi(argv[i+1]);
+            if (levels != 4 && levels != 8) {
+                cerr << "invalid SGLB n-MRC levels " << levels
+                     << "; expected 4 or 8" << endl;
+                exit(1);
+            }
+            FatTreeSwitch::_sglb_nmrc_levels = levels;
+            cout << "sglb n-mrc levels " << levels << endl;
+            i++;
+        } else if (!strcmp(argv[i],"-sglb_weights")){
+            FatTreeSwitch::_sglb_queue_weight = atof(argv[i+1]);
+            FatTreeSwitch::_sglb_util_weight = atof(argv[i+2]);
+            FatTreeSwitch::_sglb_remote_queue_weight = FatTreeSwitch::_sglb_queue_weight;
+            FatTreeSwitch::_sglb_remote_util_weight = FatTreeSwitch::_sglb_util_weight;
+            FatTreeSwitch::_sglb_remote_busy_weight = atof(argv[i+3]);
+            cout << "sglb weights queue " << FatTreeSwitch::_sglb_queue_weight
+                 << " util " << FatTreeSwitch::_sglb_util_weight
+                 << " remote_busy " << FatTreeSwitch::_sglb_remote_busy_weight << endl;
+            i += 3;
+        } else if (!strcmp(argv[i],"-sglb_factors")){
+            FatTreeSwitch::_sglb_queue_weight = atof(argv[i+1]);
+            FatTreeSwitch::_sglb_util_weight = atof(argv[i+2]);
+            FatTreeSwitch::_sglb_remote_queue_weight = atof(argv[i+3]);
+            FatTreeSwitch::_sglb_remote_util_weight = atof(argv[i+4]);
+            FatTreeSwitch::_sglb_remote_busy_weight = atof(argv[i+5]);
+            cout << "sglb factors local_q " << FatTreeSwitch::_sglb_queue_weight
+                 << " local_util " << FatTreeSwitch::_sglb_util_weight
+                 << " remote_q " << FatTreeSwitch::_sglb_remote_queue_weight
+                 << " remote_util " << FatTreeSwitch::_sglb_remote_util_weight
+                 << " remote_busy " << FatTreeSwitch::_sglb_remote_busy_weight << endl;
             i += 5;
-        } else if (!strcmp(argv[i],"-glb_normalize")){
-            FatTreeSwitch::_glb_normalize_scores = true;
-            cout << "glb normalized queue/util factors enabled" << endl;
-        } else if (!strcmp(argv[i],"-glb_local_damping")){
-            FatTreeSwitch::_glb_local_damping = true;
-            cout << "glb local-pressure downstream damping enabled" << endl;
-        } else if (!strcmp(argv[i],"-glb_downstream_weight")){
-            FatTreeSwitch::_glb_downstream_weight = atof(argv[i+1]);
-            cout << "glb downstream weight " << FatTreeSwitch::_glb_downstream_weight << endl;
+        } else if (!strcmp(argv[i],"-sglb_normalize")){
+            FatTreeSwitch::_sglb_normalize_scores = true;
+            cout << "sglb normalized queue/util factors enabled" << endl;
+        } else if (!strcmp(argv[i],"-sglb_local_damping")){
+            FatTreeSwitch::_sglb_local_damping = true;
+            cout << "sglb local-pressure downstream damping enabled" << endl;
+        } else if (!strcmp(argv[i],"-sglb_downstream_weight")){
+            FatTreeSwitch::_sglb_downstream_weight = atof(argv[i+1]);
+            cout << "sglb downstream weight " << FatTreeSwitch::_sglb_downstream_weight << endl;
             i++;
-        } else if (!strcmp(argv[i],"-glb_quality_bucket")){
-            FatTreeSwitch::_glb_quality_bucket = atof(argv[i+1]);
-            if (FatTreeSwitch::_glb_quality_bucket <= 0.0)
-                FatTreeSwitch::_glb_quality_bucket = 1.0;
-            cout << "glb quality bucket " << FatTreeSwitch::_glb_quality_bucket << endl;
+        } else if (!strcmp(argv[i],"-sglb_quality_bucket")){
+            FatTreeSwitch::_sglb_quality_bucket = atof(argv[i+1]);
+            if (FatTreeSwitch::_sglb_quality_bucket <= 0.0)
+                FatTreeSwitch::_sglb_quality_bucket = 1.0;
+            cout << "sglb quality bucket " << FatTreeSwitch::_sglb_quality_bucket << endl;
             i++;
-        } else if (!strcmp(argv[i],"-glb_quality_levels")){
-            FatTreeSwitch::_glb_quality_levels = atoi(argv[i+1]);
-            if (!FatTreeSwitch::_glb_quality_levels)
-                FatTreeSwitch::_glb_quality_levels = 1;
-            FatTreeSwitch::_glb_max_quality = FatTreeSwitch::_glb_quality_levels - 1;
-            cout << "glb quality levels " << FatTreeSwitch::_glb_quality_levels << endl;
+        } else if (!strcmp(argv[i],"-sglb_quality_levels")){
+            FatTreeSwitch::_sglb_quality_levels = atoi(argv[i+1]);
+            if (!FatTreeSwitch::_sglb_quality_levels)
+                FatTreeSwitch::_sglb_quality_levels = 1;
+            FatTreeSwitch::_sglb_max_quality = FatTreeSwitch::_sglb_quality_levels - 1;
+            cout << "sglb quality levels " << FatTreeSwitch::_sglb_quality_levels << endl;
             i++;
-        } else if (!strcmp(argv[i],"-glb_min_choices")){
-            FatTreeSwitch::_glb_min_choices = atoi(argv[i+1]);
-            if (!FatTreeSwitch::_glb_min_choices)
-                FatTreeSwitch::_glb_min_choices = 1;
-            cout << "glb minimum sprayed choices " << FatTreeSwitch::_glb_min_choices << endl;
+        } else if (!strcmp(argv[i],"-sglb_min_choices")){
+            FatTreeSwitch::_sglb_min_choices = atoi(argv[i+1]);
+            if (!FatTreeSwitch::_sglb_min_choices)
+                FatTreeSwitch::_sglb_min_choices = 1;
+            cout << "sglb minimum sprayed choices " << FatTreeSwitch::_sglb_min_choices << endl;
             i++;
-        } else if (!strcmp(argv[i],"-nmrc_feedback_pkts")){
-            cout << "n-mrc feedback packet threshold is canonical auto(path_count); ignoring deprecated value " << argv[i+1] << endl;
+        } else if (!strcmp(argv[i],"-stor_feedback_pkts")){
+            stor_feedback_pkts = atoi(argv[i+1]);
+            if (!stor_feedback_pkts)
+                stor_feedback_pkts = 1;
+            stor_feedback_pkts_user_set = true;
+            cout << "stor feedback packet window " << stor_feedback_pkts << endl;
             i++;
-        } else if (!strcmp(argv[i],"-nmrc_feedback_hot_path_pkts")){
-            cout << "n-mrc hot-path feedback threshold is disabled; ignoring deprecated value " << argv[i+1] << endl;
+        } else if (!strcmp(argv[i],"-stor_feedback_min_us")){
+            stor_feedback_min_us = atof(argv[i+1]);
+            if (stor_feedback_min_us < 0)
+                stor_feedback_min_us = 0;
+            cout << "stor minimum feedback interval " << stor_feedback_min_us << "us" << endl;
             i++;
-        } else if (!strcmp(argv[i],"-nmrc_feedback_min_us")){
-            nmrc_feedback_min_us = atof(argv[i+1]);
-            if (nmrc_feedback_min_us < 0)
-                nmrc_feedback_min_us = 0;
-            cout << "n-mrc minimum feedback interval " << nmrc_feedback_min_us << "us" << endl;
+        } else if (!strcmp(argv[i],"-stor_feedback_max_us")){
+            stor_feedback_max_us = atof(argv[i+1]);
+            if (stor_feedback_max_us < 0)
+                stor_feedback_max_us = 0;
+            cout << "stor maximum feedback interval " << stor_feedback_max_us << "us" << endl;
             i++;
-        } else if (!strcmp(argv[i],"-nmrc_feedback_max_us")){
-            nmrc_feedback_max_us = atof(argv[i+1]);
-            if (nmrc_feedback_max_us < 0)
-                nmrc_feedback_max_us = 0;
-            cout << "n-mrc maximum feedback interval " << nmrc_feedback_max_us << "us" << endl;
+        } else if (!strcmp(argv[i],"-stor_trim_feedback_min_us")){
+            stor_trim_feedback_min_us = atof(argv[i+1]);
+            if (stor_trim_feedback_min_us < 0)
+                stor_trim_feedback_min_us = 0;
+            cout << "stor trim feedback minimum interval "
+                 << stor_trim_feedback_min_us << "us" << endl;
             i++;
-        } else if (!strcmp(argv[i],"-nmrc_min_good_paths")){
-            cout << "n-mrc minimum confirmed good paths is canonical min(16,path_count/2); ignoring deprecated value " << argv[i+1] << endl;
-            i++;
-        } else if (!strcmp(argv[i],"-nmrc_bad_hold_down_us")){
-            nmrc_bad_hold_down_us = atof(argv[i+1]);
-            if (nmrc_bad_hold_down_us < 0)
-                nmrc_bad_hold_down_us = 0;
-            cout << "n-mrc bad path keeping window " << nmrc_bad_hold_down_us << "us" << endl;
-            i++;
-        } else if (!strcmp(argv[i],"-nmrc_state_mode")){
-            if (!strcmp(argv[i+1], "default") ||
-                !strcmp(argv[i+1], "2state-bad-cache") ||
-                !strcmp(argv[i+1], "bad-cache") ||
-                !strcmp(argv[i+1], "bad-cache-a")) {
-                nmrc_state_mode = 3;
-                nmrc_bad_cache_windows = 1;
+        } else if (!strcmp(argv[i],"-stor_aging")){
+            if (!strcmp(argv[i+1], "packet")) {
+                stor_aging = FatTreeSwitch::STOR_AGING_PACKET;
+            } else if (!strcmp(argv[i+1], "time_ewma")) {
+                stor_aging = FatTreeSwitch::STOR_AGING_TIME_EWMA;
+            } else if (!strcmp(argv[i+1], "hybrid")) {
+                stor_aging = FatTreeSwitch::STOR_AGING_HYBRID;
+            } else {
+                cerr << "Unknown STOR aging profile " << argv[i+1]
+                     << "; expected packet, time_ewma, or hybrid" << endl;
+                exit(1);
             }
-            else if (!strcmp(argv[i+1], "4-state") ||
-                     !strcmp(argv[i+1], "4state") ||
-                     !strcmp(argv[i+1], "legacy") ||
-                     !strcmp(argv[i+1], "2bit-ecn01"))
-                nmrc_state_mode = 2;
-            else if (!strcmp(argv[i+1], "binary"))
-                nmrc_state_mode = 0;
-            else if (!strcmp(argv[i+1], "2bit-observed"))
-                nmrc_state_mode = 1;
+            cout << "stor aging profile " << argv[i+1] << endl;
+            i++;
+        } else if (!strcmp(argv[i],"-stor_time_ewma_us")){
+            stor_time_ecn_tau_us = atof(argv[i+1]);
+            stor_time_trim_tau_us = atof(argv[i+2]);
+            stor_time_score_tau_us = atof(argv[i+3]);
+            if (stor_time_ecn_tau_us < 0.1)
+                stor_time_ecn_tau_us = 0.1;
+            if (stor_time_trim_tau_us < 0.1)
+                stor_time_trim_tau_us = 0.1;
+            if (stor_time_score_tau_us < 0.1)
+                stor_time_score_tau_us = 0.1;
+            cout << "stor time EWMA taus "
+                 << stor_time_ecn_tau_us << "/"
+                 << stor_time_trim_tau_us << "/"
+                 << stor_time_score_tau_us << "us" << endl;
+            i += 3;
+        } else if (!strcmp(argv[i],"-stor_hybrid_hold_us")){
+            stor_hybrid_bad_hold_us = atof(argv[i+1]);
+            stor_hybrid_avoid_hold_us = atof(argv[i+2]);
+            if (stor_hybrid_bad_hold_us < 0.0)
+                stor_hybrid_bad_hold_us = 0.0;
+            if (stor_hybrid_avoid_hold_us < 0.0)
+                stor_hybrid_avoid_hold_us = 0.0;
+            cout << "stor hybrid hold-down "
+                 << stor_hybrid_bad_hold_us << "/"
+                 << stor_hybrid_avoid_hold_us << "us" << endl;
+            i += 2;
+        } else if (!strcmp(argv[i],"-stor_hybrid_probe")){
+            stor_hybrid_probe_interval_pkts = atoi(argv[i+1]);
+            stor_hybrid_probe_clean_promote = atoi(argv[i+2]);
+            if (!stor_hybrid_probe_interval_pkts)
+                stor_hybrid_probe_interval_pkts = 1;
+            if (!stor_hybrid_probe_clean_promote)
+                stor_hybrid_probe_clean_promote = 1;
+            cout << "stor hybrid probe interval/promote "
+                 << stor_hybrid_probe_interval_pkts << "/"
+                 << stor_hybrid_probe_clean_promote << endl;
+            i += 2;
+        } else if (!strcmp(argv[i],"-netaware_queue_threshold")){
+            netaware_queue_threshold = atof(argv[i+1]);
+            if (netaware_queue_threshold < 0.0)
+                netaware_queue_threshold = 0.0;
+            if (netaware_queue_threshold > 1.0)
+                netaware_queue_threshold = 1.0;
+            cout << "netaware queue threshold fraction " << netaware_queue_threshold << endl;
+            i++;
+        } else if (!strcmp(argv[i],"-netaware_queue_level_thresholds")){
+            netaware_degraded_queue_threshold = atof(argv[i+1]);
+            netaware_bad_queue_threshold = atof(argv[i+2]);
+            netaware_queue_threshold = atof(argv[i+3]);
+            if (netaware_degraded_queue_threshold < 0.0)
+                netaware_degraded_queue_threshold = 0.0;
+            if (netaware_degraded_queue_threshold > 1.0)
+                netaware_degraded_queue_threshold = 1.0;
+            if (netaware_bad_queue_threshold < 0.0)
+                netaware_bad_queue_threshold = 0.0;
+            if (netaware_bad_queue_threshold > 1.0)
+                netaware_bad_queue_threshold = 1.0;
+            if (netaware_queue_threshold < 0.0)
+                netaware_queue_threshold = 0.0;
+            if (netaware_queue_threshold > 1.0)
+                netaware_queue_threshold = 1.0;
+            if (netaware_bad_queue_threshold < netaware_degraded_queue_threshold)
+                netaware_bad_queue_threshold = netaware_degraded_queue_threshold;
+            if (netaware_queue_threshold < netaware_bad_queue_threshold)
+                netaware_queue_threshold = netaware_bad_queue_threshold;
+            cout << "netaware queue level thresholds "
+                 << netaware_degraded_queue_threshold << "/"
+                 << netaware_bad_queue_threshold << "/"
+                 << netaware_queue_threshold << endl;
+            i += 3;
+        } else if (!strcmp(argv[i],"-netaware_degraded_util_thresholds")){
+            netaware_util_queue_floor_threshold = atof(argv[i+1]);
+            netaware_degraded_utilization_threshold = atof(argv[i+2]);
+            if (netaware_util_queue_floor_threshold < 0.0)
+                netaware_util_queue_floor_threshold = 0.0;
+            if (netaware_util_queue_floor_threshold > 1.0)
+                netaware_util_queue_floor_threshold = 1.0;
+            if (netaware_degraded_utilization_threshold < 0.0)
+                netaware_degraded_utilization_threshold = 0.0;
+            if (netaware_degraded_utilization_threshold > 1.0)
+                netaware_degraded_utilization_threshold = 1.0;
+            cout << "netaware degraded utilization thresholds "
+                 << netaware_util_queue_floor_threshold << "/"
+                 << netaware_degraded_utilization_threshold << endl;
+            i += 2;
+        } else if (!strcmp(argv[i],"-netaware_score_mode")){
+            if (!strcmp(argv[i+1], "gated")) {
+                netaware_score_mode = FatTreeSwitch::NETAWARE_SCORE_GATED;
+            } else if (!strcmp(argv[i+1], "worst_hop")) {
+                netaware_score_mode = FatTreeSwitch::NETAWARE_SCORE_WORST_HOP;
+            } else if (!strcmp(argv[i+1], "sglb_quantized")) {
+                netaware_score_mode = FatTreeSwitch::NETAWARE_SCORE_SGLB_QUANTIZED;
+            } else {
+                cerr << "Invalid netaware score mode " << argv[i+1]
+                     << "; expected gated, worst_hop, or sglb_quantized" << endl;
+                exit(1);
+            }
+            cout << "netaware score mode " << argv[i+1] << endl;
+            i++;
+        } else if (!strcmp(argv[i],"-netaware_score_q_range")){
+            netaware_score_q_min = atof(argv[i+1]);
+            netaware_score_q_max = atof(argv[i+2]);
+            if (netaware_score_q_min < 0.0)
+                netaware_score_q_min = 0.0;
+            if (netaware_score_q_min > 1.0)
+                netaware_score_q_min = 1.0;
+            if (netaware_score_q_max < 0.0)
+                netaware_score_q_max = 0.0;
+            if (netaware_score_q_max > 1.0)
+                netaware_score_q_max = 1.0;
+            if (netaware_score_q_max < netaware_score_q_min)
+                netaware_score_q_max = netaware_score_q_min;
+            cout << "netaware score queue range "
+                 << netaware_score_q_min << "/" << netaware_score_q_max << endl;
+            i += 2;
+        } else if (!strcmp(argv[i],"-netaware_path_coupling")){
+            if (!strcmp(argv[i+1], "additive")) {
+                netaware_path_coupling =
+                    FatTreeSwitch::NETAWARE_PATH_COUPLING_ADDITIVE;
+            } else if (!strcmp(argv[i+1], "bottleneck")) {
+                netaware_path_coupling =
+                    FatTreeSwitch::NETAWARE_PATH_COUPLING_BOTTLENECK;
+            } else if (!strcmp(argv[i+1], "noisy_or")) {
+                netaware_path_coupling =
+                    FatTreeSwitch::NETAWARE_PATH_COUPLING_NOISY_OR;
+            } else {
+                cerr << "Invalid netaware path coupling " << argv[i+1]
+                     << "; expected additive, bottleneck, or noisy_or" << endl;
+                exit(1);
+            }
+            cout << "netaware path coupling " << argv[i+1] << endl;
+            i++;
+        } else if (!strcmp(argv[i],"-netaware_score_util_range")){
+            netaware_score_util_low = atof(argv[i+1]);
+            netaware_score_util_high = atof(argv[i+2]);
+            if (netaware_score_util_low < 0.0)
+                netaware_score_util_low = 0.0;
+            if (netaware_score_util_low > 1.0)
+                netaware_score_util_low = 1.0;
+            if (netaware_score_util_high < 0.0)
+                netaware_score_util_high = 0.0;
+            if (netaware_score_util_high > 1.0)
+                netaware_score_util_high = 1.0;
+            if (netaware_score_util_high < netaware_score_util_low)
+                netaware_score_util_high = netaware_score_util_low;
+            cout << "netaware score utilization range "
+                 << netaware_score_util_low << "/" << netaware_score_util_high << endl;
+            i += 2;
+        } else if (!strcmp(argv[i],"-netaware_score_weights")){
+            netaware_score_weight_local_q = atof(argv[i+1]);
+            netaware_score_weight_remote_q = atof(argv[i+2]);
+            netaware_score_weight_local_util = atof(argv[i+3]);
+            netaware_score_weight_remote_util = atof(argv[i+4]);
+            if (netaware_score_weight_local_q < 0.0)
+                netaware_score_weight_local_q = 0.0;
+            if (netaware_score_weight_remote_q < 0.0)
+                netaware_score_weight_remote_q = 0.0;
+            if (netaware_score_weight_local_util < 0.0)
+                netaware_score_weight_local_util = 0.0;
+            if (netaware_score_weight_remote_util < 0.0)
+                netaware_score_weight_remote_util = 0.0;
+            cout << "netaware score weights "
+                 << netaware_score_weight_local_q << "/"
+                 << netaware_score_weight_remote_q << "/"
+                 << netaware_score_weight_local_util << "/"
+                 << netaware_score_weight_remote_util << endl;
+            i += 4;
+        } else if (!strcmp(argv[i],"-netaware_score_level_thresholds")){
+            netaware_score_degraded_threshold = atof(argv[i+1]);
+            netaware_score_bad_threshold = atof(argv[i+2]);
+            netaware_score_avoid_threshold = atof(argv[i+3]);
+            if (netaware_score_degraded_threshold < 0.0)
+                netaware_score_degraded_threshold = 0.0;
+            if (netaware_score_bad_threshold < 0.0)
+                netaware_score_bad_threshold = 0.0;
+            if (netaware_score_avoid_threshold < 0.0)
+                netaware_score_avoid_threshold = 0.0;
+            if (netaware_score_bad_threshold < netaware_score_degraded_threshold)
+                netaware_score_bad_threshold = netaware_score_degraded_threshold;
+            if (netaware_score_avoid_threshold < netaware_score_bad_threshold)
+                netaware_score_avoid_threshold = netaware_score_bad_threshold;
+            cout << "netaware score level thresholds "
+                 << netaware_score_degraded_threshold << "/"
+                 << netaware_score_bad_threshold << "/"
+                 << netaware_score_avoid_threshold << endl;
+            i += 3;
+        } else if (!strcmp(argv[i],"-netaware_level_weights")){
+            uint32_t good = atoi(argv[i+1]);
+            uint32_t degraded = atoi(argv[i+2]);
+            uint32_t bad = atoi(argv[i+3]);
+            uint32_t avoid = atoi(argv[i+4]);
+            RoceSrc::setNetawareLevelWeights(good, degraded, bad, avoid);
+            cout << "netaware level weights good " << good
+                 << " degraded " << degraded
+                 << " bad " << bad
+                 << " avoid " << avoid << endl;
+            i += 4;
+        } else if (!strcmp(argv[i],"-netaware_wrr_mode")){
+            if (!strcmp(argv[i+1], "shuffled_bucket")) {
+                RoceSrc::setNetawareWrrMode(RoceSrc::NETAWARE_WRR_SHUFFLED_BUCKET);
+                cout << "netaware WRR mode shuffled_bucket" << endl;
+            } else if (!strcmp(argv[i+1], "bucket")) {
+                RoceSrc::setNetawareWrrMode(RoceSrc::NETAWARE_WRR_BUCKET);
+                cout << "netaware WRR mode bucket" << endl;
+            } else if (!strcmp(argv[i+1], "direct")) {
+                RoceSrc::setNetawareWrrMode(RoceSrc::NETAWARE_WRR_DIRECT);
+                cout << "netaware WRR mode direct" << endl;
+            } else {
+                cerr << "Invalid netaware WRR mode " << argv[i+1]
+                     << "; expected shuffled_bucket, bucket, or direct" << endl;
+                exit(1);
+            }
+            i++;
+        } else if (!strcmp(argv[i],"-netaware_weight_adaptation")){
+            if (i + 1 >= argc) {
+                cerr << "Missing netaware weight adaptation mode" << endl;
+                exit(1);
+            }
+            if (!strcmp(argv[i+1], "off")) {
+                RoceSrc::setNetawareWeightAdaptation(
+                    RoceSrc::NETAWARE_WEIGHT_ADAPTATION_OFF);
+            } else if (!strcmp(argv[i+1], "good_share_cap")) {
+                RoceSrc::setNetawareWeightAdaptation(
+                    RoceSrc::NETAWARE_WEIGHT_ADAPTATION_GOOD_SHARE_CAP);
+            } else {
+                cerr << "Invalid netaware weight adaptation " << argv[i+1]
+                     << "; expected off or good_share_cap" << endl;
+                exit(1);
+            }
+            cout << "netaware weight adaptation "
+                 << RoceSrc::netawareWeightAdaptationName() << endl;
+            i++;
+        } else if (!strcmp(argv[i],"-netaware_trace_prefix")){
+            netaware_trace_prefix = argv[i+1];
+            cout << "netaware trace prefix " << netaware_trace_prefix << endl;
+            i++;
+        } else if (!strcmp(argv[i],"-netaware_trace_period_us")){
+            netaware_trace_period_us = atof(argv[i+1]);
+            if (netaware_trace_period_us <= 0.0)
+                netaware_trace_period_us = 0.1;
+            cout << "netaware path trace period " << netaware_trace_period_us << "us" << endl;
+            i++;
+        } else if (!strcmp(argv[i],"-nmrc_ev_mode")) {
+            if (!strcmp(argv[i+1], "encoded"))
+                nmrc_ev_mode = RoceSrc::NMRC_EV_ENCODED;
+            else if (!strcmp(argv[i+1], "random_matched"))
+                nmrc_ev_mode = RoceSrc::NMRC_EV_RANDOM_MATCHED;
+            else if (!strcmp(argv[i+1], "random32"))
+                nmrc_ev_mode = RoceSrc::NMRC_EV_RANDOM32;
             else {
-                cout << "Unknown n-mrc state mode " << argv[i+1] << endl;
-                exit_error(argv[0]);
+                cerr << "invalid n-MRC EV mode " << argv[i+1] << endl;
+                exit(1);
             }
-            cout << "n-mrc endpoint state mode " << argv[i+1] << endl;
+            nmrc_option_user_set = true;
             i++;
-        } else if (!strcmp(argv[i],"-nmrc_bad_cache_windows")){
-            nmrc_bad_cache_windows = 1;
-            nmrc_state_mode = 3;
-            cout << "n-mrc bad-cache uses canonical one-window mode; ignoring deprecated value "
-                 << argv[i+1] << endl;
-            i++;
-        } else if (!strcmp(argv[i],"-nmrc_weak_sample_pkts")){
-            nmrc_weak_sample_pkts = atoi(argv[i+1]);
-            cout << "n-mrc weak path sampling interval " << nmrc_weak_sample_pkts << " packets" << endl;
-            i++;
-        } else if (!strcmp(argv[i],"-nmrc_ecn_degrade")){
-            if (!strcmp(argv[i+1], "aggressive"))
-                nmrc_ecn_degrade_mode = 0;
-            else if (!strcmp(argv[i+1], "graded"))
-                nmrc_ecn_degrade_mode = 1;
+        } else if (!strcmp(argv[i],"-nmrc_reroute_policy")) {
+            if (!strcmp(argv[i+1], "any_better"))
+                nmrc_reroute_policy = FatTreeSwitch::NMRC_REROUTE_ANY_BETTER;
+            else if (!strcmp(argv[i+1], "better_ge3"))
+                nmrc_reroute_policy = FatTreeSwitch::NMRC_REROUTE_BETTER_GE3;
             else {
-                cout << "Unknown n-mrc ECN degrade mode " << argv[i+1] << endl;
-                exit_error(argv[0]);
+                cerr << "invalid n-MRC reroute policy " << argv[i+1] << endl;
+                exit(1);
             }
-            cout << "n-mrc ECN degrade mode " << argv[i+1] << endl;
+            nmrc_option_user_set = true;
             i++;
-        } else if (!strcmp(argv[i],"-nmrc_unknown_reopen")){
-            nmrc_unknown_reopen = true;
-            cout << "n-mrc unknown low-state reopen enabled" << endl;
-        } else if (!strcmp(argv[i],"-nmrc_select")){
-            if (strcmp(argv[i+1], "random") && strcmp(argv[i+1], "rr")) {
-                cout << "Unknown n-mrc select mode " << argv[i+1] << endl;
-                exit_error(argv[0]);
+        } else if (!strcmp(argv[i],"-nmrc_fastcnp")) {
+            if (!strcmp(argv[i+1], "on"))
+                nmrc_fastcnp = true;
+            else if (!strcmp(argv[i+1], "off"))
+                nmrc_fastcnp = false;
+            else {
+                cerr << "invalid n-MRC FastCNP mode " << argv[i+1] << endl;
+                exit(1);
             }
-            cout << "n-mrc select mode is canonical rr; ignoring deprecated value " << argv[i+1] << endl;
+            nmrc_option_user_set = true;
             i++;
-        } else if (!strcmp(argv[i],"-nmrc_ack_update")){
-            cout << "n-mrc per-ACK path update is disabled in canonical mode; ignoring deprecated value " << argv[i+1] << endl;
-            i++;
-        } else if (!strcmp(argv[i],"-nmrc_path_hash")){
-            if (strcmp(argv[i+1], "hash") && strcmp(argv[i+1], "direct") && strcmp(argv[i+1], "tier")) {
-                cout << "Unknown n-mrc path hash mode " << argv[i+1] << endl;
-                exit_error(argv[0]);
+        } else if (!strcmp(argv[i],"-avail_ecn_only")) {
+            avail_ecn_only = true;
+            cout << "avail ECN-only override enabled" << endl;
+        } else if (!strcmp(argv[i],"-grade_complex_score")) {
+            grade_complex_score = true;
+            cout << "grade complex score enabled" << endl;
+        } else if (!strcmp(argv[i],"-stor_score_profile")){
+            stor_score_profile_user_set = true;
+            if (!strcmp(argv[i+1], "original") ||
+                !strcmp(argv[i+1], "image") ||
+                !strcmp(argv[i+1], "legacy")) {
+                FatTreeSwitch::set_stor_score_profile(
+                    FatTreeSwitch::STOR_SCORE_PROFILE_ORIGINAL);
+            } else if (!strcmp(argv[i+1], "balanced") ||
+                       !strcmp(argv[i+1], "current") ||
+                       !strcmp(argv[i+1], "default")) {
+                FatTreeSwitch::set_stor_score_profile(
+                    FatTreeSwitch::STOR_SCORE_PROFILE_BALANCED);
+            } else if (!strcmp(argv[i+1], "simple")) {
+                FatTreeSwitch::set_stor_score_profile(
+                    FatTreeSwitch::STOR_SCORE_PROFILE_SIMPLE);
+            } else if (!strcmp(argv[i+1], "binary")) {
+                FatTreeSwitch::set_stor_score_profile(
+                    FatTreeSwitch::STOR_SCORE_PROFILE_BINARY);
+            } else {
+                cerr << "Unknown STOR score profile " << argv[i+1]
+                     << "; expected original, balanced, simple, or binary" << endl;
+                exit(1);
             }
-            cout << "n-mrc path hash is canonical tier EV mapping; ignoring deprecated value " << argv[i+1] << endl;
+            RoceSrc::setStorBinarySelector(
+                FatTreeSwitch::_stor_score_profile ==
+                    FatTreeSwitch::STOR_SCORE_PROFILE_BINARY);
+            cout << "stor score profile "
+                 << FatTreeSwitch::stor_score_profile_name() << endl;
             i++;
+        } else if (!strcmp(argv[i],"-stor_score_params")){
+            stor_score_profile_user_set = true;
+            int clean = atoi(argv[i+1]);
+            int ecn_add = atoi(argv[i+2]);
+            int trim_add = atoi(argv[i+3]);
+            int ecn_base = atoi(argv[i+4]);
+            int trim_base = atoi(argv[i+5]);
+            if (clean < 0) clean = 0;
+            if (ecn_add < 0) ecn_add = 0;
+            if (trim_add < 0) trim_add = 0;
+            if (ecn_base < 0) ecn_base = 0;
+            if (trim_base < 0) trim_base = 0;
+            if (clean > 255) clean = 255;
+            if (ecn_add > 255) ecn_add = 255;
+            if (trim_add > 255) trim_add = 255;
+            if (ecn_base > 255) ecn_base = 255;
+            if (trim_base > 255) trim_base = 255;
+            FatTreeSwitch::_stor_clean_gain = (uint8_t)clean;
+            FatTreeSwitch::_stor_ecn_acc_add = (uint8_t)ecn_add;
+            FatTreeSwitch::_stor_trim_acc_add = (uint8_t)trim_add;
+            FatTreeSwitch::_stor_ecn_base_penalty = (uint8_t)ecn_base;
+            FatTreeSwitch::_stor_trim_base_penalty = (uint8_t)trim_base;
+            FatTreeSwitch::set_stor_score_profile(
+                FatTreeSwitch::STOR_SCORE_PROFILE_CUSTOM);
+            RoceSrc::setStorBinarySelector(false);
+            cout << "stor score params clean " << clean
+                 << " ecn_add " << ecn_add
+                 << " trim_add " << trim_add
+                 << " ecn_base " << ecn_base
+                 << " trim_base " << trim_base << endl;
+            i += 5;
+        } else if (!strcmp(argv[i],"-stor_simple_score_params")) {
+            stor_score_profile_user_set = true;
+            int clean = atoi(argv[i+1]);
+            int penalty = atoi(argv[i+2]);
+            int good = atoi(argv[i+3]);
+            int degraded = atoi(argv[i+4]);
+            int bad = atoi(argv[i+5]);
+            if (clean < 0) clean = 0;
+            if (penalty < 0) penalty = 0;
+            if (good < 0) good = 0;
+            if (degraded < 0) degraded = 0;
+            if (bad < 0) bad = 0;
+            if (clean > 15) clean = 15;
+            if (penalty > 15) penalty = 15;
+            if (good > 15) good = 15;
+            if (degraded > good) degraded = good;
+            if (bad > degraded) bad = degraded;
+            FatTreeSwitch::set_stor_score_profile(
+                FatTreeSwitch::STOR_SCORE_PROFILE_SIMPLE);
+            RoceSrc::setStorBinarySelector(false);
+            FatTreeSwitch::_stor_simple_clean_gain = (uint8_t)clean;
+            FatTreeSwitch::_stor_simple_congestion_penalty = (uint8_t)penalty;
+            FatTreeSwitch::_stor_good_threshold = (uint8_t)good;
+            FatTreeSwitch::_stor_degraded_threshold = (uint8_t)degraded;
+            FatTreeSwitch::_stor_bad_threshold = (uint8_t)bad;
+            cout << "stor simple score params clean " << clean
+                 << " penalty " << penalty
+                 << " thresholds " << good << "/" << degraded
+                 << "/" << bad << endl;
+            i += 5;
+        } else if (!strcmp(argv[i],"-stor_level_thresholds")){
+            stor_score_profile_user_set = true;
+            int good = atoi(argv[i+1]);
+            int degraded = atoi(argv[i+2]);
+            int bad = atoi(argv[i+3]);
+            if (good < 0) good = 0;
+            if (degraded < 0) degraded = 0;
+            if (bad < 0) bad = 0;
+            if (good > 255) good = 255;
+            if (degraded > 255) degraded = 255;
+            if (bad > 255) bad = 255;
+            if (degraded > good)
+                degraded = good;
+            if (bad > degraded)
+                bad = degraded;
+            FatTreeSwitch::_stor_good_threshold = (uint8_t)good;
+            FatTreeSwitch::_stor_degraded_threshold = (uint8_t)degraded;
+            FatTreeSwitch::_stor_bad_threshold = (uint8_t)bad;
+            FatTreeSwitch::set_stor_score_profile(
+                FatTreeSwitch::STOR_SCORE_PROFILE_CUSTOM);
+            RoceSrc::setStorBinarySelector(false);
+            cout << "stor level thresholds good " << good
+                 << " degraded " << degraded
+                 << " bad " << bad << endl;
+            i += 3;
+        } else if (!strcmp(argv[i],"-stor_level_weights")){
+            uint32_t good = atoi(argv[i+1]);
+            uint32_t degraded = atoi(argv[i+2]);
+            uint32_t bad = atoi(argv[i+3]);
+            uint32_t avoid = atoi(argv[i+4]);
+            RoceSrc::setStorLevelWeights(good, degraded, bad, avoid);
+            cout << "stor level weights good " << good
+                 << " degraded " << degraded
+                 << " bad " << bad
+                 << " avoid " << avoid << endl;
+            i += 4;
         }
          else if (!strcmp(argv[i],"-pfc_thresholds")){
             low_pfc = atoi(argv[i+1]);
@@ -1238,8 +2243,59 @@ int main(int argc, char **argv) {
 
     srand(seed);
     srandom(seed);
+    RoceSrc::setNmrcEvSeed(seed);
+    RoceSrc::setNmrcEvMode(nmrc_ev_mode);
+
+    if (grade_complex_score && lb_scheme_name != "grade") {
+        cerr << "grade complex override requires -lb grade" << endl;
+        exit(1);
+    }
+    if (avail_ecn_only && lb_scheme_name != "avail") {
+        cerr << "avail ECN-only override requires -lb avail" << endl;
+        exit(1);
+    }
+    if (mrc_cooldown_reference_user_set && lb_scheme_name != "mrc") {
+        cerr << "MRC cooldown reference override requires -lb mrc" << endl;
+        exit(1);
+    }
+    if (nmrc_option_user_set && lb_scheme_name != "n-mrc") {
+        cerr << "n-MRC options require -lb n-mrc" << endl;
+        exit(1);
+    }
+    FatTreeSwitch::_stor_binary_trim_bad = !avail_ecn_only;
+    if (lb_scheme_name == "avail") {
+        if (stor_score_profile_user_set &&
+            FatTreeSwitch::_stor_score_profile !=
+                FatTreeSwitch::STOR_SCORE_PROFILE_BINARY) {
+            cerr << "avail requires the binary availability profile" << endl;
+            exit(1);
+        }
+        FatTreeSwitch::set_stor_score_profile(
+            FatTreeSwitch::STOR_SCORE_PROFILE_BINARY);
+        RoceSrc::setStorBinarySelector(true);
+    } else if (lb_scheme_name == "grade") {
+        if (stor_score_profile_user_set &&
+            FatTreeSwitch::_stor_score_profile ==
+                FatTreeSwitch::STOR_SCORE_PROFILE_BINARY) {
+            cerr << "grade requires a graded score profile" << endl;
+            exit(1);
+        }
+        if (grade_complex_score && stor_score_profile_user_set) {
+            cerr << "grade complex override cannot be combined with an explicit score profile" << endl;
+            exit(1);
+        }
+        if (!stor_score_profile_user_set)
+            FatTreeSwitch::set_stor_score_profile(
+                grade_complex_score ?
+                FatTreeSwitch::STOR_SCORE_PROFILE_BALANCED :
+                FatTreeSwitch::STOR_SCORE_PROFILE_SIMPLE);
+        RoceSrc::setStorBinarySelector(false);
+    }
 
     cout << "Parsed args\n";
+    if (sglb_background)
+        cout << "SGLB background links per direction "
+             << sglb_bg_links_per_direction << endl;
     if (!sglb_bg_packet_size)
         sglb_bg_packet_size = packet_size;
     Packet::set_packet_size(packet_size);
@@ -1254,16 +2310,96 @@ int main(int argc, char **argv) {
             cout << "MRC default receive mode sp (SACK/selective retransmission)" << endl;
         }
         if (!roce_cc_mode_user_set) {
-            roce_cc_mode = RoceSrc::CC_NONE;
-            cout << "MRC default cc none (ECN drives path avoidance, not DCQCN rate control)" << endl;
+            roce_cc_mode = RoceSrc::CC_DCQCN_VARIANT;
+            cout << "MRC default cc dcqcn_variant" << endl;
         }
         if (!ecn_thresh_user_set) {
             ecn_thresh = 0.8;
-            cout << "MRC default composite ECN threshold fraction " << ecn_thresh << endl;
+            cout << "MRC default composite RED ECN Kmax fraction " << ecn_thresh << endl;
         }
     }
 
-    source_pathid_lb = (roce_lb_mode == RoceSrc::LB_NMRC ||
+    if (roce_lb_mode == RoceSrc::LB_STOR) {
+        if (!queue_type_user_set) {
+            qt = COMPOSITE_ECN_LB;
+            cout << lb_scheme_name << " default queue_type composite_ecn_lb (trim + priority headers + ECN)" << endl;
+        }
+        if (!roce_rx_mode_user_set) {
+            roce_rx_mode = RoceSrc::RX_SP_RETX_QUEUE;
+            cout << lb_scheme_name << " default receive mode sp (SACK/selective retransmission)" << endl;
+        }
+        if (!roce_cc_mode_user_set) {
+            roce_cc_mode = RoceSrc::CC_DCQCN_VARIANT;
+            cout << lb_scheme_name << " default cc dcqcn_variant" << endl;
+        }
+        if (!ecn_thresh_user_set) {
+            ecn_thresh = 0.8;
+            cout << lb_scheme_name << " default composite RED ECN Kmax fraction " << ecn_thresh << endl;
+        }
+    }
+
+    if (roce_lb_mode == RoceSrc::LB_NETAWARE) {
+        if (!queue_type_user_set) {
+            qt = COMPOSITE_ECN_LB;
+            cout << "NetAware default queue_type composite_ecn_lb (trim + priority headers + ECN)" << endl;
+        }
+        if (!roce_rx_mode_user_set) {
+            roce_rx_mode = RoceSrc::RX_SP_RETX_QUEUE;
+            cout << "NetAware default receive mode sp (SACK/selective retransmission)" << endl;
+        }
+        if (!roce_cc_mode_user_set) {
+            roce_cc_mode = RoceSrc::CC_DCQCN_VARIANT;
+            cout << "NetAware default cc dcqcn_variant" << endl;
+        }
+        if (!ecn_thresh_user_set) {
+            ecn_thresh = 0.8;
+            cout << "NetAware default composite RED ECN Kmax fraction " << ecn_thresh << endl;
+        }
+    }
+
+    if (roce_lb_mode == RoceSrc::LB_NMRC) {
+        if (!queue_type_user_set) {
+            qt = COMPOSITE_ECN_LB;
+            cout << "n-MRC default queue_type composite_ecn_lb (trim + priority headers + ECN)" << endl;
+        }
+        if (!roce_rx_mode_user_set) {
+            roce_rx_mode = RoceSrc::RX_SP_RETX_QUEUE;
+            cout << "n-MRC default receive mode sp (SACK/selective retransmission)" << endl;
+        }
+        if (!roce_cc_mode_user_set) {
+            roce_cc_mode = RoceSrc::CC_DCQCN_VARIANT;
+            cout << "n-MRC default cc dcqcn_variant" << endl;
+        }
+        if (!ecn_thresh_user_set) {
+            ecn_thresh = 0.8;
+            cout << "n-MRC default composite RED ECN Kmax fraction " << ecn_thresh << endl;
+        }
+    }
+
+    if (roce_transport_semantics ==
+            RoceSrc::TRANSPORT_MRC_EXACT_BOUNDED &&
+        roce_rx_mode != RoceSrc::RX_SP_RETX_QUEUE) {
+        if (roce_rx_mode_user_set) {
+            cerr << "mrc_exact_bounded transport requires -roce_rx_mode sp"
+                 << endl;
+            exit(1);
+        }
+        roce_rx_mode = RoceSrc::RX_SP_RETX_QUEUE;
+        cout << "mrc_exact_bounded default receive mode sp "
+             << "(SACK/selective retransmission)" << endl;
+    }
+    if (roce_transport_semantics ==
+            RoceSrc::TRANSPORT_MRC_EXACT_BOUNDED &&
+        roce_trim_recovery_user_set &&
+        RoceSrc::trimRecoveryMode() != RoceSrc::TRIM_RECOVERY_EXACT_PSN) {
+        cerr << "mrc_exact_bounded transport requires exact Trim recovery; "
+             << "use legacy for cumulative recovery" << endl;
+        exit(1);
+    }
+
+    source_pathid_lb = (roce_lb_mode == RoceSrc::LB_STOR ||
+                        roce_lb_mode == RoceSrc::LB_NETAWARE ||
+                        roce_lb_mode == RoceSrc::LB_NMRC ||
                         roce_lb_mode == RoceSrc::LB_MRC ||
                         roce_lb_mode == RoceSrc::LB_RR ||
                         roce_lb_mode == RoceSrc::LB_CONWEAVE ||
@@ -1285,6 +2421,11 @@ int main(int argc, char **argv) {
                                                 Packet::data_packet_size());
     if (!estimated_bdp_pkts)
         estimated_bdp_pkts = 1;
+    if (!mrc_cooldown_reference_user_set)
+        mrc_cooldown_reference_pkts = estimated_bdp_pkts;
+    RoceSrc::setMrcCooldownReferencePkts(mrc_cooldown_reference_pkts);
+    const char* mrc_cooldown_reference_source =
+        mrc_cooldown_reference_user_set ? "explicit" : "topology_bdp";
 
     if (!queue_user_set) {
         queuesize = estimated_bdp_pkts;
@@ -1304,8 +2445,8 @@ int main(int argc, char **argv) {
              << high_pfc << " low " << low_pfc << " packets" << endl;
     }
 
-    if (nmrc_feedback_max_us < nmrc_feedback_min_us)
-        nmrc_feedback_max_us = nmrc_feedback_min_us;
+    if (stor_feedback_max_us < stor_feedback_min_us)
+        stor_feedback_max_us = stor_feedback_min_us;
 
     if (roce_rx_mode == RoceSrc::RX_SP_RETX_QUEUE) {
         if (!roce_rto_user_set) {
@@ -1357,18 +2498,71 @@ int main(int argc, char **argv) {
     FatTreeSwitch::_ar_sticky = ar_granularity;
     FatTreeSwitch::_sticky_delta = timeFromUs(ar_sticky_delta);
     FatTreeSwitch::_ecn_threshold_fraction = ecn_thresh;
-    FatTreeSwitch::_nmrc_feedback_min_interval = timeFromUs(nmrc_feedback_min_us);
-    FatTreeSwitch::_nmrc_feedback_max_interval = timeFromUs(nmrc_feedback_max_us);
-    FatTreeSwitch::_pathid_only_hash = source_pathid_lb;
-    if (FatTreeSwitch::_strategy == FatTreeSwitch::GLB) {
-        cout << "GLB effective config: GCN update "
-             << timeAsUs(FatTreeSwitch::_glb_gcn_update_interval)
-             << "us, aging " << timeAsUs(FatTreeSwitch::_glb_gcn_aging_interval)
-             << "us, quality levels " << FatTreeSwitch::_glb_quality_levels
-             << ", bucket " << FatTreeSwitch::_glb_quality_bucket
-             << ", min choices " << FatTreeSwitch::_glb_min_choices
-             << ", downstream weight " << FatTreeSwitch::_glb_downstream_weight
-             << ", local damping " << (FatTreeSwitch::_glb_local_damping ? "on" : "off")
+    FatTreeSwitch::_stor_feedback_min_interval = timeFromUs(stor_feedback_min_us);
+    FatTreeSwitch::_stor_feedback_max_interval = timeFromUs(stor_feedback_max_us);
+    FatTreeSwitch::_stor_trim_feedback_min_interval =
+        timeFromUs(stor_trim_feedback_min_us);
+    FatTreeSwitch::set_stor_aging_profile(stor_aging);
+    FatTreeSwitch::_stor_time_ecn_tau = timeFromUs(stor_time_ecn_tau_us);
+    FatTreeSwitch::_stor_time_trim_tau = timeFromUs(stor_time_trim_tau_us);
+    FatTreeSwitch::_stor_time_score_tau = timeFromUs(stor_time_score_tau_us);
+    FatTreeSwitch::_stor_hybrid_bad_hold =
+        timeFromUs(stor_hybrid_bad_hold_us);
+    FatTreeSwitch::_stor_hybrid_avoid_hold =
+        timeFromUs(stor_hybrid_avoid_hold_us);
+    FatTreeSwitch::_stor_hybrid_probe_interval_pkts =
+        stor_hybrid_probe_interval_pkts;
+    FatTreeSwitch::_stor_hybrid_probe_clean_promote =
+        stor_hybrid_probe_clean_promote;
+    FatTreeSwitch::_netaware_degraded_queue_fraction = netaware_degraded_queue_threshold;
+    FatTreeSwitch::_netaware_bad_queue_fraction = netaware_bad_queue_threshold;
+    FatTreeSwitch::_netaware_queue_threshold_fraction = netaware_queue_threshold;
+    FatTreeSwitch::_netaware_util_queue_floor_fraction = netaware_util_queue_floor_threshold;
+    FatTreeSwitch::_netaware_degraded_utilization_fraction = netaware_degraded_utilization_threshold;
+    FatTreeSwitch::_netaware_score_mode = netaware_score_mode;
+    FatTreeSwitch::_netaware_path_coupling = netaware_path_coupling;
+    FatTreeSwitch::_netaware_score_q_min = netaware_score_q_min;
+    FatTreeSwitch::_netaware_score_q_max = netaware_score_q_max;
+    FatTreeSwitch::_netaware_score_util_low = netaware_score_util_low;
+    FatTreeSwitch::_netaware_score_util_high = netaware_score_util_high;
+    FatTreeSwitch::_netaware_score_weight_local_q = netaware_score_weight_local_q;
+    FatTreeSwitch::_netaware_score_weight_remote_q = netaware_score_weight_remote_q;
+    FatTreeSwitch::_netaware_score_weight_local_util = netaware_score_weight_local_util;
+    FatTreeSwitch::_netaware_score_weight_remote_util = netaware_score_weight_remote_util;
+    FatTreeSwitch::_netaware_score_degraded_threshold = netaware_score_degraded_threshold;
+    FatTreeSwitch::_netaware_score_bad_threshold = netaware_score_bad_threshold;
+    FatTreeSwitch::_netaware_score_avoid_threshold = netaware_score_avoid_threshold;
+    FatTreeSwitch::_pathid_only_hash = source_pathid_lb &&
+        (roce_lb_mode != RoceSrc::LB_NMRC ||
+         nmrc_ev_mode == RoceSrc::NMRC_EV_ENCODED);
+    FatTreeSwitch::_nmrc_hybrid_enabled =
+        roce_lb_mode == RoceSrc::LB_NMRC;
+    FatTreeSwitch::_nmrc_fastcnp_enabled = nmrc_fastcnp;
+    FatTreeSwitch::_nmrc_reroute_policy = nmrc_reroute_policy;
+    if (roce_lb_mode == RoceSrc::LB_NMRC) {
+        FatTreeSwitch::_sglb_score_mode =
+            FatTreeSwitch::SGLB_SCORE_NMRC_QUANTIZED_TOPK;
+        FatTreeSwitch::_sglb_nmrc_levels = 4;
+    }
+    if (FatTreeSwitch::_strategy == FatTreeSwitch::SGLB) {
+        cout << "SGLB effective config: score mode "
+             << FatTreeSwitch::sglb_score_mode_name()
+             << ", local quality update "
+             << timeAsUs(FatTreeSwitch::_sglb_update_interval)
+             << "us, GCN update " << timeAsUs(FatTreeSwitch::_sglb_gcn_update_interval)
+             << "us, aging " << timeAsUs(FatTreeSwitch::_sglb_gcn_aging_interval)
+             << "us, quality levels " << FatTreeSwitch::_sglb_quality_levels
+             << ", bucket " << FatTreeSwitch::_sglb_quality_bucket
+             << ", min choices " << FatTreeSwitch::_sglb_min_choices
+             << ", n-mrc q range " << FatTreeSwitch::_sglb_nmrc_q_min
+             << "/" << FatTreeSwitch::_sglb_nmrc_q_max
+             << ", netaware thresholds "
+             << FatTreeSwitch::_sglb_nmrc_degraded_threshold << "/"
+             << FatTreeSwitch::_sglb_nmrc_bad_threshold << "/"
+             << FatTreeSwitch::_sglb_nmrc_avoid_threshold
+             << ", nmrc_levels " << FatTreeSwitch::_sglb_nmrc_levels
+             << ", downstream weight " << FatTreeSwitch::_sglb_downstream_weight
+             << ", local damping " << (FatTreeSwitch::_sglb_local_damping ? "on" : "off")
              << endl;
     }
 
@@ -1376,6 +2570,11 @@ int main(int argc, char **argv) {
     RoceSrc::setPathEntropySize(path_entropy_size);
     RoceSrc::setSackBitmapBits(roce_sack_bitmap_bits);
     RoceSrc::setReceiveMode(roce_rx_mode);
+    RoceSrc::setTransportSemantics(roce_transport_semantics);
+    if (roce_transport_semantics ==
+            RoceSrc::TRANSPORT_MRC_EXACT_BOUNDED) {
+        RoceSrc::setTrimRecoveryMode(RoceSrc::TRIM_RECOVERY_EXACT_PSN);
+    }
     RoceSrc::setOooTolerance(timeFromUs(roce_ooo_us));
     RoceSrc::setOooWindowPkts(roce_ooo_window_pkts);
     RoceSrc::setNackInterval(timeFromUs(roce_nack_interval_us));
@@ -1390,14 +2589,39 @@ int main(int argc, char **argv) {
     RoceSrc::setConweaveRttThreshold(timeFromUs(conweave_rtt_us));
     RoceSrc::setConweaveMinRerouteGap(timeFromUs(conweave_min_reroute_us));
     RoceSrc::setNdpInitialWindow(ndp_cwnd);
+    cout << "FinalCcMrcConfig dcqcn_variant_inflate="
+         << (roce_transport_semantics ==
+                 RoceSrc::TRANSPORT_MRC_EXACT_BOUNDED ?
+             "disabled" :
+             (roce_cc_mode == RoceSrc::CC_DCQCN_VARIANT_NODUP_OLD ?
+                 "natural_nodup_old" : "natural")) << " "
+         << "mrc_ecn_trim_penalty=mode_uniform "
+         << "roce_trim_recovery=" << RoceSrc::trimRecoveryModeName()
+         << endl;
+    cout << "RoceTransportConfig semantics="
+         << RoceSrc::transportSemanticsName()
+         << " awnd="
+         << (roce_transport_semantics ==
+                 RoceSrc::TRANSPORT_MRC_EXACT_BOUNDED ?
+             "cwnd_minus_inflight" : "legacy")
+         << " exact_trim_attempt_id="
+         << (roce_transport_semantics ==
+                 RoceSrc::TRANSPORT_MRC_EXACT_BOUNDED ? "on" : "off")
+         << " recovery_reserve_bytes="
+         << (roce_transport_semantics ==
+                 RoceSrc::TRANSPORT_MRC_EXACT_BOUNDED ? packet_size : 0)
+         << endl;
     RoceSrc::setCongestionControl(roce_cc_mode);
+    if (roce_cc_mode == RoceSrc::CC_DCQCN)
+        RoceSrc::printDcqcnConfiguration(cout);
     if (!cc_iw_pkts) {
         if (roce_cc_mode == RoceSrc::CC_DCQCN ||
-            roce_cc_mode == RoceSrc::CC_DCQCN_VARIANT) {
-            cc_iw_pkts = (uint32_t)ceil(0.4 * (double)estimated_bdp_pkts);
+            roce_cc_mode == RoceSrc::CC_DCQCN_VARIANT ||
+            roce_cc_mode == RoceSrc::CC_DCQCN_VARIANT_NODUP_OLD) {
+            cc_iw_pkts = estimated_bdp_pkts;
             if (!cc_iw_pkts)
                 cc_iw_pkts = 1;
-            cout << "Default RoCE CC flight cap 0.4BDP = "
+            cout << "Default RoCE CC flight cap 1BDP = "
                  << cc_iw_pkts << " packets" << endl;
         } else {
             cc_iw_pkts = queuesize ? queuesize : 1;
@@ -1417,14 +2641,6 @@ int main(int argc, char **argv) {
 
     eventlist.setEndtime(timeFromUs((uint32_t)end_time));
     queuesize = memFromPkt(queuesize);
-    if (qt == LOSSY_INPUT_ECN) {
-        cout << "Lossy input ECN queue: finite queue, no PFC, dequeue RED ECN Kmin "
-             << (queuesize / 5) / Packet::data_packet_size()
-             << " pkts, Kmax "
-             << (queuesize * 4 / 5) / Packet::data_packet_size()
-             << " pkts" << endl;
-    }
-    
     switch (route_strategy) {
     case ECMP_FIB:
     case SCATTER_ECMP:
@@ -1531,9 +2747,37 @@ int main(int argc, char **argv) {
         sglb_bg_drop = new SglbBackgroundDropSink();
         uint32_t added = install_sglb_background(
             top, eventlist, sglb_bg_sources, sglb_bg_drop,
+            sglb_bg_links_per_direction,
             sglb_bg_rate_gbps, sglb_bg_packet_size,
             timeFromUs(sglb_bg_on_us), timeFromUs(sglb_bg_off_us));
         cout << "SGLB background installed " << added << " fixed-link sources" << endl;
+    }
+    if (path_hotspot_spines) {
+        if (top->get_tiers() != 2) {
+            cerr << "Path hotspot fixed-link background only supports 2-tier topologies"
+                 << endl;
+            exit(1);
+        }
+        if (path_hotspot_bg_rate_gbps <= 0.0 || path_hotspot_bg_on_us <= 0.0) {
+            cerr << "Path hotspot background requires positive rate and ON time"
+                 << endl;
+            exit(1);
+        }
+        if (!sglb_bg_drop)
+            sglb_bg_drop = new SglbBackgroundDropSink();
+        uint32_t packet_size = sglb_bg_packet_size ?
+            sglb_bg_packet_size : Packet::data_packet_size();
+        uint32_t hot_spines = std::min(path_hotspot_spines, top->getNAGG());
+        uint32_t added = install_path_hotspot_background(
+            top, eventlist, sglb_bg_sources, sglb_bg_drop,
+            hot_spines, path_hotspot_bg_rate_gbps, packet_size,
+            timeFromUs(path_hotspot_bg_on_us),
+            timeFromUs(path_hotspot_bg_off_us));
+        cout << "Path hotspot background installed " << added
+             << " fixed-link sources hot_spines " << hot_spines
+             << " rate " << path_hotspot_bg_rate_gbps
+             << "Gbps on " << path_hotspot_bg_on_us
+             << "us off " << path_hotspot_bg_off_us << "us" << endl;
     }
 
     SglbQueueCvSampler* queue_cv_sampler = NULL;
@@ -1543,92 +2787,303 @@ int main(int argc, char **argv) {
         cout << "Queue CV sampler enabled every " << queue_cv_sample_us << "us" << endl;
     }
 
-    if (source_pathid_lb) {
-        uint32_t path_combo = top->radix_up(TOR_TIER);
-        if (top->get_tiers() == 3) {
-            path_combo *= top->radix_up(AGG_TIER);
-            path_combo *= top->bundlesize(CORE_TIER);
-            path_combo *= top->bundlesize(AGG_TIER);
-        } else {
-            path_combo *= top->bundlesize(AGG_TIER);
-        }
+    uint32_t topology_path_combo = top->radix_up(TOR_TIER);
+    if (top->get_tiers() == 3) {
+        topology_path_combo *= top->radix_up(AGG_TIER);
+        topology_path_combo *= top->bundlesize(CORE_TIER);
+        topology_path_combo *= top->bundlesize(AGG_TIER);
+    } else {
+        topology_path_combo *= top->bundlesize(AGG_TIER);
+    }
+    if (!topology_path_combo)
+        topology_path_combo = 1;
 
-        if (path_combo > 0 && path_combo != path_entropy_size) {
+    if (source_pathid_lb) {
+        if (topology_path_combo != path_entropy_size) {
             cout << "source-controlled tier path count adjusted from " << path_entropy_size
-                 << " to " << path_combo
+                 << " to " << topology_path_combo
                  << " to match topology path combinations" << endl;
-            path_entropy_size = path_combo;
+            path_entropy_size = topology_path_combo;
             RoceSrc::setPathEntropySize(path_entropy_size);
         }
     }
-    RoceSrc::setNmrcHostsPerTor(top->radix_down(TOR_TIER));
+    RoceSrc::setDiagPhysicalPathSpace(topology_path_combo);
+    RoceSrc::resetPathSelectionDiag();
+    FatTreeSwitch::reset_sglb_route_diag();
+    FatTreeSwitch::reset_nmrc_hybrid_diag();
+    RoceSrc::setHostsPerTor(top->radix_down(TOR_TIER));
 
-    uint32_t nmrc_path_space = path_entropy_size ? path_entropy_size : 1;
-    FatTreeSwitch::_nmrc_path_count = nmrc_path_space;
-    uint32_t auto_nmrc_feedback_pkts = nmrc_path_space / 2;
-    if (auto_nmrc_feedback_pkts < 32)
-        auto_nmrc_feedback_pkts = 32;
-    if (auto_nmrc_feedback_pkts > 128)
-        auto_nmrc_feedback_pkts = 128;
-
-    FatTreeSwitch::_nmrc_feedback_pkts = auto_nmrc_feedback_pkts;
-    FatTreeSwitch::_nmrc_feedback_bad_only = nmrc_state_mode == 3;
-    FatTreeSwitch::_nmrc_feedback_observed_values = !FatTreeSwitch::_nmrc_feedback_bad_only &&
-                                                    (nmrc_state_mode == 1 || nmrc_state_mode == 2);
-    uint32_t effective_nmrc_min_good_paths = nmrc_path_space / 2;
-    if (effective_nmrc_min_good_paths < 1)
-        effective_nmrc_min_good_paths = 1;
-    if (effective_nmrc_min_good_paths > 16)
-        effective_nmrc_min_good_paths = 16;
+    uint32_t path_space = path_entropy_size ? path_entropy_size : 1;
+    FatTreeSwitch::_netaware_path_count = path_space;
+    FatTreeSwitch::_netaware_enabled = roce_lb_mode == RoceSrc::LB_NETAWARE;
+    FatTreeSwitch::_stor_path_count = path_space;
+    FatTreeSwitch::_stor_enabled = roce_lb_mode == RoceSrc::LB_STOR;
+    uint32_t auto_stor_feedback_pkts = lb_scheme_name == "avail" ?
+        FatTreeSwitch::avail_default_feedback_pkts(path_space) :
+        FatTreeSwitch::grade_default_feedback_pkts(path_space);
+    const double netaware_feedback_min_us =
+        FatTreeSwitch::netaware_default_feedback_min_us(path_space);
+    const double netaware_feedback_max_us =
+        FatTreeSwitch::netaware_default_feedback_max_us(path_space);
+    FatTreeSwitch::_netaware_feedback_min_interval = timeFromUs(netaware_feedback_min_us);
+    FatTreeSwitch::_netaware_feedback_max_interval = timeFromUs(netaware_feedback_max_us);
+    FatTreeSwitch::_netaware_feedback_pkts =
+        FatTreeSwitch::netaware_default_feedback_pkts(path_space);
+    FatTreeSwitch::_stor_feedback_pkts =
+        stor_feedback_pkts_user_set ? stor_feedback_pkts : auto_stor_feedback_pkts;
+    if (roce_lb_mode == RoceSrc::LB_NETAWARE) {
+        uint32_t netaware_bucket_size =
+            RoceSrc::netawareShuffledBucketSize(path_space);
+        cout << "netaware canonical: paths " << path_space
+             << ", feedback_pkts " << FatTreeSwitch::_netaware_feedback_pkts
+             << ", min_interval_us " << netaware_feedback_min_us
+             << ", max_interval_us " << netaware_feedback_max_us
+             << ", local_update_us "
+             << timeAsUs(FatTreeSwitch::_netaware_state_update_interval)
+             << ", remote_update_us "
+             << timeAsUs(FatTreeSwitch::_netaware_remote_update_interval)
+             << ", queue_threshold " << FatTreeSwitch::_netaware_queue_threshold_fraction
+             << ", grade_queue_thresholds "
+             << FatTreeSwitch::_netaware_degraded_queue_fraction << "/"
+             << FatTreeSwitch::_netaware_bad_queue_fraction << "/"
+             << FatTreeSwitch::_netaware_queue_threshold_fraction
+             << ", util_degrade "
+             << FatTreeSwitch::_netaware_util_queue_floor_fraction << "/"
+             << FatTreeSwitch::_netaware_degraded_utilization_fraction
+             << ", score_mode " << FatTreeSwitch::netaware_score_mode_name()
+             << ", path_coupling "
+             << FatTreeSwitch::netaware_path_coupling_name()
+             << ", score_q_range "
+             << FatTreeSwitch::_netaware_score_q_min << "/"
+             << FatTreeSwitch::_netaware_score_q_max
+             << ", score_util_range "
+             << FatTreeSwitch::_netaware_score_util_low << "/"
+             << FatTreeSwitch::_netaware_score_util_high
+             << ", score_weights "
+             << FatTreeSwitch::_netaware_score_weight_local_q << "/"
+             << FatTreeSwitch::_netaware_score_weight_remote_q << "/"
+             << FatTreeSwitch::_netaware_score_weight_local_util << "/"
+             << FatTreeSwitch::_netaware_score_weight_remote_util
+             << ", score_level_thresholds "
+             << FatTreeSwitch::_netaware_score_degraded_threshold << "/"
+             << FatTreeSwitch::_netaware_score_bad_threshold << "/"
+             << FatTreeSwitch::_netaware_score_avoid_threshold
+             << ", weights "
+             << RoceSrc::netawareLevelWeight(STOR_LEVEL_GOOD) << "/"
+             << RoceSrc::netawareLevelWeight(STOR_LEVEL_DEGRADED) << "/"
+             << RoceSrc::netawareLevelWeight(STOR_LEVEL_BAD) << "/"
+             << RoceSrc::netawareLevelWeight(STOR_LEVEL_AVOID)
+             << ", wrr_mode "
+             << RoceSrc::netawareWrrModeName()
+             << ", weight_adaptation "
+             << RoceSrc::netawareWeightAdaptationName()
+             << ", shuffled_bucket_size "
+             << netaware_bucket_size
+             << ", selector_impl shared_virtual"
+             << ", selector_state per_qp_counter"
+             << ", shared_profile tor_pair"
+             << endl;
+    }
+    if (roce_lb_mode == RoceSrc::LB_STOR) {
+        cout << lb_scheme_name << " canonical: paths " << path_space
+             << ", feedback_pkts " << FatTreeSwitch::_stor_feedback_pkts
+             << ", min_interval_us " << stor_feedback_min_us
+             << ", max_interval_us " << stor_feedback_max_us
+             << ", trim_min_interval_us " << stor_trim_feedback_min_us
+             << ", aging " << FatTreeSwitch::stor_aging_profile_name()
+             << ", ewma_tau_us "
+             << stor_time_ecn_tau_us << "/"
+             << stor_time_trim_tau_us << "/"
+             << stor_time_score_tau_us
+             << ", hybrid_hold_us "
+             << stor_hybrid_bad_hold_us << "/"
+             << stor_hybrid_avoid_hold_us
+             << ", hybrid_probe "
+             << stor_hybrid_probe_interval_pkts << "/"
+             << stor_hybrid_probe_clean_promote
+             << ", score_profile " << FatTreeSwitch::stor_score_profile_name()
+             << (lb_scheme_name == "grade" ?
+                    (FatTreeSwitch::_stor_score_profile ==
+                            FatTreeSwitch::STOR_SCORE_PROFILE_SIMPLE ?
+                        ", grade_score_mode simple" :
+                        ", grade_score_mode complex") : "")
+             << ", score clean " << (uint32_t)FatTreeSwitch::_stor_clean_gain
+             << " ecn_add " << (uint32_t)FatTreeSwitch::_stor_ecn_acc_add
+             << " trim_add " << (uint32_t)FatTreeSwitch::_stor_trim_acc_add
+             << " ecn_base " << (uint32_t)FatTreeSwitch::_stor_ecn_base_penalty
+             << " trim_base " << (uint32_t)FatTreeSwitch::_stor_trim_base_penalty
+             << ", simple max/clean/penalty "
+             << (uint32_t)FatTreeSwitch::_stor_simple_max_score << "/"
+             << (uint32_t)FatTreeSwitch::_stor_simple_clean_gain << "/"
+             << (uint32_t)FatTreeSwitch::_stor_simple_congestion_penalty
+             << ", thresholds "
+             << (uint32_t)FatTreeSwitch::_stor_good_threshold << "/"
+             << (uint32_t)FatTreeSwitch::_stor_degraded_threshold << "/"
+             << (uint32_t)FatTreeSwitch::_stor_bad_threshold
+             << ", weights "
+             << RoceSrc::storLevelWeight(STOR_LEVEL_GOOD) << "/"
+             << RoceSrc::storLevelWeight(STOR_LEVEL_DEGRADED) << "/"
+             << RoceSrc::storLevelWeight(STOR_LEVEL_BAD) << "/"
+             << RoceSrc::storLevelWeight(STOR_LEVEL_AVOID)
+             << ", wrr_mode "
+             << (RoceSrc::storBinarySelector() ?
+                    "bitmap" : "shuffled_bucket")
+             << ", shuffled_bucket_size "
+             << RoceSrc::weightedShuffledBucketSize(path_space)
+             << ", avoid_probe_interval "
+             << RoceSrc::weightedShuffledBucketSize(path_space)
+             << ", selector_impl shared_virtual"
+             << ", selector_state per_qp_counter"
+             << ", shared_profile tor_pair"
+             << (RoceSrc::storBinarySelector() ?
+                    (FatTreeSwitch::_stor_binary_trim_bad ?
+                        ", binary_bad_signal ecn_trim" :
+                        ", binary_bad_signal ecn_only") : "")
+             << ", endpoint preselected EV set, "
+             << (RoceSrc::storBinarySelector() ?
+                    (FatTreeSwitch::_stor_binary_trim_bad ?
+                        "source-ToR ACK-ECN/TRIM availability feedback" :
+                        "source-ToR ACK-ECN availability feedback") :
+                    "source-ToR ACK/TRIM graded feedback")
+             << endl;
+    }
     if (roce_lb_mode == RoceSrc::LB_NMRC) {
-        cout << "n-mrc canonical: paths " << nmrc_path_space
-             << ", feedback_pkts " << FatTreeSwitch::_nmrc_feedback_pkts
-             << ", min_interval_us " << nmrc_feedback_min_us
-             << ", max_interval_us " << nmrc_feedback_max_us
-             << ", min_good_paths " << effective_nmrc_min_good_paths
-             << ", bad_hold_down_us " << nmrc_bad_hold_down_us
-             << ", state_mode " << nmrc_state_mode
-             << ", bad_cache_windows " << nmrc_bad_cache_windows
-             << ", weak_sample_pkts " << nmrc_weak_sample_pkts
-             << ", ecn_degrade_mode " << nmrc_ecn_degrade_mode
-             << ", unknown_reopen " << nmrc_unknown_reopen << endl;
+        const char* ev_mode_name = nmrc_ev_mode == RoceSrc::NMRC_EV_ENCODED ?
+            "encoded" : (nmrc_ev_mode == RoceSrc::NMRC_EV_RANDOM_MATCHED ?
+                "random_matched" : "random32");
+        const char* reroute_policy_name =
+            nmrc_reroute_policy == FatTreeSwitch::NMRC_REROUTE_ANY_BETTER ?
+                "any_better" : "better_ge3";
+        uint32_t ev_set_size = nmrc_ev_mode == RoceSrc::NMRC_EV_RANDOM32 ?
+            32 : min(path_space, 32U);
+        cout << "HybridNmrcConfig ev_mode=" << ev_mode_name
+             << " reroute_policy=" << reroute_policy_name
+             << " fastcnp=" << (nmrc_fastcnp ? "on" : "off")
+             << " paths=" << path_space
+             << " ev_set_size=" << ev_set_size
+             << " ev_mapping="
+             << (nmrc_ev_mode == RoceSrc::NMRC_EV_ENCODED ?
+                    "path_unique" : "flow_ev_hash")
+             << endl;
     }
     if (roce_lb_mode == RoceSrc::LB_MRC) {
-        uint32_t effective_mrc_active = mrc_active_paths ? mrc_active_paths : nmrc_path_space;
-        uint32_t effective_mrc_backup = mrc_backup_paths ? mrc_backup_paths : effective_mrc_active;
-        uint32_t effective_mrc_logical = effective_mrc_active + effective_mrc_backup;
-        if (effective_mrc_logical < nmrc_path_space)
-            effective_mrc_logical = nmrc_path_space;
-        if (!effective_mrc_logical)
-            effective_mrc_logical = 1;
-        if (effective_mrc_active > effective_mrc_logical)
-            effective_mrc_active = effective_mrc_logical;
-        if (effective_mrc_backup > effective_mrc_logical - effective_mrc_active)
-            effective_mrc_backup = effective_mrc_logical - effective_mrc_active;
-        cout << "MRC: paths " << nmrc_path_space
-             << ", logical_evs " << effective_mrc_logical
-             << ", active_evs " << effective_mrc_active
-             << ", backup_evs " << effective_mrc_backup
+        const char* mrc_cooldown_mode_name =
+            mrc_cooldown_mode == RoceSrc::MRC_COOLDOWN_ONE_CYCLE ?
+            "one_cycle" : "cwnd_scaled";
+        mrc_logical_evs = path_space;
+        mrc_active_paths = path_space < 32 ? path_space : 32;
+        mrc_backup_paths = path_space - mrc_active_paths;
+        mrc_min_active_paths = 1;
+        uint32_t encoded_universe = path_space ? path_space : 1;
+        while (((uint64_t)1 << mrc_path_bits) < encoded_universe &&
+               mrc_path_bits < 31)
+            mrc_path_bits++;
+        uint32_t mrc_cwnd_scaled_rotations =
+            RoceSrc::mrcCwndScaledRotations(mrc_active_paths);
+        uint64_t mrc_cwnd_scaled_skip_selections =
+            RoceSrc::mrcCwndScaledSkipSelections(mrc_active_paths);
+        cout << "MRC: paths " << path_space
+             << ", mrc_ev_model encoded"
+             << ", physical_path_space " << path_space
+             << ", effective_physical_paths " << path_space
+             << ", logical_evs " << mrc_logical_evs
+             << ", active_evs " << mrc_active_paths
+             << ", backup_evs " << mrc_backup_paths
+             << ", path_bits " << mrc_path_bits
+             << ", unique_active_physical_paths " << mrc_active_paths
              << ", min_active_paths " << mrc_min_active_paths
-             << ", ecn_cooldown_us " << mrc_ecn_cooldown_us
+             << ", cooldown_mode " << mrc_cooldown_mode_name
+             << ", mrc_cooldown_mode " << mrc_cooldown_mode_name
+             << ", mrc_cooldown_reference "
+             << mrc_cooldown_reference_source
+             << ", mrc_cooldown_reference_pkts "
+             << RoceSrc::mrcCooldownReferencePkts()
+             << ", mrc_cwnd_scaled_rotations "
+             << mrc_cwnd_scaled_rotations
+             << ", mrc_cwnd_scaled_skip_selections "
+             << mrc_cwnd_scaled_skip_selections
              << ", failed_retry_us " << mrc_failed_retry_us
              << ", probe_interval_pkts " << mrc_probe_interval_pkts
-             << ", composite_ecn_threshold_fraction " << ecn_thresh << endl;
+             << ", source_pathid_mode true"
+             << ", ev_path_mapping encoded_identity"
+             << ", alias_ratio 1"
+             << ", mrc_alias_ratio 1"
+             << ", duplicate_physical_aliases false"
+             << ", composite_ecn_kmax_fraction " << ecn_thresh << endl;
+        cout << "MrcEvModelDiag "
+             << "mrc_ev_model=encoded"
+             << " mrc_active_evs=" << mrc_active_paths
+             << " mrc_backup_evs=" << mrc_backup_paths
+             << " mrc_logical_evs=" << mrc_logical_evs
+             << " mrc_effective_physical_paths=" << path_space
+             << " mrc_path_bits=" << mrc_path_bits
+             << " mrc_alias_ratio=1"
+             << " mrc_ev_path_mapping=encoded_identity"
+             << endl;
+        cout << "MrcCooldownDiag "
+             << "mrc_cooldown_mode=" << mrc_cooldown_mode_name
+             << " mrc_cooldown_reference="
+             << mrc_cooldown_reference_source
+             << " mrc_cooldown_reference_pkts="
+             << RoceSrc::mrcCooldownReferencePkts()
+             << " mrc_cwnd_scaled_rotations="
+             << mrc_cwnd_scaled_rotations
+             << " mrc_cwnd_scaled_skip_selections="
+             << mrc_cwnd_scaled_skip_selections
+             << endl;
+        cout << "MrcFallbackDiag "
+             << "mrc_all_cooling_fallback="
+             << (mrc_all_cooling_fallback ==
+                 RoceSrc::MRC_ALL_COOLING_EARLIEST ?
+                 "earliest" : "round_robin")
+             << endl;
     }
-    RoceSrc::setNmrcMinGoodPaths(effective_nmrc_min_good_paths);
-    RoceSrc::setNmrcBadHoldDown(timeFromUs(nmrc_bad_hold_down_us));
-    RoceSrc::setNmrcStateMode(nmrc_state_mode);
-    RoceSrc::setNmrcBadCacheWindows(nmrc_bad_cache_windows);
-    RoceSrc::setNmrcWeakSamplePkts(nmrc_weak_sample_pkts);
-    RoceSrc::setNmrcEcnDegradeMode(nmrc_ecn_degrade_mode);
-    RoceSrc::setNmrcUnknownReopen(nmrc_unknown_reopen);
-    RoceSrc::setMrcActivePaths(mrc_active_paths);
-    RoceSrc::setMrcBackupPaths(mrc_backup_paths);
-    RoceSrc::setMrcMinActivePaths(mrc_min_active_paths);
-    RoceSrc::setMrcEcnCooldown(timeFromUs(mrc_ecn_cooldown_us));
+    RoceSrc::setMrcCooldownMode(mrc_cooldown_mode);
+    RoceSrc::setMrcAllCoolingFallback(mrc_all_cooling_fallback);
     RoceSrc::setMrcFailedRetry(timeFromUs(mrc_failed_retry_us));
     RoceSrc::setMrcProbeIntervalPkts(mrc_probe_interval_pkts);
     RoceSrc::setPathEntropySize(path_entropy_size);
+
+    ofstream netaware_path_trace;
+    ofstream netaware_decision_trace;
+    NetawarePathStateTracer* netaware_path_tracer = NULL;
+    if (!netaware_trace_prefix.empty()) {
+        string path_trace_file = netaware_trace_prefix + "_path_state.csv";
+        string decision_trace_file = netaware_trace_prefix + "_nic_decisions.csv";
+        netaware_path_trace.open(path_trace_file.c_str());
+        if (!netaware_path_trace.is_open()) {
+            cerr << "Could not open netaware path trace " << path_trace_file << endl;
+            exit(1);
+        }
+        netaware_decision_trace.open(decision_trace_file.c_str());
+        if (!netaware_decision_trace.is_open()) {
+            cerr << "Could not open netaware decision trace " << decision_trace_file << endl;
+            exit(1);
+        }
+
+        netaware_path_trace
+            << "time_us,src_leaf,dst_leaf,path_id,spine_id,"
+            << "q_leaf_to_spine,q_spine_to_dst_leaf,"
+            << "q_leaf_to_spine_max,q_spine_to_dst_leaf_max,"
+            << "util_leaf_to_spine,util_spine_to_dst_leaf,"
+            << "link_rate_leaf_to_spine,link_rate_spine_to_dst_leaf,"
+            << "link_down,ecn_marks_on_path,trimmed_packets_on_path,"
+            << "dropped_packets_on_path,bytes_sent_on_path,"
+            << "local_q_pressure,remote_q_pressure,local_util_pressure,remote_util_pressure,path_score,netaware_level_reason,"
+            << "path_grade,path_weight\n";
+        netaware_decision_trace
+            << "time_us,qp_id,packet_id,selected_ev,selected_path_id,"
+            << "selected_grade,selected_weight,bucket_epoch,profile_version,"
+            << "selected_bucket_tickets,bucket_allocation\n";
+        netaware_path_tracer = new NetawarePathStateTracer(
+            eventlist, top, timeFromUs(netaware_trace_period_us),
+            path_space, &netaware_path_trace);
+        netaware_path_tracer->start();
+        RoceSrc::setNetawareDecisionTrace(&netaware_decision_trace);
+        cout << "netaware traces enabled: " << path_trace_file
+             << " and " << decision_trace_file
+             << " every " << netaware_trace_period_us << "us" << endl;
+    }
 
     vector<const Route*>*** net_paths;
     net_paths = new vector<const Route*>**[no_of_nodes];
@@ -1718,6 +3173,8 @@ int main(int argc, char **argv) {
 
         linkspeed_bps src_rate = crt->rate_mbps ? speedFromMbps((uint64_t)crt->rate_mbps) : linkspeed;
         roceSrc = new RoceSrc(NULL, NULL, eventlist, src_rate);
+        if (log_traffic)
+            roceSrc->set_traffic_logger(&traffic_logger);
         roceRtxScanner.registerRoce(*roceSrc);
 
         roce_srcs.push_back(roceSrc);
@@ -1782,6 +3239,8 @@ int main(int argc, char **argv) {
             assert(top->switches_lp[top->HOST_POD_SWITCH(src)]);
             top->switches_lp[top->HOST_POD_SWITCH(src)]->addHostPort(src,roceSrc->flow_id(),roceSrc);
             top->switches_lp[top->HOST_POD_SWITCH(dest)]->addHostPort(dest,roceSrc->flow_id(),roceSnk);
+            if (debug_flow_ids.find(roceSrc->flow_id()) != debug_flow_ids.end())
+                roceSrc->log_me();
         } else {
             int choice = rand()%net_paths[src][dest]->size();
             routeout = new Route(*(net_paths[src][dest]->at(choice)));
@@ -1844,34 +3303,556 @@ int main(int argc, char **argv) {
     cout << "Done" << endl;
     int new_pkts = 0, rtx_pkts = 0;
     uint64_t ack_pkts = 0, nack_pkts = 0;
+    uint64_t ooo_nacks = 0, trim_nacks = 0, loss_nacks = 0;
+    uint64_t ecn_echo_acks = 0, feedback_acks = 0, feedback_nacks = 0;
+    uint64_t duplicate_acks = 0, duplicate_inflate_suppressed = 0;
+    uint64_t bounded_inflight_final = 0, bounded_unique_acks = 0;
+    uint64_t bounded_recovery_inflight_final_bytes = 0;
+    uint32_t bounded_recovery_inflight_max_bytes = 0;
+    uint64_t bounded_stale_attempt_nacks = 0;
+    uint64_t bounded_duplicate_failure_nacks = 0;
+    uint64_t bounded_duplicate_confirmations_suppressed = 0;
+    uint64_t bounded_acked_revival_rejected = 0;
+    uint64_t bounded_attempt_wraps = 0;
+    uint64_t bounded_exact_trim_recoveries = 0;
+    uint64_t bounded_sack_loss_recoveries = 0;
+    uint64_t feedback_zero_bits = 0;
+    uint64_t netaware_ev_skips = 0, netaware_bitmap_fallbacks = 0;
+    uint64_t stor_selected_good = 0, stor_selected_degraded = 0;
+    uint64_t stor_selected_bad = 0, stor_selected_avoid = 0;
+    uint64_t reps_random_sends = 0, reps_cached_sends = 0;
+    uint64_t reps_clean_ack_cached = 0, reps_ecn_ack_discarded = 0;
+    uint64_t reps_buffer_occupancy_samples = 0;
+    map<uint32_t, uint64_t> reps_buffer_occupancy_hist;
+    uint64_t mrc_ecn_cooldown_events = 0;
+    uint64_t mrc_trim_events = 0, mrc_rto_fail_events = 0;
+    uint64_t mrc_trim_cooling_events = 0;
+    uint64_t mrc_nack_ooo_ignored_for_failure = 0;
+    uint64_t mrc_nack_loss_fail_events = 0;
+    uint64_t mrc_nack_unknown_ignored_for_failure = 0;
+    uint64_t mrc_failure_backup_promotions = 0;
+    uint64_t mrc_forced_cooling_use = 0;
+    uint64_t mrc_forced_cooling_earliest_use = 0;
+    uint64_t mrc_forced_cooling_round_robin_use = 0;
+    uint64_t mrc_feedback_exact_ev_events = 0;
+    uint64_t mrc_feedback_sequence_fallback_events = 0;
+    uint64_t mrc_feedback_physical_fallback_events = 0;
+    uint64_t mrc_feedback_cumulative_mismatch_events = 0;
+    uint64_t mrc_cycle_cooling_events = 0;
+    uint64_t mrc_cycle_cooling_expiries = 0;
+    uint64_t mrc_cooling_skip_selection_sum = 0;
+    uint64_t mrc_cooling_skip_selection_events = 0;
+    uint64_t mrc_cwnd_scaled_feedback_events = 0;
+    uint64_t mrc_cwnd_scaled_duplicate_feedback_ignored = 0;
+    uint64_t mrc_probe_events = 0, mrc_backup_replacement_events = 0;
+    uint64_t mrc_probe_success_events = 0, mrc_probe_fail_events = 0;
+    uint64_t mrc_backup_replacement_diff_physical = 0;
+    uint64_t mrc_retx_original_physical = 0;
+    uint64_t mrc_retx_different_physical = 0;
+    uint64_t mrc_retx_same_physical_new_ev = 0;
+    uint64_t mrc_retx_different_physical_new_ev = 0;
+    uint64_t mrc_retx_unknown_original = 0;
+    uint64_t mrc_retx_fallback_events = 0;
+    uint64_t nmrc_fastcnp_arrived = 0;
+    uint64_t nmrc_fastcnp_after_done = 0;
+    uint64_t nmrc_fastcnp_arrived_bytes = 0;
+    uint64_t nmrc_fastcnp_latency_sum = 0;
+    uint64_t nmrc_fastcnp_unknown_qp = 0;
+    uint64_t nmrc_fastcnp_unknown_ev = 0;
+    uint64_t nmrc_cooldown_starts = 0;
+    uint64_t nmrc_cooling_skips = 0;
+    uint64_t nmrc_cooling_recoveries = 0;
+    uint64_t nmrc_duplicate_notifications = 0;
+    uint64_t nmrc_all_cooling_fallbacks = 0;
+    uint64_t mrc_state_samples = 0, mrc_active_count_sum = 0;
+    uint64_t mrc_backup_count_sum = 0, mrc_cooling_count_sum = 0;
+    uint64_t mrc_failed_count_sum = 0;
+    uint64_t mrc_active_physical_count_sum = 0;
+    uint64_t mrc_cooling_physical_count_sum = 0;
+    uint64_t mrc_failed_physical_count_sum = 0;
+    uint32_t mrc_active_count_max = 0, mrc_backup_count_max = 0;
+    uint32_t mrc_cooling_count_max = 0, mrc_failed_count_max = 0;
+    uint32_t mrc_active_physical_count_max = 0;
+    uint32_t mrc_cooling_physical_count_max = 0;
+    uint32_t mrc_failed_physical_count_max = 0;
+    std::array<uint64_t, 5> mrc_final_state_counts = {{0, 0, 0, 0, 0}};
+    std::array<uint64_t, 5> mrc_final_physical_state_counts = {{0, 0, 0, 0, 0}};
+    uint64_t mrc_backup_remaining_final = 0;
+    map<uint32_t, uint64_t> mrc_ecn_physical_hist;
+    map<uint32_t, uint64_t> mrc_trim_physical_hist;
+    map<uint32_t, uint64_t> mrc_nack_physical_hist;
+    map<uint32_t, uint64_t> mrc_ooo_nack_physical_hist;
+    map<uint32_t, uint64_t> mrc_loss_nack_physical_hist;
     for (size_t ix = 0; ix < roce_srcs.size(); ix++) {
         new_pkts += roce_srcs[ix]->_new_packets_sent;
         rtx_pkts += roce_srcs[ix]->_rtx_packets_sent;
         ack_pkts += roce_srcs[ix]->_acks_received;
         nack_pkts += roce_srcs[ix]->_nacks_received;
+        ooo_nacks += roce_srcs[ix]->_ooo_nacks_received;
+        trim_nacks += roce_srcs[ix]->_trim_nacks_received;
+        loss_nacks += roce_srcs[ix]->_loss_nacks_received;
+        ecn_echo_acks += roce_srcs[ix]->_ecn_echo_acks_received;
+        duplicate_acks += roce_srcs[ix]->_duplicate_acks_received;
+        duplicate_inflate_suppressed +=
+            roce_srcs[ix]->_duplicate_ack_inflate_suppressed;
+        bounded_inflight_final += roce_srcs[ix]->_bounded_inflight_pkts;
+        bounded_unique_acks += roce_srcs[ix]->_bounded_unique_acks;
+        bounded_recovery_inflight_final_bytes +=
+            roce_srcs[ix]->_bounded_recovery_inflight_bytes;
+        bounded_recovery_inflight_max_bytes = max(
+            bounded_recovery_inflight_max_bytes,
+            roce_srcs[ix]->_bounded_recovery_inflight_max_bytes);
+        bounded_stale_attempt_nacks +=
+            roce_srcs[ix]->_bounded_stale_attempt_nacks;
+        bounded_duplicate_failure_nacks +=
+            roce_srcs[ix]->_bounded_duplicate_failure_nacks;
+        bounded_duplicate_confirmations_suppressed +=
+            roce_srcs[ix]->_bounded_duplicate_confirmations_suppressed;
+        bounded_acked_revival_rejected +=
+            roce_srcs[ix]->_bounded_acked_revival_rejected;
+        bounded_attempt_wraps += roce_srcs[ix]->_bounded_attempt_wraps;
+        bounded_exact_trim_recoveries +=
+            roce_srcs[ix]->_bounded_exact_trim_recoveries;
+        bounded_sack_loss_recoveries +=
+            roce_srcs[ix]->_bounded_sack_loss_recoveries;
+        feedback_acks += roce_srcs[ix]->_feedback_acks_received;
+        feedback_nacks += roce_srcs[ix]->_feedback_nacks_received;
+        feedback_zero_bits += roce_srcs[ix]->_feedback_zero_bits_received;
+        netaware_ev_skips += roce_srcs[ix]->_netaware_ev_skips;
+        netaware_bitmap_fallbacks += roce_srcs[ix]->_netaware_bitmap_fallbacks;
+        stor_selected_good += roce_srcs[ix]->_stor_selected_good;
+        stor_selected_degraded += roce_srcs[ix]->_stor_selected_degraded;
+        stor_selected_bad += roce_srcs[ix]->_stor_selected_bad;
+        stor_selected_avoid += roce_srcs[ix]->_stor_selected_avoid;
+        reps_random_sends += roce_srcs[ix]->_reps_random_sends;
+        reps_cached_sends += roce_srcs[ix]->_reps_cached_sends;
+        reps_clean_ack_cached += roce_srcs[ix]->_reps_clean_ack_cached;
+        reps_ecn_ack_discarded += roce_srcs[ix]->_reps_ecn_ack_discarded;
+        reps_buffer_occupancy_samples += roce_srcs[ix]->_reps_buffer_occupancy_samples;
+        for (map<uint32_t, uint64_t>::const_iterator it =
+                 roce_srcs[ix]->_reps_buffer_occupancy_hist.begin();
+             it != roce_srcs[ix]->_reps_buffer_occupancy_hist.end(); ++it) {
+            reps_buffer_occupancy_hist[it->first] += it->second;
+        }
+        mrc_ecn_cooldown_events += roce_srcs[ix]->_mrc_ecn_cooldown_events;
+        mrc_trim_events += roce_srcs[ix]->_mrc_trim_events;
+        mrc_rto_fail_events += roce_srcs[ix]->_mrc_rto_fail_events;
+        mrc_trim_cooling_events += roce_srcs[ix]->_mrc_trim_cooling_events;
+        mrc_nack_ooo_ignored_for_failure +=
+            roce_srcs[ix]->_mrc_nack_ooo_ignored_for_failure;
+        mrc_nack_loss_fail_events +=
+            roce_srcs[ix]->_mrc_nack_loss_fail_events;
+        mrc_nack_unknown_ignored_for_failure +=
+            roce_srcs[ix]->_mrc_nack_unknown_ignored_for_failure;
+        mrc_failure_backup_promotions +=
+            roce_srcs[ix]->_mrc_failure_backup_promotions;
+        mrc_forced_cooling_use += roce_srcs[ix]->_mrc_forced_cooling_use;
+        mrc_forced_cooling_earliest_use +=
+            roce_srcs[ix]->_mrc_forced_cooling_earliest_use;
+        mrc_forced_cooling_round_robin_use +=
+            roce_srcs[ix]->_mrc_forced_cooling_round_robin_use;
+        mrc_feedback_exact_ev_events +=
+            roce_srcs[ix]->_mrc_feedback_exact_ev_events;
+        mrc_feedback_sequence_fallback_events +=
+            roce_srcs[ix]->_mrc_feedback_sequence_fallback_events;
+        mrc_feedback_physical_fallback_events +=
+            roce_srcs[ix]->_mrc_feedback_physical_fallback_events;
+        mrc_feedback_cumulative_mismatch_events +=
+            roce_srcs[ix]->_mrc_feedback_cumulative_mismatch_events;
+        mrc_cycle_cooling_events +=
+            roce_srcs[ix]->_mrc_cycle_cooling_events;
+        mrc_cycle_cooling_expiries +=
+            roce_srcs[ix]->_mrc_cycle_cooling_expiries;
+        mrc_cooling_skip_selection_sum +=
+            roce_srcs[ix]->_mrc_cooling_skip_selection_sum;
+        mrc_cooling_skip_selection_events +=
+            roce_srcs[ix]->_mrc_cooling_skip_selection_events;
+        mrc_cwnd_scaled_feedback_events +=
+            roce_srcs[ix]->_mrc_cwnd_scaled_feedback_events;
+        mrc_cwnd_scaled_duplicate_feedback_ignored +=
+            roce_srcs[ix]->_mrc_cwnd_scaled_duplicate_feedback_ignored;
+        mrc_probe_events += roce_srcs[ix]->_mrc_probe_events;
+        mrc_probe_success_events += roce_srcs[ix]->_mrc_probe_success_events;
+        mrc_probe_fail_events += roce_srcs[ix]->_mrc_probe_fail_events;
+        mrc_backup_replacement_events += roce_srcs[ix]->_mrc_backup_replacement_events;
+        mrc_backup_replacement_diff_physical +=
+            roce_srcs[ix]->_mrc_backup_replacement_diff_physical;
+        mrc_retx_original_physical += roce_srcs[ix]->_mrc_retx_original_physical;
+        mrc_retx_different_physical += roce_srcs[ix]->_mrc_retx_different_physical;
+        mrc_retx_same_physical_new_ev +=
+            roce_srcs[ix]->_mrc_retx_same_physical_new_ev;
+        mrc_retx_different_physical_new_ev +=
+            roce_srcs[ix]->_mrc_retx_different_physical_new_ev;
+        mrc_retx_unknown_original += roce_srcs[ix]->_mrc_retx_unknown_original;
+        mrc_retx_fallback_events += roce_srcs[ix]->_mrc_retx_fallback_events;
+        nmrc_fastcnp_arrived += roce_srcs[ix]->_nmrc_fastcnp_arrived;
+        nmrc_fastcnp_after_done +=
+            roce_srcs[ix]->_nmrc_fastcnp_after_done;
+        nmrc_fastcnp_arrived_bytes += roce_srcs[ix]->_nmrc_fastcnp_bytes;
+        nmrc_fastcnp_latency_sum +=
+            roce_srcs[ix]->_nmrc_fastcnp_latency_sum;
+        nmrc_fastcnp_unknown_qp +=
+            roce_srcs[ix]->_nmrc_fastcnp_unknown_qp;
+        nmrc_fastcnp_unknown_ev +=
+            roce_srcs[ix]->_nmrc_fastcnp_unknown_ev;
+        nmrc_cooldown_starts +=
+            roce_srcs[ix]->nmrc_cooldown_starts_for_diag();
+        nmrc_cooling_skips +=
+            roce_srcs[ix]->nmrc_cooling_skips_for_diag();
+        nmrc_cooling_recoveries +=
+            roce_srcs[ix]->nmrc_cooling_recoveries_for_diag();
+        nmrc_duplicate_notifications +=
+            roce_srcs[ix]->nmrc_duplicate_notifications_for_diag();
+        nmrc_all_cooling_fallbacks +=
+            roce_srcs[ix]->nmrc_all_cooling_fallbacks_for_diag();
+        mrc_state_samples += roce_srcs[ix]->_mrc_state_samples;
+        mrc_active_count_sum += roce_srcs[ix]->_mrc_active_count_sum;
+        mrc_backup_count_sum += roce_srcs[ix]->_mrc_backup_count_sum;
+        mrc_cooling_count_sum += roce_srcs[ix]->_mrc_cooling_count_sum;
+        mrc_failed_count_sum += roce_srcs[ix]->_mrc_failed_count_sum;
+        mrc_active_physical_count_sum +=
+            roce_srcs[ix]->_mrc_active_physical_count_sum;
+        mrc_cooling_physical_count_sum +=
+            roce_srcs[ix]->_mrc_cooling_physical_count_sum;
+        mrc_failed_physical_count_sum +=
+            roce_srcs[ix]->_mrc_failed_physical_count_sum;
+        mrc_active_count_max = max(mrc_active_count_max,
+                                   roce_srcs[ix]->_mrc_active_count_max);
+        mrc_backup_count_max = max(mrc_backup_count_max,
+                                   roce_srcs[ix]->_mrc_backup_count_max);
+        mrc_cooling_count_max = max(mrc_cooling_count_max,
+                                    roce_srcs[ix]->_mrc_cooling_count_max);
+        mrc_failed_count_max = max(mrc_failed_count_max,
+                                   roce_srcs[ix]->_mrc_failed_count_max);
+        mrc_active_physical_count_max = max(mrc_active_physical_count_max,
+            roce_srcs[ix]->_mrc_active_physical_count_max);
+        mrc_cooling_physical_count_max = max(mrc_cooling_physical_count_max,
+            roce_srcs[ix]->_mrc_cooling_physical_count_max);
+        mrc_failed_physical_count_max = max(mrc_failed_physical_count_max,
+            roce_srcs[ix]->_mrc_failed_physical_count_max);
+        std::array<uint32_t, 5> states = roce_srcs[ix]->mrc_state_counts_for_diag();
+        for (size_t s = 0; s < states.size(); s++)
+            mrc_final_state_counts[s] += states[s];
+        std::array<uint32_t, 5> physical_states =
+            roce_srcs[ix]->mrc_state_physical_counts_for_diag();
+        for (size_t s = 0; s < physical_states.size(); s++)
+            mrc_final_physical_state_counts[s] += physical_states[s];
+        mrc_backup_remaining_final += roce_srcs[ix]->mrc_backup_remaining_for_diag();
+        for (map<uint32_t, uint64_t>::const_iterator it =
+                 roce_srcs[ix]->_mrc_ecn_physical_hist.begin();
+             it != roce_srcs[ix]->_mrc_ecn_physical_hist.end(); ++it)
+            mrc_ecn_physical_hist[it->first] += it->second;
+        for (map<uint32_t, uint64_t>::const_iterator it =
+                 roce_srcs[ix]->_mrc_trim_physical_hist.begin();
+             it != roce_srcs[ix]->_mrc_trim_physical_hist.end(); ++it)
+            mrc_trim_physical_hist[it->first] += it->second;
+        for (map<uint32_t, uint64_t>::const_iterator it =
+                 roce_srcs[ix]->_mrc_nack_physical_hist.begin();
+             it != roce_srcs[ix]->_mrc_nack_physical_hist.end(); ++it)
+            mrc_nack_physical_hist[it->first] += it->second;
+        for (map<uint32_t, uint64_t>::const_iterator it =
+                 roce_srcs[ix]->_mrc_ooo_nack_physical_hist.begin();
+             it != roce_srcs[ix]->_mrc_ooo_nack_physical_hist.end(); ++it)
+            mrc_ooo_nack_physical_hist[it->first] += it->second;
+        for (map<uint32_t, uint64_t>::const_iterator it =
+                 roce_srcs[ix]->_mrc_loss_nack_physical_hist.begin();
+             it != roce_srcs[ix]->_mrc_loss_nack_physical_hist.end(); ++it)
+            mrc_loss_nack_physical_hist[it->first] += it->second;
     }
     cout << "New: " << new_pkts << " Rtx: " << rtx_pkts << endl;
     cout << "RoceDiag "
          << "acks=" << ack_pkts
          << " nacks=" << nack_pkts
+         << " nacks_ooo=" << ooo_nacks
+         << " nacks_trim=" << trim_nacks
+         << " nacks_loss=" << loss_nacks
          << " rtos=" << RoceSrc::_global_rto_count
+         << " ecn_echo_acks=" << ecn_echo_acks
+         << " duplicate_acks=" << duplicate_acks
+         << " duplicate_inflate_suppressed=" << duplicate_inflate_suppressed
+         << " feedback_acks=" << feedback_acks
+         << " feedback_nacks=" << feedback_nacks
+         << " feedback_messages_total=" << feedback_acks + feedback_nacks
+         << " feedback_zero_bits=" << feedback_zero_bits
+         << " netaware_ev_skips=" << netaware_ev_skips
+         << " netaware_bitmap_fallbacks=" << netaware_bitmap_fallbacks
+         << " stor_selected_good=" << stor_selected_good
+         << " stor_selected_degraded=" << stor_selected_degraded
+         << " stor_selected_bad=" << stor_selected_bad
+         << " stor_selected_avoid=" << stor_selected_avoid
+         << endl;
+    cout << "BoundedRecoveryDiag "
+         << "semantics=" << RoceSrc::transportSemanticsName()
+         << " inflight_final=" << bounded_inflight_final
+         << " unique_acks=" << bounded_unique_acks
+         << " recovery_inflight_final_bytes="
+         << bounded_recovery_inflight_final_bytes
+         << " recovery_inflight_max_bytes="
+         << bounded_recovery_inflight_max_bytes
+         << " stale_attempt_nacks=" << bounded_stale_attempt_nacks
+         << " duplicate_failure_nacks=" << bounded_duplicate_failure_nacks
+         << " duplicate_confirmations_suppressed="
+         << bounded_duplicate_confirmations_suppressed
+         << " acked_revival_rejected=" << bounded_acked_revival_rejected
+         << " attempt_wraps=" << bounded_attempt_wraps
+         << " exact_trim_recoveries=" << bounded_exact_trim_recoveries
+         << " sack_loss_recoveries=" << bounded_sack_loss_recoveries
+         << endl;
+    uint64_t reps_total_sends = reps_random_sends + reps_cached_sends;
+    cout << "RepsLikeDiag "
+         << "random_sends=" << reps_random_sends
+         << " cached_sends=" << reps_cached_sends
+         << " cache_hit_ratio=" << (reps_total_sends ?
+                                    (double)reps_cached_sends / (double)reps_total_sends : 0.0)
+         << " clean_ack_cached=" << reps_clean_ack_cached
+         << " ecn_ack_discarded=" << reps_ecn_ack_discarded
+         << " buffer_occupancy_samples=" << reps_buffer_occupancy_samples
+         << " buffer_occupancy_hist=" << format_u32_u64_hist(reps_buffer_occupancy_hist)
+         << endl;
+    cout << "MrcDiag "
+         << "ecn_cooldown_events=" << mrc_ecn_cooldown_events
+         << " ecn_cooling_events=" << mrc_ecn_cooldown_events
+         << " trim_events=" << mrc_trim_events
+         << " rto_fail_events=" << mrc_rto_fail_events
+         << " trim_cooling_events=" << mrc_trim_cooling_events
+         << " nack_ooo_ignored_for_failure="
+         << mrc_nack_ooo_ignored_for_failure
+         << " nack_ooo_ignored_for_state="
+         << mrc_nack_ooo_ignored_for_failure
+         << " nack_loss_fail_events=" << mrc_nack_loss_fail_events
+         << " loss_fail_events=" << mrc_nack_loss_fail_events
+         << " nack_unknown_ignored_for_failure="
+         << mrc_nack_unknown_ignored_for_failure
+         << " feedback_exact_ev_events="
+         << mrc_feedback_exact_ev_events
+         << " feedback_sequence_fallback_events="
+         << mrc_feedback_sequence_fallback_events
+         << " feedback_physical_fallback_events="
+         << mrc_feedback_physical_fallback_events
+         << " feedback_cumulative_mismatch_events="
+         << mrc_feedback_cumulative_mismatch_events
+         << " failure_backup_promotions="
+         << mrc_failure_backup_promotions
+         << " forced_cooling_use=" << mrc_forced_cooling_use
+         << " forced_cooling_earliest_use="
+         << mrc_forced_cooling_earliest_use
+         << " forced_cooling_round_robin_use="
+         << mrc_forced_cooling_round_robin_use
+         << " cycle_cooling_events=" << mrc_cycle_cooling_events
+         << " cycle_cooling_expiries=" << mrc_cycle_cooling_expiries
+         << " cooling_skip_selection_sum="
+         << mrc_cooling_skip_selection_sum
+         << " cooling_skip_selection_events="
+         << mrc_cooling_skip_selection_events
+         << " cwnd_scaled_feedback_events="
+         << mrc_cwnd_scaled_feedback_events
+         << " cwnd_scaled_duplicate_feedback_ignored="
+         << mrc_cwnd_scaled_duplicate_feedback_ignored
+         << " cooling_skip_selection_avg="
+         << (mrc_cooling_skip_selection_events ?
+             (double)mrc_cooling_skip_selection_sum /
+             (double)mrc_cooling_skip_selection_events : 0.0)
+         << " probe_events=" << mrc_probe_events
+         << " probe_success_events=" << mrc_probe_success_events
+         << " probe_fail_events=" << mrc_probe_fail_events
+         << " backup_replacement_events=" << mrc_backup_replacement_events
+         << " backup_replacement_diff_physical="
+         << mrc_backup_replacement_diff_physical
+         << " retx_original_physical=" << mrc_retx_original_physical
+         << " retx_different_physical=" << mrc_retx_different_physical
+         << " retx_same_physical_new_ev=" << mrc_retx_same_physical_new_ev
+         << " retx_different_physical_new_ev="
+         << mrc_retx_different_physical_new_ev
+         << " retx_unknown_original=" << mrc_retx_unknown_original
+         << " retx_fallback_events=" << mrc_retx_fallback_events
+         << " state_samples=" << mrc_state_samples
+         << " active_avg=" << (mrc_state_samples ?
+                               (double)mrc_active_count_sum / (double)mrc_state_samples : 0.0)
+         << " backup_avg=" << (mrc_state_samples ?
+                               (double)mrc_backup_count_sum / (double)mrc_state_samples : 0.0)
+         << " cooling_avg=" << (mrc_state_samples ?
+                                (double)mrc_cooling_count_sum / (double)mrc_state_samples : 0.0)
+         << " failed_avg=" << (mrc_state_samples ?
+                               (double)mrc_failed_count_sum / (double)mrc_state_samples : 0.0)
+         << " active_physical_avg=" << (mrc_state_samples ?
+             (double)mrc_active_physical_count_sum / (double)mrc_state_samples : 0.0)
+         << " cooling_physical_avg=" << (mrc_state_samples ?
+             (double)mrc_cooling_physical_count_sum / (double)mrc_state_samples : 0.0)
+         << " failed_physical_avg=" << (mrc_state_samples ?
+             (double)mrc_failed_physical_count_sum / (double)mrc_state_samples : 0.0)
+         << " active_max=" << mrc_active_count_max
+         << " backup_max=" << mrc_backup_count_max
+         << " cooling_max=" << mrc_cooling_count_max
+         << " failed_max=" << mrc_failed_count_max
+         << " active_physical_max=" << mrc_active_physical_count_max
+         << " cooling_physical_max=" << mrc_cooling_physical_count_max
+         << " failed_physical_max=" << mrc_failed_physical_count_max
+         << " unused_final=" << mrc_final_state_counts[0]
+         << " active_final=" << mrc_final_state_counts[1]
+         << " cooling_final=" << mrc_final_state_counts[2]
+         << " failed_final=" << mrc_final_state_counts[3]
+         << " probing_final=" << mrc_final_state_counts[4]
+         << " unused_physical_final=" << mrc_final_physical_state_counts[0]
+         << " active_physical_final=" << mrc_final_physical_state_counts[1]
+         << " cooling_physical_final=" << mrc_final_physical_state_counts[2]
+         << " failed_physical_final=" << mrc_final_physical_state_counts[3]
+         << " probing_physical_final=" << mrc_final_physical_state_counts[4]
+         << " backup_remaining_final=" << mrc_backup_remaining_final
+         << " ecn_physical_hist=" << format_u32_u64_hist(mrc_ecn_physical_hist)
+         << " trim_physical_hist=" << format_u32_u64_hist(mrc_trim_physical_hist)
+         << " nack_physical_hist=" << format_u32_u64_hist(mrc_nack_physical_hist)
+         << " ooo_nack_physical_hist=" << format_u32_u64_hist(mrc_ooo_nack_physical_hist)
+         << " loss_nack_physical_hist=" << format_u32_u64_hist(mrc_loss_nack_physical_hist)
+         << endl;
+    const map<uint32_t, uint64_t>& selected_ev_hist = RoceSrc::diagSelectedEvHist();
+    const map<uint32_t, uint64_t>& selected_physical_hist = RoceSrc::diagSelectedPhysicalHist();
+    cout << "PathSelectDiag "
+         << "selected_total=" << RoceSrc::diagSelectedTotal()
+         << " unique_evs=" << selected_ev_hist.size()
+         << " unique_physical_mods=" << selected_physical_hist.size()
+         << " topology_path_combo=" << topology_path_combo
+         << " first128=" << format_u32_vector(RoceSrc::diagFirstSelectedEvs())
+         << " ev_hist_top=" << format_top_u32_u64_hist(selected_ev_hist, 32)
+         << " physical_mod_hist=" << format_u32_u64_hist(selected_physical_hist)
          << endl;
     QueueDiag queue_diag = collect_queue_diag(top);
     cout << "QueueDiag "
          << "lossless_overflows=" << queue_diag.lossless_overflows
+         << " lossless_ecn_marks=" << queue_diag.lossless_ecn_marks
          << " lossy_drops=" << queue_diag.lossy_drops
          << " lossy_ecn_marks=" << queue_diag.lossy_ecn_marks
          << " composite_trims=" << queue_diag.composite_trims
          << " composite_drops=" << queue_diag.composite_drops
          << " composite_ecn_marks=" << queue_diag.composite_ecn_marks
          << endl;
+    StorDiag stor_diag = collect_stor_diag(top);
+    cout << "StorDiag "
+         << "stor_min_score=" << (uint32_t)stor_diag.min_score
+         << " stor_avoid_entries=" << stor_diag.avoid_entries
+         << " stor_avoid_exits=" << stor_diag.avoid_exits
+         << " stor_clean_signals=" << stor_diag.clean_signals
+         << " stor_ecn_signals=" << stor_diag.ecn_signals
+         << " stor_trim_signals=" << stor_diag.trim_signals
+         << endl;
+    NetawareDiag netaware_diag = collect_netaware_diag(top);
+    cout << "NetawareDiag "
+         << "samples=" << netaware_diag.samples
+         << " sample_zero_bits=" << netaware_diag.sample_zero_bits
+         << " feedbacks=" << netaware_diag.feedbacks
+         << " packet_feedbacks=" << netaware_diag.packet_feedbacks
+         << " time_feedbacks=" << netaware_diag.time_feedbacks
+         << " feedback_packets_sum=" << netaware_diag.feedback_packets_sum
+         << " feedback_zero_bits=" << netaware_diag.feedback_zero_bits
+         << " all_good_feedbacks=" << netaware_diag.all_good_feedbacks
+         << endl;
+    if (roce_lb_mode == RoceSrc::LB_NMRC) {
+        map<uint32_t, uint64_t> better_count_hist;
+        for (uint32_t count = 0; count <= 32; count++) {
+            if (FatTreeSwitch::_nmrc_diag_better_count[count])
+                better_count_hist[count] =
+                    FatTreeSwitch::_nmrc_diag_better_count[count];
+        }
+        uint64_t observed_evs =
+            FatTreeSwitch::nmrc_diag_observed_evs();
+        uint64_t observed_paths =
+            FatTreeSwitch::nmrc_diag_observed_paths();
+        double observed_alias_ratio = observed_evs ?
+            1.0 - (double)observed_paths / (double)observed_evs : 0.0;
+        cout << "HybridNmrcDiag"
+             << " route_checks=" << FatTreeSwitch::_nmrc_diag_route_checks
+             << " reroutes=" << FatTreeSwitch::_nmrc_diag_reroutes
+             << " threshold_blocked="
+             << FatTreeSwitch::_nmrc_diag_threshold_blocked
+             << " better_count_hist="
+             << format_u32_u64_hist(better_count_hist)
+             << " level_transitions="
+             << format_nmrc_level_transitions()
+             << " fastcnp_generated="
+             << FatTreeSwitch::_nmrc_diag_fastcnp_generated
+             << " fastcnp_arrived=" << nmrc_fastcnp_arrived
+             << " fastcnp_after_done=" << nmrc_fastcnp_after_done
+             << " fastcnp_bytes="
+             << FatTreeSwitch::_nmrc_diag_fastcnp_generated *
+                    RocePacket::ACKSIZE
+             << " fastcnp_arrived_bytes=" << nmrc_fastcnp_arrived_bytes
+             << " fastcnp_latency_avg_us="
+             << (nmrc_fastcnp_arrived ?
+                    timeAsUs(nmrc_fastcnp_latency_sum) /
+                        (double)nmrc_fastcnp_arrived : 0.0)
+             << " fastcnp_route_missing="
+             << FatTreeSwitch::_nmrc_diag_fastcnp_route_missing
+             << " fastcnp_unknown_qp=" << nmrc_fastcnp_unknown_qp
+             << " fastcnp_unknown_ev=" << nmrc_fastcnp_unknown_ev
+             << " cooldown_starts=" << nmrc_cooldown_starts
+             << " cooling_skips=" << nmrc_cooling_skips
+             << " cooling_recoveries=" << nmrc_cooling_recoveries
+             << " duplicate_notifications="
+             << nmrc_duplicate_notifications
+             << " all_cooling_fallbacks="
+             << nmrc_all_cooling_fallbacks
+             << " observed_evs=" << observed_evs
+             << " observed_first_hop_choices=" << observed_paths
+             << " observed_first_hop_alias_ratio=" << observed_alias_ratio
+             << endl;
+    }
     if (queue_cv_sampler) {
         cout << "QueueCvDiag "
              << "spine_queue_cv=" << queue_cv_sampler->cv()
              << " spine_queue_avg=" << queue_cv_sampler->average_queue()
              << " spine_queue_count=" << queue_cv_sampler->count()
+             << " spine_queue_peak_bytes=" << queue_cv_sampler->peak_bytes()
+             << " spine_queue_p95_fraction="
+             << queue_cv_sampler->queue_fraction_percentile(0.95)
+             << " spine_queue_p99_fraction="
+             << queue_cv_sampler->queue_fraction_percentile(0.99)
              << endl;
     }
+    double sglb_route_calls =
+        (double)FatTreeSwitch::_sglb_diag_route_calls;
+    cout << "SglbRouteDiag "
+         << "route_calls=" << FatTreeSwitch::_sglb_diag_route_calls
+         << " avg_available_choices="
+         << (sglb_route_calls ?
+             FatTreeSwitch::_sglb_diag_available_choices / sglb_route_calls : 0.0)
+         << " avg_candidate_choices="
+         << (sglb_route_calls ?
+             FatTreeSwitch::_sglb_diag_candidate_choices / sglb_route_calls : 0.0)
+         << " avg_best_quality_choices="
+         << (sglb_route_calls ?
+             FatTreeSwitch::_sglb_diag_best_quality_choices / sglb_route_calls : 0.0)
+         << " avg_distinct_qualities="
+         << (sglb_route_calls ?
+             FatTreeSwitch::_sglb_diag_distinct_qualities / sglb_route_calls : 0.0)
+         << " all_same_quality_calls="
+         << FatTreeSwitch::_sglb_diag_all_same_quality_calls
+         << " all_zero_quality_calls="
+         << FatTreeSwitch::_sglb_diag_all_zero_quality_calls
+         << " selected_nonbest_quality="
+         << FatTreeSwitch::_sglb_diag_selected_nonbest_quality
+         << " avg_score_spread="
+         << (sglb_route_calls ?
+             FatTreeSwitch::_sglb_diag_score_spread_sum / sglb_route_calls : 0.0)
+         << " observed_good="
+         << FatTreeSwitch::_sglb_diag_observed_levels[STOR_LEVEL_GOOD]
+         << " observed_degraded="
+         << FatTreeSwitch::_sglb_diag_observed_levels[STOR_LEVEL_DEGRADED]
+         << " observed_bad="
+         << FatTreeSwitch::_sglb_diag_observed_levels[STOR_LEVEL_BAD]
+         << " observed_avoid="
+         << FatTreeSwitch::_sglb_diag_observed_levels[STOR_LEVEL_AVOID]
+         << " selected_good="
+         << FatTreeSwitch::_sglb_diag_selected_levels[STOR_LEVEL_GOOD]
+         << " selected_degraded="
+         << FatTreeSwitch::_sglb_diag_selected_levels[STOR_LEVEL_DEGRADED]
+         << " selected_bad="
+         << FatTreeSwitch::_sglb_diag_selected_levels[STOR_LEVEL_BAD]
+         << " selected_avoid="
+         << FatTreeSwitch::_sglb_diag_selected_levels[STOR_LEVEL_AVOID]
+         << " remote_snapshot_used="
+         << FatTreeSwitch::_sglb_diag_remote_snapshot_used
+         << " remote_snapshot_missing="
+         << FatTreeSwitch::_sglb_diag_remote_snapshot_missing
+         << endl;
 
     /*list <const Route*>::iterator rt_i;
       int counts[10]; int hop;

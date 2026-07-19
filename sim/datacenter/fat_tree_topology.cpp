@@ -791,9 +791,6 @@ FatTreeTopology::alloc_queue(QueueLogger* queueLogger, linkspeed_bps speed, mem_
     case LOSSLESS_INPUT_ECN:
         return new LosslessOutputQueue(speed, queuesize, *_eventlist, queueLogger,
                                        1, queuesize / 5, queuesize * 4 / 5);
-    case LOSSY_INPUT_ECN:
-        return new ECNQueue(speed, queuesize, *_eventlist, queueLogger,
-                            queuesize / 5, queuesize * 4 / 5);
     case COMPOSITE_ECN:
         if (tor && dir == DOWNLINK) 
             return new CompositeQueue(speed, queuesize, *_eventlist, queueLogger);
@@ -804,7 +801,8 @@ FatTreeTopology::alloc_queue(QueueLogger* queueLogger, linkspeed_bps speed, mem_
             CompositeQueue* q = new CompositeQueue(speed, queuesize, *_eventlist, queueLogger);
             if (!tor || dir == UPLINK) {
                 // don't use ECN on ToR downlinks
-                q->set_ecn_threshold(FatTreeSwitch::_ecn_threshold_fraction * queuesize);
+                q->set_ecn_thresholds(queuesize / 5,
+                                      FatTreeSwitch::_ecn_threshold_fraction * queuesize);
             }
             return q;
         }
@@ -1151,8 +1149,8 @@ void FatTreeTopology::add_failed_link(uint32_t type, uint32_t switch_id, uint32_
     FatTreeSwitch* agg_sw = dynamic_cast<FatTreeSwitch*>(queues_nup_nc[switch_id][k][0]->getSwitch());
     FatTreeSwitch* core_sw = dynamic_cast<FatTreeSwitch*>(queues_nc_nup[k][switch_id][0]->getSwitch());
     if (agg_sw && core_sw) {
-        agg_sw->glb_mark_neighbor_link(core_sw->getID(), false);
-        core_sw->glb_mark_neighbor_link(agg_sw->getID(), false);
+        agg_sw->sglb_mark_neighbor_link(core_sw->getID(), false);
+        core_sw->sglb_mark_neighbor_link(agg_sw->getID(), false);
     }
     queues_nup_nc[switch_id][k][0] = NULL;
     queues_nc_nup[k][switch_id][0] = NULL;

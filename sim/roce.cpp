@@ -1,5 +1,6 @@
 // -*- c-basic-offset: 4; indent-tabs-mode: nil -*- 
 #include <math.h>
+#include <cmath>
 #include <iostream>
 #include <algorithm>
 #include "roce.h"
@@ -10,7 +11,7 @@
 #include "ecn.h"
 using namespace std;
 
-static uint32_t nmrc_mix(uint32_t a, uint32_t b, uint32_t c) {
+static uint32_t selector_mix(uint32_t a, uint32_t b, uint32_t c) {
     a += 0x9e3779b9;
     b += 0x9e3779b9;
     c += 0x85ebca6b;
@@ -26,7 +27,7 @@ static uint32_t nmrc_mix(uint32_t a, uint32_t b, uint32_t c) {
     return c;
 }
 
-static uint32_t nmrc_gcd(uint32_t a, uint32_t b) {
+static uint32_t selector_gcd(uint32_t a, uint32_t b) {
     while (b != 0) {
         uint32_t t = a % b;
         a = b;
@@ -35,7 +36,7 @@ static uint32_t nmrc_gcd(uint32_t a, uint32_t b) {
     return a;
 }
 
-static uint32_t nmrc_priority_index(Packet::PktPriority priority) {
+static uint32_t selector_priority_index(Packet::PktPriority priority) {
     switch (priority) {
     case Packet::PRIO_LO:
         return 0;
@@ -49,42 +50,8 @@ static uint32_t nmrc_priority_index(Packet::PktPriority priority) {
     return 0;
 }
 
-static uint32_t nmrc_bitmap_count(const NmrcBitmap& bitmap) {
-    uint32_t count = 0;
-    for (uint32_t i = 0; i < bitmap.size(); i++) {
-        if (bitmap[i])
-            count++;
-    }
-    return count;
-}
-
-static uint32_t nmrc_bitmap_count_at_least(const NmrcBitmap& bitmap, uint8_t min_value) {
-    uint32_t count = 0;
-    for (uint32_t i = 0; i < bitmap.size(); i++) {
-        if (bitmap[i] >= min_value)
-            count++;
-    }
-    return count;
-}
-
-static bool nmrc_bitmap_any(const NmrcBitmap& bitmap) {
-    for (uint32_t i = 0; i < bitmap.size(); i++) {
-        if (bitmap[i])
-            return true;
-    }
-    return false;
-}
-
-static bool nmrc_uses_2bit_state(uint32_t mode) {
-    return mode == 1 || mode == 2;
-}
-
-static bool nmrc_uses_bad_cache_state(uint32_t mode) {
-    return mode == 3;
-}
-
-static uint8_t nmrc_initial_state(uint32_t mode) {
-    return nmrc_uses_2bit_state(mode) ? 3 : 1;
+static uint32_t nmrc_local_next(uint32_t seed, uint32_t& counter) {
+    return selector_mix(seed, counter++, 0x4e4d5243);
 }
 
 ////////////////////////////////////////////////////////////////
@@ -109,49 +76,130 @@ uint32_t RoceSrc::_global_rto_count = 0;
 simtime_picosec RoceSrc::_min_rto = timeFromUs((uint32_t)DEFAULT_RTO_MIN);
 simtime_picosec RoceSrc::_rto_high = 0;
 RoceSrc::rx_mode_t RoceSrc::_rx_mode = RoceSrc::RX_GBN;
+RoceSrc::transport_semantics_t RoceSrc::_transport_semantics =
+    RoceSrc::TRANSPORT_MRC_EXACT_BOUNDED;
 uint32_t RoceSrc::_sack_bitmap_bits = ROCE_SACK_BITMAP_BITS_DEFAULT;
 simtime_picosec RoceSrc::_ooo_tolerance = timeFromUs(15.0);
 uint32_t RoceSrc::_ooo_window_pkts = 32;
 simtime_picosec RoceSrc::_nack_interval = timeFromUs(4.0);
 RoceSrc::lb_mode_t RoceSrc::_lb_mode = RoceSrc::LB_ECMP;
 uint32_t RoceSrc::_path_entropy_size = 256;
+RoceSrc::nmrc_ev_mode_t RoceSrc::_nmrc_ev_mode = RoceSrc::NMRC_EV_ENCODED;
+uint32_t RoceSrc::_nmrc_ev_seed = 1;
 uint32_t RoceSrc::_reps_buffer_size = 8;
 uint32_t RoceSrc::_reps_warmup_pkts = 0;
-uint32_t RoceSrc::_nmrc_min_good_paths = 16;
-uint32_t RoceSrc::_nmrc_hosts_per_tor = 1;
-simtime_picosec RoceSrc::_nmrc_bad_hold_down = 0;
-uint32_t RoceSrc::_nmrc_state_mode = 3;
-uint32_t RoceSrc::_nmrc_weak_sample_pkts = 0;
-uint32_t RoceSrc::_nmrc_ecn_degrade_mode = 0;
-bool RoceSrc::_nmrc_unknown_reopen = false;
-uint32_t RoceSrc::_nmrc_bad_cache_windows = 1;
-uint32_t RoceSrc::_mrc_active_path_count = 256;
-uint32_t RoceSrc::_mrc_backup_path_count = 256;
-uint32_t RoceSrc::_mrc_min_active_paths = 16;
-simtime_picosec RoceSrc::_mrc_ecn_cooldown = timeFromUs(20.0);
+uint32_t RoceSrc::_hosts_per_tor = 1;
+RoceSrc::mrc_cooldown_mode_t RoceSrc::_mrc_cooldown_mode =
+    RoceSrc::MRC_COOLDOWN_ONE_CYCLE;
+uint32_t RoceSrc::_mrc_cooldown_reference_pkts = 1;
+RoceSrc::mrc_all_cooling_fallback_t RoceSrc::_mrc_all_cooling_fallback =
+    RoceSrc::MRC_ALL_COOLING_EARLIEST;
 simtime_picosec RoceSrc::_mrc_failed_retry = timeFromUs(100.0);
 uint32_t RoceSrc::_mrc_probe_interval_pkts = 256;
 simtime_picosec RoceSrc::_conweave_rtt_threshold = timeFromUs(16.0);
 simtime_picosec RoceSrc::_conweave_min_reroute_gap = timeFromUs(4.0);
 uint32_t RoceSrc::_ndp_initial_window = 256;
 RoceSrc::cc_mode_t RoceSrc::_cc_mode = RoceSrc::CC_DCQCN_VARIANT;
+RoceSrc::trim_recovery_mode_t RoceSrc::_trim_recovery_mode =
+    RoceSrc::TRIM_RECOVERY_EXACT_PSN;
 uint32_t RoceSrc::_cc_initial_cwnd_pkts = 100;
 uint32_t RoceSrc::_cc_min_cwnd_pkts = 1;
 uint32_t RoceSrc::_cc_max_cwnd_pkts = 0;
 double RoceSrc::_dcqcn_g = 1.0 / 256.0;
-double RoceSrc::_dcqcn_initial_alpha = 0.0625;
+double RoceSrc::_dcqcn_initial_alpha = 0.6;
 linkspeed_bps RoceSrc::_dcqcn_ai_rate = 4000000000ULL;
-linkspeed_bps RoceSrc::_dcqcn_min_rate = 1000000000ULL;
-mem_b RoceSrc::_dcqcn_byte_counter = 10 * 1024 * 1024;
+linkspeed_bps RoceSrc::_dcqcn_min_rate = 80000000000ULL;
+mem_b RoceSrc::_dcqcn_byte_counter = 1400000;
 uint32_t RoceSrc::_dcqcn_fast_recovery_steps = 5;
-simtime_picosec RoceSrc::_dcqcn_alpha_interval = timeFromUs(55.0);
-simtime_picosec RoceSrc::_dcqcn_rate_increase_interval = timeFromUs(55.0);
-simtime_picosec RoceSrc::_dcqcn_cnp_interval = timeFromUs(50.0);
+simtime_picosec RoceSrc::_dcqcn_alpha_interval = timeFromUs(28.0);
+simtime_picosec RoceSrc::_dcqcn_rate_increase_interval = timeFromUs(28.0);
+simtime_picosec RoceSrc::_dcqcn_cnp_interval = timeFromUs(16.8);
 RoceSrc::dcqcn_nack_reaction_t RoceSrc::_dcqcn_nack_reaction = RoceSrc::DCQCN_NACK_AS_CNP;
-std::map<std::pair<uint32_t, uint32_t>, NmrcBitmap> RoceSrc::_nmrc_shared_bitmaps;
-std::map<std::pair<uint32_t, uint32_t>, simtime_picosec> RoceSrc::_nmrc_shared_hold_until;
-std::map<std::pair<uint32_t, uint32_t>, std::vector<NmrcBitmap> > RoceSrc::_nmrc_shared_bad_epochs;
-std::map<std::pair<uint32_t, uint32_t>, uint32_t> RoceSrc::_nmrc_shared_bad_epoch_cursor;
+std::map<std::pair<uint32_t, uint32_t>, RoceSrc::SharedWeightedProfile>
+    RoceSrc::_stor_shared_profiles;
+std::map<std::pair<uint32_t, uint32_t>, RoceSrc::SharedWeightedProfile>
+    RoceSrc::_netaware_shared_profiles;
+std::array<uint32_t, 4> RoceSrc::_stor_level_weights = {{4, 2, 1, 0}};
+std::array<uint32_t, 4> RoceSrc::_netaware_level_weights = {{4, 2, 1, 0}};
+RoceSrc::netaware_wrr_mode_t RoceSrc::_netaware_wrr_mode = NETAWARE_WRR_SHUFFLED_BUCKET;
+RoceSrc::netaware_weight_adaptation_t RoceSrc::_netaware_weight_adaptation =
+    NETAWARE_WEIGHT_ADAPTATION_GOOD_SHARE_CAP;
+bool RoceSrc::_stor_binary_selector = false;
+std::ostream* RoceSrc::_netaware_decision_trace = NULL;
+uint32_t RoceSrc::_diag_physical_path_space = 1;
+uint64_t RoceSrc::_diag_selected_total = 0;
+std::map<uint32_t, uint64_t> RoceSrc::_diag_selected_ev_hist;
+std::map<uint32_t, uint64_t> RoceSrc::_diag_selected_physical_hist;
+std::vector<uint32_t> RoceSrc::_diag_first_selected_evs;
+
+void RoceSrc::printDcqcnConfiguration(std::ostream& out) {
+    const char* nack_reaction = "cnp";
+    if (_dcqcn_nack_reaction == DCQCN_NACK_IGNORE)
+        nack_reaction = "ignore";
+    else if (_dcqcn_nack_reaction == DCQCN_NACK_RATE_CUT)
+        nack_reaction = "rate_cut";
+
+    out << "DCQCN effective config"
+        << " g=" << _dcqcn_g
+        << " initial_alpha=" << _dcqcn_initial_alpha
+        << " ai_mbps=" << ((double)_dcqcn_ai_rate / 1000000.0)
+        << " min_rate_mbps=" << ((double)_dcqcn_min_rate / 1000000.0)
+        << " alpha_us=" << timeAsUs(_dcqcn_alpha_interval)
+        << " rate_us=" << timeAsUs(_dcqcn_rate_increase_interval)
+        << " cnp_us=" << timeAsUs(_dcqcn_cnp_interval)
+        << " byte_counter=" << _dcqcn_byte_counter
+        << " fast_recovery_steps=" << _dcqcn_fast_recovery_steps
+        << " nack_reaction=" << nack_reaction
+        << std::endl;
+}
+
+const char* RoceSrc::netawareWrrModeName() {
+    if (_netaware_wrr_mode == NETAWARE_WRR_DIRECT)
+        return "direct";
+    if (_netaware_wrr_mode == NETAWARE_WRR_SHUFFLED_BUCKET)
+        return "shuffled_bucket";
+    return "bucket";
+}
+
+void RoceSrc::setNetawareWeightAdaptation(netaware_weight_adaptation_t mode) {
+    if (_netaware_weight_adaptation == mode)
+        return;
+    _netaware_weight_adaptation = mode;
+    resetNetawareSharedState();
+}
+
+RoceSrc::netaware_weight_adaptation_t RoceSrc::netawareWeightAdaptation() {
+    return _netaware_weight_adaptation;
+}
+
+const char* RoceSrc::netawareWeightAdaptationName() {
+    if (_netaware_weight_adaptation == NETAWARE_WEIGHT_ADAPTATION_GOOD_SHARE_CAP)
+        return "good_share_cap";
+    return "off";
+}
+
+void RoceSrc::setNmrcEvMode(nmrc_ev_mode_t mode) {
+    _nmrc_ev_mode = mode;
+}
+
+RoceSrc::nmrc_ev_mode_t RoceSrc::nmrcEvMode() {
+    return _nmrc_ev_mode;
+}
+
+void RoceSrc::setNmrcEvSeed(uint32_t seed) {
+    _nmrc_ev_seed = seed;
+}
+
+uint32_t RoceSrc::nmrcEvSeed() {
+    return _nmrc_ev_seed;
+}
+
+void RoceSrc::resetPathSelectionDiag() {
+    _diag_selected_total = 0;
+    _diag_selected_ev_hist.clear();
+    _diag_selected_physical_hist.clear();
+    _diag_first_selected_evs.clear();
+}
 
 RoceSrc::RoceSrc(RoceLogger* logger, TrafficLogger* pktlogger, EventList &eventlist, linkspeed_bps rate)
     : BaseQueue(rate,eventlist,NULL), _flow(pktlogger), _logger(logger)
@@ -168,6 +216,103 @@ RoceSrc::RoceSrc(RoceLogger* logger, TrafficLogger* pktlogger, EventList &eventl
     _rtx_packets_sent = 0;
     _acks_received = 0;
     _nacks_received = 0;
+    _ooo_nacks_received = 0;
+    _trim_nacks_received = 0;
+    _loss_nacks_received = 0;
+    _ecn_echo_acks_received = 0;
+    _duplicate_acks_received = 0;
+    _duplicate_ack_inflate_suppressed = 0;
+    _bounded_inflight_pkts = 0;
+    _bounded_unique_acks = 0;
+    _bounded_recovery_inflight_bytes = 0;
+    _bounded_recovery_inflight_max_bytes = 0;
+    _bounded_stale_attempt_nacks = 0;
+    _bounded_duplicate_failure_nacks = 0;
+    _bounded_duplicate_confirmations_suppressed = 0;
+    _bounded_acked_revival_rejected = 0;
+    _bounded_attempt_wraps = 0;
+    _bounded_exact_trim_recoveries = 0;
+    _bounded_sack_loss_recoveries = 0;
+    _bounded_packets.clear();
+    _feedback_acks_received = 0;
+    _feedback_nacks_received = 0;
+    _feedback_zero_bits_received = 0;
+    _netaware_ev_skips = 0;
+    _netaware_bitmap_fallbacks = 0;
+    _stor_selected_good = 0;
+    _stor_selected_degraded = 0;
+    _stor_selected_bad = 0;
+    _stor_selected_avoid = 0;
+    _reps_random_sends = 0;
+    _reps_cached_sends = 0;
+    _reps_clean_ack_cached = 0;
+    _reps_ecn_ack_discarded = 0;
+    _reps_buffer_occupancy_samples = 0;
+    _reps_buffer_occupancy_hist.clear();
+    _mrc_ecn_cooldown_events = 0;
+    _mrc_trim_events = 0;
+    _mrc_rto_fail_events = 0;
+    _mrc_trim_cooling_events = 0;
+    _mrc_nack_ooo_ignored_for_failure = 0;
+    _mrc_nack_loss_fail_events = 0;
+    _mrc_nack_unknown_ignored_for_failure = 0;
+    _mrc_failure_backup_promotions = 0;
+    _mrc_forced_cooling_use = 0;
+    _mrc_forced_cooling_earliest_use = 0;
+    _mrc_forced_cooling_round_robin_use = 0;
+    _mrc_feedback_exact_ev_events = 0;
+    _mrc_feedback_sequence_fallback_events = 0;
+    _mrc_feedback_physical_fallback_events = 0;
+    _mrc_feedback_cumulative_mismatch_events = 0;
+    _mrc_select_counter = 0;
+    _mrc_cycle_cooling_events = 0;
+    _mrc_cycle_cooling_expiries = 0;
+    _mrc_cooling_skip_selection_sum = 0;
+    _mrc_cooling_skip_selection_events = 0;
+    _mrc_cwnd_scaled_feedback_events = 0;
+    _mrc_cwnd_scaled_duplicate_feedback_ignored = 0;
+    _mrc_probe_events = 0;
+    _mrc_probe_success_events = 0;
+    _mrc_probe_fail_events = 0;
+    _mrc_backup_replacement_events = 0;
+    _mrc_backup_replacement_diff_physical = 0;
+    _mrc_retx_original_physical = 0;
+    _mrc_retx_different_physical = 0;
+    _mrc_retx_same_physical_new_ev = 0;
+    _mrc_retx_different_physical_new_ev = 0;
+    _mrc_retx_unknown_original = 0;
+    _mrc_retx_fallback_events = 0;
+    _nmrc_fastcnp_arrived = 0;
+    _nmrc_fastcnp_after_done = 0;
+    _nmrc_fastcnp_bytes = 0;
+    _nmrc_fastcnp_latency_sum = 0;
+    _nmrc_fastcnp_unknown_qp = 0;
+    _nmrc_fastcnp_unknown_ev = 0;
+    _mrc_state_samples = 0;
+    _mrc_active_count_sum = 0;
+    _mrc_backup_count_sum = 0;
+    _mrc_cooling_count_sum = 0;
+    _mrc_failed_count_sum = 0;
+    _mrc_active_physical_count_sum = 0;
+    _mrc_cooling_physical_count_sum = 0;
+    _mrc_failed_physical_count_sum = 0;
+    _mrc_active_count_max = 0;
+    _mrc_backup_count_max = 0;
+    _mrc_cooling_count_max = 0;
+    _mrc_failed_count_max = 0;
+    _mrc_active_physical_count_max = 0;
+    _mrc_cooling_physical_count_max = 0;
+    _mrc_failed_physical_count_max = 0;
+    _mrc_ecn_physical_hist.clear();
+    _mrc_trim_physical_hist.clear();
+    _mrc_nack_physical_hist.clear();
+    _mrc_ooo_nack_physical_hist.clear();
+    _mrc_loss_nack_physical_hist.clear();
+    _nmrc_cooldown_starts = 0;
+    _nmrc_cooling_skips = 0;
+    _nmrc_cooling_recoveries = 0;
+    _nmrc_duplicate_notifications = 0;
+    _nmrc_all_cooling_fallbacks = 0;
 
     _highest_sent = 0;
     _last_acked = 0;
@@ -191,9 +336,6 @@ RoceSrc::RoceSrc(RoceLogger* logger, TrafficLogger* pktlogger, EventList &eventl
     _reps_valid_count = 0;
     _reps_explore_remaining = 0;
     reset_reps_buffer();
-    _nmrc_path_bitmap.assign(_path_entropy_size ? _path_entropy_size : 1, nmrc_initial_state(_nmrc_state_mode));
-    _nmrc_hold_until = 0;
-    _nmrc_bad_epoch_cursor = 0;
     _ndp_cursor = 0;
     _ndp_pull_credit = 0;
     _ndp_paths_ready = false;
@@ -201,10 +343,19 @@ RoceSrc::RoceSrc(RoceLogger* logger, TrafficLogger* pktlogger, EventList &eventl
     _mrc_backup_cursor = 0;
     _mrc_path_space = 0;
     _mrc_paths_ready = false;
+    _nmrc_cursor = 0;
+    _nmrc_path_space = 0;
+    _nmrc_initialized_mode = _nmrc_ev_mode;
+    _nmrc_evs_ready = false;
+    _nmrc_select_ordinal = 0;
     _conweave_last_reroute = 0;
-    _nmrc_cursor.fill(0);
-    _nmrc_stride.fill(1);
-    _nmrc_cursor_ready.fill(false);
+    _selector_cursor.fill(0);
+    _selector_stride.fill(1);
+    _selector_cursor_ready.fill(false);
+    _stor_weight_cursor.fill(0);
+    _virtual_selector_counter.fill(0);
+    _stor_selections_since_probe.fill(0);
+    _stor_avoid_probe_cursor.fill(0);
     _rtx_queue.clear();
     reset_sack_recovery_state();
     reset_congestion_control();
@@ -277,6 +428,18 @@ void RoceSrc::update_packet_spacing() {
 void RoceSrc::reset_congestion_control() {
     _cc_cwnd_pkts = _cc_initial_cwnd_pkts ? _cc_initial_cwnd_pkts : 1;
     _cc_inflate_pkts = 0;
+    _bounded_inflight_pkts = 0;
+    _bounded_unique_acks = 0;
+    _bounded_recovery_inflight_bytes = 0;
+    _bounded_recovery_inflight_max_bytes = 0;
+    _bounded_stale_attempt_nacks = 0;
+    _bounded_duplicate_failure_nacks = 0;
+    _bounded_duplicate_confirmations_suppressed = 0;
+    _bounded_acked_revival_rejected = 0;
+    _bounded_attempt_wraps = 0;
+    _bounded_exact_trim_recoveries = 0;
+    _bounded_sack_loss_recoveries = 0;
+    _bounded_packets.clear();
     clamp_congestion_window();
 
     _dcqcn_alpha = _dcqcn_initial_alpha;
@@ -322,6 +485,9 @@ double RoceSrc::congestion_window_available() const {
     if (_cc_mode == CC_NONE)
         return 1.0;
 
+    if (_transport_semantics == TRANSPORT_MRC_EXACT_BOUNDED)
+        return _cc_cwnd_pkts - (double)_bounded_inflight_pkts;
+
     double outstanding_pkts = 0;
     if (_highest_sent > _last_acked)
         outstanding_pkts = ((double)(_highest_sent - _last_acked)) / _mss;
@@ -330,6 +496,40 @@ double RoceSrc::congestion_window_available() const {
         return _cc_cwnd_pkts - outstanding_pkts;
 
     return _cc_cwnd_pkts + _cc_inflate_pkts - outstanding_pkts;
+}
+
+void RoceSrc::trace_cc_state(const char* event,
+                             RocePacket::seq_t seqno,
+                             int reason,
+                             bool duplicate,
+                             bool old_duplicate,
+                             bool ecn,
+                             double delta) const {
+    if (!_log_me)
+        return;
+
+    double outstanding_pkts = 0.0;
+    if (_highest_sent > _last_acked)
+        outstanding_pkts = ((double)(_highest_sent - _last_acked)) / _mss;
+
+    cout << "CcEvent time_us=" << timeAsUs(eventlist().now())
+         << " flow_id=" << _flow.flow_id()
+         << " name=" << _name
+         << " event=" << event
+         << " seq=" << seqno
+         << " reason=" << reason
+         << " duplicate=" << duplicate
+         << " old_duplicate=" << old_duplicate
+         << " ecn=" << ecn
+         << " delta=" << delta
+         << " last_acked=" << _last_acked
+         << " highest_sent=" << _highest_sent
+         << " outstanding=" << outstanding_pkts
+         << " cwnd=" << _cc_cwnd_pkts
+         << " inflate=" << _cc_inflate_pkts
+         << " awnd=" << congestion_window_available()
+         << " rtx_queue=" << _rtx_queue.size()
+         << endl;
 }
 
 bool RoceSrc::congestion_window_allows_send() const {
@@ -352,12 +552,25 @@ void RoceSrc::update_congestion_control_on_ack(const RoceAck& ack, double newly_
 
     if (ack.flags() & ECN_ECHO)
         _cc_cwnd_pkts -= 0.5;
-    else
+    else if (_transport_semantics == TRANSPORT_MRC_EXACT_BOUNDED) {
+        if (newly_acked_pkts > 0)
+            _cc_cwnd_pkts += newly_acked_pkts / _cc_cwnd_pkts;
+    } else {
         _cc_cwnd_pkts += 1.0 / _cc_cwnd_pkts;
+    }
 
     clamp_congestion_window();
 
-    _cc_inflate_pkts += 1.0;
+    if (_transport_semantics == TRANSPORT_MRC_EXACT_BOUNDED)
+        return;
+
+    bool suppress_duplicate_inflate =
+        _cc_mode == CC_DCQCN_VARIANT_NODUP_OLD &&
+        ack.is_old_duplicate_ack();
+    if (suppress_duplicate_inflate)
+        _duplicate_ack_inflate_suppressed++;
+    else
+        _cc_inflate_pkts += 1.0;
     if (newly_acked_pkts > 0) {
         if (newly_acked_pkts >= _cc_inflate_pkts)
             _cc_inflate_pkts = 0;
@@ -388,7 +601,6 @@ void RoceSrc::update_congestion_control_on_nack() {
 
     _cc_cwnd_pkts -= 1.0;
     clamp_congestion_window();
-    _cc_inflate_pkts = 0;
 }
 
 void RoceSrc::clamp_dcqcn_rate() {
@@ -544,8 +756,163 @@ size_t RoceSrc::SpRtxQueue::size() const {
     return _seqs.size();
 }
 
+void RoceSrc::bounded_note_new_send(RocePacket::seq_t psn) {
+    BoundedPacketState& packet = _bounded_packets[psn];
+    if (packet.state == BOUNDED_ACKED || packet.counted_inflight)
+        return;
+    packet.state = BOUNDED_SENT;
+    packet.counted_inflight = true;
+    _bounded_inflight_pkts++;
+}
+
+uint64_t RoceSrc::bounded_mark_acked(RocePacket::seq_t psn) {
+    map<RocePacket::seq_t, BoundedPacketState>::iterator it =
+        _bounded_packets.find(psn);
+    if (it == _bounded_packets.end())
+        return 0;
+    if (it->second.state == BOUNDED_ACKED) {
+        _bounded_duplicate_confirmations_suppressed++;
+        return 0;
+    }
+    if (it->second.counted_inflight) {
+        assert(_bounded_inflight_pkts > 0);
+        _bounded_inflight_pkts--;
+        it->second.counted_inflight = false;
+    }
+    if (it->second.uses_recovery_reserve) {
+        assert(_bounded_recovery_inflight_bytes >= _mss);
+        _bounded_recovery_inflight_bytes -= _mss;
+        it->second.uses_recovery_reserve = false;
+    }
+    it->second.state = BOUNDED_ACKED;
+    _rtx_queue.erase(psn);
+    _bounded_unique_acks++;
+    return 1;
+}
+
+bool RoceSrc::bounded_queue_failure(RocePacket::seq_t psn,
+                                    uint8_t attempt_id) {
+    map<RocePacket::seq_t, BoundedPacketState>::iterator it =
+        _bounded_packets.find(psn);
+    if (it == _bounded_packets.end())
+        return false;
+    if (it->second.state == BOUNDED_ACKED) {
+        _bounded_acked_revival_rejected++;
+        return false;
+    }
+    if (it->second.attempt_id != attempt_id) {
+        _bounded_stale_attempt_nacks++;
+        return false;
+    }
+    if (it->second.state == BOUNDED_RTX_PENDING ||
+        !it->second.counted_inflight) {
+        _bounded_duplicate_failure_nacks++;
+        return false;
+    }
+
+    assert(_bounded_inflight_pkts > 0);
+    _bounded_inflight_pkts--;
+    it->second.counted_inflight = false;
+    if (it->second.uses_recovery_reserve) {
+        assert(_bounded_recovery_inflight_bytes >= _mss);
+        _bounded_recovery_inflight_bytes -= _mss;
+        it->second.uses_recovery_reserve = false;
+    }
+    it->second.state = BOUNDED_RTX_PENDING;
+    _rtx_queue.insert(psn);
+    return true;
+}
+
+bool RoceSrc::bounded_begin_retransmission(
+        RocePacket::seq_t psn, uint8_t& attempt_id,
+        bool& used_recovery_reserve) {
+    map<RocePacket::seq_t, BoundedPacketState>::iterator it =
+        _bounded_packets.find(psn);
+    if (it == _bounded_packets.end() ||
+        it->second.state != BOUNDED_RTX_PENDING)
+        return false;
+
+    used_recovery_reserve = false;
+    if (!congestion_window_allows_send()) {
+        if (_bounded_recovery_inflight_bytes != 0)
+            return false;
+        used_recovery_reserve = true;
+        _bounded_recovery_inflight_bytes = _mss;
+        if (_bounded_recovery_inflight_bytes >
+            _bounded_recovery_inflight_max_bytes) {
+            _bounded_recovery_inflight_max_bytes =
+                _bounded_recovery_inflight_bytes;
+        }
+    }
+
+    if (it->second.attempt_id == UINT8_MAX)
+        _bounded_attempt_wraps++;
+    it->second.attempt_id = (uint8_t)(it->second.attempt_id + 1);
+    it->second.state = BOUNDED_RTX_INFLIGHT;
+    it->second.counted_inflight = true;
+    it->second.uses_recovery_reserve = used_recovery_reserve;
+    _bounded_inflight_pkts++;
+    _rtx_queue.erase(psn);
+    attempt_id = it->second.attempt_id;
+    return true;
+}
+
+bool RoceSrc::bounded_expire_recovery_reserve() {
+    if (_bounded_recovery_inflight_bytes == 0)
+        return false;
+    for (map<RocePacket::seq_t, BoundedPacketState>::iterator it =
+             _bounded_packets.begin();
+         it != _bounded_packets.end(); ++it) {
+        if (it->second.state == BOUNDED_RTX_INFLIGHT &&
+            it->second.uses_recovery_reserve) {
+            return bounded_queue_failure(it->first, it->second.attempt_id);
+        }
+    }
+    assert(false && "bounded recovery reserve has no owning packet");
+    return false;
+}
+
+uint64_t RoceSrc::bounded_mark_cumulative_acked(
+        RocePacket::seq_t old_cack, RocePacket::seq_t new_cack) {
+    if (new_cack <= old_cack)
+        return 0;
+    uint64_t confirmed = 0;
+    for (RocePacket::seq_t psn = old_cack + 1; psn <= new_cack;
+         psn += _mss) {
+        confirmed += bounded_mark_acked(psn);
+    }
+    return confirmed;
+}
+
+uint64_t RoceSrc::bounded_process_sack(const RoceNack& nack) {
+    if (!nack.has_sack())
+        return 0;
+    RocePacket::seq_t start = nack.sack_bitmap_start_psn();
+    if (start == 0)
+        start = nack.ackno() + 1 + (uint64_t)nack.sack_offset() * _mss;
+    uint16_t valid = nack.sack_bitmap_valid_length();
+    if (valid > _sack_bitmap_bits)
+        valid = _sack_bitmap_bits;
+    uint64_t confirmed = 0;
+    for (uint32_t bit = 0; bit < valid; bit++) {
+        if (!nack.sack_bit(bit))
+            continue;
+        RocePacket::seq_t psn = start + (uint64_t)bit * _mss;
+        if (psn <= _highest_sent && (!_flow_size || psn <= _flow_size))
+            confirmed += bounded_mark_acked(psn);
+    }
+    return confirmed;
+}
+
 bool RoceSrc::has_retransmit_work() const {
-    return _rx_mode == RX_SP_RETX_QUEUE && !_rtx_queue.empty();
+    if (_rx_mode != RX_SP_RETX_QUEUE || _rtx_queue.empty())
+        return false;
+    if (_transport_semantics != TRANSPORT_MRC_EXACT_BOUNDED ||
+        _cc_mode == CC_NONE) {
+        return true;
+    }
+    return congestion_window_available() >= 1.0 ||
+        _bounded_recovery_inflight_bytes == 0;
 }
 
 void RoceSrc::clean_retransmit_queue() {
@@ -596,6 +963,18 @@ void RoceSrc::startflow(){
     _highest_sent = 0;
     _last_acked = 0;
     _rtx_queue.clear();
+    _bounded_packets.clear();
+    _bounded_inflight_pkts = 0;
+    _bounded_unique_acks = 0;
+    _bounded_recovery_inflight_bytes = 0;
+    _bounded_recovery_inflight_max_bytes = 0;
+    _bounded_stale_attempt_nacks = 0;
+    _bounded_duplicate_failure_nacks = 0;
+    _bounded_duplicate_confirmations_suppressed = 0;
+    _bounded_acked_revival_rejected = 0;
+    _bounded_attempt_wraps = 0;
+    _bounded_exact_trim_recoveries = 0;
+    _bounded_sack_loss_recoveries = 0;
     reset_sack_recovery_state();
     _rto = _min_rto;
     _rtx_timeout = timeInf;
@@ -608,6 +987,8 @@ void RoceSrc::startflow(){
         reset_reps_buffer();
     if (_lb_mode == LB_MRC)
         reset_mrc_paths();
+    if (_lb_mode == LB_NMRC)
+        reset_nmrc_evs();
     if (_lb_mode == LB_NDP) {
         _ndp_pull_credit = _ndp_initial_window;
         _ndp_paths_ready = false;
@@ -644,8 +1025,94 @@ void RoceSrc::connect(Route* routeout, Route* routeback, RoceSink& sink, simtime
    resend immediately */
 void RoceSrc::processNack(const RoceNack& nack){
     RoceNack::seq_t ackno = nack.ackno();
-    if (_rx_mode == RX_SP_RETX_QUEUE && ackno < _last_acked)
+    trace_cc_state("nack_pre", ackno, (int)nack.reason());
+    if (nack.has_stor_feedback())
+        _feedback_nacks_received++;
+    switch (nack.reason()) {
+    case RoceNack::OOO:
+        _ooo_nacks_received++;
+        break;
+    case RoceNack::TRIM:
+        _trim_nacks_received++;
+        break;
+    case RoceNack::LOSS:
+        _loss_nacks_received++;
+        break;
+    }
+    if (_transport_semantics == TRANSPORT_MRC_EXACT_BOUNDED &&
+        _rx_mode == RX_SP_RETX_QUEUE) {
+        RocePacket::seq_t old_cack = _last_acked;
+        if (ackno > _last_acked)
+            _last_acked = ackno;
+
+        // Positive evidence is authoritative and must be applied before the
+        // failure carried by the same feedback packet.
+        uint64_t newly_confirmed =
+            bounded_mark_cumulative_acked(old_cack, _last_acked);
+        newly_confirmed += bounded_process_sack(nack);
+        bool feedback_made_progress = _last_acked > old_cack ||
+            newly_confirmed > 0;
+
+        bool failure_accepted = false;
+        if (nack.reason() == RoceNack::TRIM) {
+            bool exact_is_valid = nack.has_missing_psn() &&
+                nack.has_attempt_id() &&
+                (nack.missing_psn() - 1) % _mss == 0 &&
+                nack.missing_psn() <= _highest_sent &&
+                (!_flow_size || nack.missing_psn() <= _flow_size);
+            if (exact_is_valid) {
+                failure_accepted = bounded_queue_failure(
+                    nack.missing_psn(), nack.attempt_id());
+                if (failure_accepted)
+                    _bounded_exact_trim_recoveries++;
+            }
+        } else {
+            // An OOO NACK is emitted only after the receiver's tolerance or
+            // distance window.  Recover the cumulative first hole, not every
+            // zero in a single bitmap.
+            RocePacket::seq_t first_missing = _last_acked + 1;
+            map<RocePacket::seq_t, BoundedPacketState>::const_iterator it =
+                _bounded_packets.find(first_missing);
+            if (it != _bounded_packets.end()) {
+                failure_accepted = bounded_queue_failure(
+                    first_missing, it->second.attempt_id);
+                if (failure_accepted)
+                    _bounded_sack_loss_recoveries++;
+            }
+        }
+
+        if (failure_accepted)
+            update_congestion_control_on_nack();
+        update_stor(nack);
+        update_mrc_on_nack(nack);
+        if (feedback_made_progress || failure_accepted)
+            reset_rtx_timeout();
+        if (_state_send == READY &&
+            (has_retransmit_work() || congestion_window_allows_send()))
+            schedule_send_now();
+        trace_cc_state("nack_post", ackno, (int)nack.reason());
         return;
+    }
+    const auto exact_missing_psn_is_valid = [&]() {
+        return _trim_recovery_mode == TRIM_RECOVERY_EXACT_PSN &&
+            nack.reason() == RoceNack::TRIM &&
+            nack.has_missing_psn() &&
+            (nack.missing_psn() - 1) % _mss == 0 &&
+            nack.missing_psn() > _last_acked &&
+            nack.missing_psn() <= _highest_sent &&
+            (!_flow_size || nack.missing_psn() <= _flow_size);
+    };
+    if (_rx_mode == RX_SP_RETX_QUEUE && ackno < _last_acked) {
+        maybe_reset_sack_rxtpsn();
+        if (exact_missing_psn_is_valid() &&
+            !sack_seq_blocked_by_rxtpsn(nack.missing_psn())) {
+            _rtx_queue.insert(nack.missing_psn());
+            if (_state_send == READY)
+                schedule_send_now();
+        }
+        trace_cc_state("nack_stale", ackno, (int)nack.reason());
+        return;
+    }
     if (ackno > _last_acked)
         _last_acked = ackno;
 
@@ -711,6 +1178,11 @@ void RoceSrc::processNack(const RoceNack& nack){
             _rtx_queue.insert(first_missing);
         }
 
+        if (exact_missing_psn_is_valid() &&
+            !sack_seq_blocked_by_rxtpsn(nack.missing_psn())) {
+            _rtx_queue.insert(nack.missing_psn());
+        }
+
         if (_log_me)
             cout << "Src " << get_id() << " queued " << _rtx_queue.size()
                  << " selective retransmissions after nack " << _last_acked
@@ -737,6 +1209,7 @@ void RoceSrc::processNack(const RoceNack& nack){
     }
 
     update_congestion_control_on_nack();
+    update_stor(nack);
     update_mrc_on_nack(nack);
     reset_rtx_timeout();
     if (_lb_mode == LB_NDP) {
@@ -747,6 +1220,7 @@ void RoceSrc::processNack(const RoceNack& nack){
     if (_lb_mode != LB_NDP && _state_send == READY &&
         (has_retransmit_work() || congestion_window_allows_send()))
         schedule_send_now();
+    trace_cc_state("nack_post", ackno, (int)nack.reason());
 
     //this packet be sent when it is time to send a new packet!
 }
@@ -756,6 +1230,8 @@ void RoceSrc::processAck(const RoceAck& ack) {
     RoceAck::seq_t ackno = ack.ackno();
     simtime_picosec ts = ack.ts();
     uint64_t old_last_acked = _last_acked;
+    trace_cc_state("ack_pre", ackno, -1, ack.is_duplicate_ack(),
+                   ack.is_old_duplicate_ack(), ack.flags() & ECN_ECHO);
 
     // Compute rtt.  This comes originally from TCP, and may not be optimal for ROCE */
     uint64_t m = eventlist().now()-ts;
@@ -795,12 +1271,43 @@ void RoceSrc::processAck(const RoceAck& ack) {
         newly_acked_pkts = ((double)(ackno - old_last_acked)) / _mss;
         reset_rtx_timeout();
     }
+    if (_transport_semantics == TRANSPORT_MRC_EXACT_BOUNDED) {
+        uint64_t newly_confirmed = 0;
+        if (ackno > old_last_acked) {
+            RocePacket::seq_t first = old_last_acked + 1;
+            for (RocePacket::seq_t psn = first; psn <= ackno; psn += _mss)
+                newly_confirmed += bounded_mark_acked(psn);
+        }
+        if (ack.has_delivered_psn())
+            newly_confirmed += bounded_mark_acked(ack.delivered_psn());
+        newly_acked_pkts = (double)newly_confirmed;
+    }
     if (_logger) _logger->logRoce(*this, RoceLogger::ROCE_RCV);
 
+    if (ack.flags() & ECN_ECHO)
+        _ecn_echo_acks_received++;
+    if (ack.is_duplicate_ack())
+        _duplicate_acks_received++;
+    bool has_feedback_ack = ack.has_stor_feedback() || ack.has_netaware_feedback();
+    if (has_feedback_ack) {
+        _feedback_acks_received++;
+    }
+    if (_lb_mode == LB_NETAWARE && ack.has_netaware_feedback()) {
+        const NetawareFeedbackLevels& levels = ack.netaware_feedback();
+        for (uint32_t i = 0; i < levels.size(); i++) {
+            if (levels[i] >= STOR_LEVEL_BAD)
+                _feedback_zero_bits_received++;
+        }
+    }
+
     update_congestion_control_on_ack(ack, newly_acked_pkts);
+    trace_cc_state("ack_post", ackno, -1, ack.is_duplicate_ack(),
+                   ack.is_old_duplicate_ack(), ack.flags() & ECN_ECHO,
+                   newly_acked_pkts);
     update_reps(ack);
     update_conweave(ack, m);
-    update_nmrc(ack);
+    update_stor(ack);
+    update_netaware(ack);
     update_mrc_on_ack(ack);
     if (_lb_mode == LB_NDP && !_done) {
         grant_ndp_credit();
@@ -825,144 +1332,949 @@ void RoceSrc::processAck(const RoceAck& ack) {
     }
 }
 
-void RoceSrc::init_nmrc_priority(Packet::PktPriority priority, uint32_t path_space) {
-    uint32_t prio = nmrc_priority_index(priority);
-    if (_nmrc_cursor_ready[prio])
+void RoceSrc::init_selector_priority(Packet::PktPriority priority, uint32_t path_space) {
+    uint32_t prio = selector_priority_index(priority);
+    if (_selector_cursor_ready[prio])
         return;
 
     uint32_t src = _srcaddr == UINT32_MAX ? _node_num : _srcaddr;
     uint32_t dst = _dstaddr == UINT32_MAX ? (_node_num ^ 0x5bd1e995) : _dstaddr;
     uint32_t flow = _flow.flow_id();
-    uint32_t seed = nmrc_mix(src, dst, flow ^ (prio * 0x9e3779b9));
+    uint32_t seed = selector_mix(src, dst, flow ^ (prio * 0x9e3779b9));
 
-    _nmrc_cursor[prio] = seed % path_space;
+    _selector_cursor[prio] = seed % path_space;
 
     uint32_t stride = ((seed >> 8) % path_space) | 1;
     if (stride == 0)
         stride = 1;
-    while (nmrc_gcd(stride, path_space) != 1)
+    while (selector_gcd(stride, path_space) != 1)
         stride = (stride + 2) % path_space;
     if (stride == 0)
         stride = 1;
-    _nmrc_stride[prio] = stride;
-    _nmrc_cursor_ready[prio] = true;
+    _selector_stride[prio] = stride;
+    _selector_cursor_ready[prio] = true;
 }
 
-void RoceSrc::ensure_nmrc_bitmap(uint32_t path_space) {
-    if (path_space == 0)
-        path_space = 1;
-    if (_nmrc_path_bitmap.size() != path_space)
-        _nmrc_path_bitmap.assign(path_space, nmrc_initial_state(_nmrc_state_mode));
-    if (nmrc_uses_bad_cache_state(_nmrc_state_mode))
-        ensure_nmrc_bad_cache(path_space);
-}
-
-void RoceSrc::ensure_nmrc_bad_cache(uint32_t path_space) {
-    if (path_space == 0)
-        path_space = 1;
-    uint32_t windows = _nmrc_bad_cache_windows ? _nmrc_bad_cache_windows : 1;
-
-    bool reset = _nmrc_bad_epochs.size() != windows;
-    if (!reset) {
-        for (uint32_t i = 0; i < _nmrc_bad_epochs.size(); i++) {
-            if (_nmrc_bad_epochs[i].size() != path_space) {
-                reset = true;
-                break;
-            }
-        }
-    }
-
-    if (reset) {
-        _nmrc_bad_epochs.assign(windows, NmrcBitmap(path_space, 0));
-        _nmrc_bad_epoch_cursor = 0;
-        _nmrc_path_bitmap.assign(path_space, 1);
-    }
-}
-
-void RoceSrc::rebuild_nmrc_bad_cache_bitmap(uint32_t path_space) {
-    if (path_space == 0)
-        path_space = 1;
-    _nmrc_path_bitmap.assign(path_space, 1);
-    for (uint32_t epoch = 0; epoch < _nmrc_bad_epochs.size(); epoch++) {
-        for (uint32_t i = 0; i < path_space && i < _nmrc_bad_epochs[epoch].size(); i++) {
-            if (_nmrc_bad_epochs[epoch][i])
-                _nmrc_path_bitmap[i] = 0;
-        }
-    }
-}
-
-void RoceSrc::apply_nmrc_bad_cache_feedback(const NmrcBitmap& feedback, uint32_t path_space) {
-    ensure_nmrc_bad_cache(path_space);
-    if (_nmrc_bad_epochs.empty())
-        return;
-
-    NmrcBitmap bad(path_space, 0);
-    for (uint32_t i = 0; i < path_space; i++) {
-        if (i < feedback.size() && !feedback[i])
-            bad[i] = 1;
-    }
-
-    _nmrc_bad_epochs[_nmrc_bad_epoch_cursor] = bad;
-    _nmrc_bad_epoch_cursor = (_nmrc_bad_epoch_cursor + 1) % _nmrc_bad_epochs.size();
-    rebuild_nmrc_bad_cache_bitmap(path_space);
-}
-
-std::pair<uint32_t, uint32_t> RoceSrc::nmrc_cache_key() const {
-    uint32_t hosts_per_tor = _nmrc_hosts_per_tor ? _nmrc_hosts_per_tor : 1;
+std::pair<uint32_t, uint32_t> RoceSrc::tor_pair_cache_key() const {
+    uint32_t hosts_per_tor = _hosts_per_tor ? _hosts_per_tor : 1;
     uint32_t src = _srcaddr == UINT32_MAX ? _node_num : _srcaddr;
     uint32_t dst = _dstaddr == UINT32_MAX ? 0 : _dstaddr;
     return std::make_pair(src / hosts_per_tor, dst / hosts_per_tor);
 }
 
-void RoceSrc::load_nmrc_shared_bitmap(uint32_t path_space) {
-    std::pair<uint32_t, uint32_t> key = nmrc_cache_key();
-    auto it = _nmrc_shared_bitmaps.find(key);
-    if (it != _nmrc_shared_bitmaps.end()) {
-        if (it->second.size() != path_space)
-            return;
-        _nmrc_path_bitmap = it->second;
+void RoceSrc::resetStorSharedState() {
+    _stor_shared_profiles.clear();
+}
+
+void RoceSrc::resetNetawareSharedState() {
+    _netaware_shared_profiles.clear();
+}
+
+RoceSrc::SharedWeightedProfile& RoceSrc::shared_stor_profile(
+        uint32_t path_space) {
+    if (path_space == 0)
+        path_space = 1;
+    SharedWeightedProfile& profile = _stor_shared_profiles[tor_pair_cache_key()];
+    if (profile.levels.size() != path_space) {
+        profile.levels.assign(path_space, STOR_LEVEL_GOOD);
+        profile.version++;
+        rebuild_shared_weighted_profile(profile, path_space,
+                                        _stor_level_weights);
+    }
+    return profile;
+}
+
+RoceSrc::SharedWeightedProfile& RoceSrc::shared_netaware_profile(
+        uint32_t path_space) {
+    if (path_space == 0)
+        path_space = 1;
+    SharedWeightedProfile& profile = _netaware_shared_profiles[tor_pair_cache_key()];
+    if (profile.levels.size() != path_space) {
+        profile.levels.assign(path_space, STOR_LEVEL_GOOD);
+        profile.version++;
+        rebuild_netaware_weighted_profile(profile, path_space);
+    }
+    return profile;
+}
+
+void RoceSrc::apply_stor_feedback(const StorFeedbackLevels& feedback,
+                                  uint32_t path_space) {
+    if (path_space == 0)
+        path_space = 1;
+    SharedWeightedProfile& profile = shared_stor_profile(path_space);
+    StorFeedbackLevels next(path_space, STOR_LEVEL_GOOD);
+    for (uint32_t i = 0; i < path_space; i++) {
+        if (i < feedback.size())
+            next[i] = feedback[i];
+    }
+    if (profile.levels != next) {
+        profile.levels.swap(next);
+        profile.version++;
+        rebuild_shared_weighted_profile(profile, path_space,
+                                        _stor_level_weights);
+    }
+}
+
+void RoceSrc::apply_netaware_snapshot(const NetawareFeedbackLevels& feedback,
+                                  uint32_t path_space) {
+    if (path_space == 0)
+        path_space = 1;
+    SharedWeightedProfile& profile = shared_netaware_profile(path_space);
+    StorFeedbackLevels next(path_space, STOR_LEVEL_GOOD);
+    for (uint32_t i = 0; i < path_space; i++) {
+        if (i < feedback.size())
+            next[i] = feedback[i];
+    }
+    if (profile.levels != next) {
+        profile.levels.swap(next);
+        profile.version++;
+        rebuild_netaware_weighted_profile(profile, path_space);
+    }
+}
+
+void RoceSrc::apply_stor_feedback_for_test(const StorFeedbackLevels& levels) {
+    uint32_t path_space = _path_entropy_size ? _path_entropy_size : 1;
+    apply_stor_feedback(levels, path_space);
+}
+
+void RoceSrc::apply_netaware_feedback_for_test(const NetawareFeedbackLevels& levels) {
+    uint32_t path_space = _path_entropy_size ? _path_entropy_size : 1;
+    apply_netaware_snapshot(levels, path_space);
+}
+
+std::vector<uint32_t> RoceSrc::netaware_bucket_tickets_for_test(
+        Packet::PktPriority priority, uint32_t path_space) {
+    (void)priority;
+    if (path_space == 0)
+        path_space = 1;
+    return shared_netaware_profile(path_space).tickets;
+}
+
+void RoceSrc::record_netaware_selected_level(uint8_t level) {
+    if (level == STOR_LEVEL_GOOD)
+        _stor_selected_good++;
+    else if (level == STOR_LEVEL_DEGRADED)
+        _stor_selected_degraded++;
+    else if (level == STOR_LEVEL_BAD)
+        _stor_selected_bad++;
+    else
+        _stor_selected_avoid++;
+}
+
+void RoceSrc::record_path_selection(uint32_t selected_ev, uint32_t physical_path) {
+    _diag_selected_total++;
+    _diag_selected_ev_hist[selected_ev]++;
+    uint32_t physical_space = _diag_physical_path_space ?
+        _diag_physical_path_space : 1;
+    _diag_selected_physical_hist[physical_path % physical_space]++;
+    if (_diag_first_selected_evs.size() < 128)
+        _diag_first_selected_evs.push_back(selected_ev);
+}
+
+void RoceSrc::sample_reps_buffer_occupancy() {
+    _reps_buffer_occupancy_samples++;
+    _reps_buffer_occupancy_hist[_reps_valid_count]++;
+}
+
+std::array<uint32_t, 5> RoceSrc::mrc_state_counts_for_diag() const {
+    std::array<uint32_t, 5> counts = {{0, 0, 0, 0, 0}};
+    for (uint32_t i = 0; i < _mrc_evs.size(); i++) {
+        uint8_t state = _mrc_evs[i].state;
+        if (state < counts.size())
+            counts[state]++;
+    }
+    return counts;
+}
+
+std::array<uint32_t, 5> RoceSrc::mrc_state_physical_counts_for_diag() const {
+    std::array<std::set<uint32_t>, 5> physicals;
+    for (uint32_t i = 0; i < _mrc_evs.size(); i++) {
+        uint8_t state = _mrc_evs[i].state;
+        if (state < physicals.size())
+            physicals[state].insert(_mrc_evs[i].physical_path);
     }
 
-    auto hold_it = _nmrc_shared_hold_until.find(key);
-    if (hold_it != _nmrc_shared_hold_until.end())
-        _nmrc_hold_until = hold_it->second;
+    std::array<uint32_t, 5> counts = {{0, 0, 0, 0, 0}};
+    for (uint32_t state = 0; state < counts.size(); state++)
+        counts[state] = (uint32_t)physicals[state].size();
+    return counts;
+}
 
-    if (nmrc_uses_bad_cache_state(_nmrc_state_mode)) {
-        ensure_nmrc_bad_cache(path_space);
-        auto epochs_it = _nmrc_shared_bad_epochs.find(key);
-        if (epochs_it != _nmrc_shared_bad_epochs.end()) {
-            bool compatible = epochs_it->second.size() == _nmrc_bad_epochs.size();
-            for (uint32_t i = 0; compatible && i < epochs_it->second.size(); i++)
-                compatible = epochs_it->second[i].size() == path_space;
-            if (compatible) {
-                _nmrc_bad_epochs = epochs_it->second;
-                auto cursor_it = _nmrc_shared_bad_epoch_cursor.find(key);
-                if (cursor_it != _nmrc_shared_bad_epoch_cursor.end() && !_nmrc_bad_epochs.empty())
-                    _nmrc_bad_epoch_cursor = cursor_it->second % _nmrc_bad_epochs.size();
-                rebuild_nmrc_bad_cache_bitmap(path_space);
+uint32_t RoceSrc::mrc_backup_remaining_for_diag() const {
+    if (_mrc_backup.size() <= _mrc_backup_cursor)
+        return 0;
+    return (uint32_t)(_mrc_backup.size() - _mrc_backup_cursor);
+}
+
+void RoceSrc::sample_mrc_state_counts() {
+    std::array<uint32_t, 5> counts = mrc_state_counts_for_diag();
+    std::array<uint32_t, 5> physical_counts = mrc_state_physical_counts_for_diag();
+    uint32_t backup = mrc_backup_remaining_for_diag();
+    _mrc_state_samples++;
+    _mrc_active_count_sum += counts[MRC_PATH_ACTIVE];
+    _mrc_backup_count_sum += backup;
+    _mrc_cooling_count_sum += counts[MRC_PATH_COOLING];
+    _mrc_failed_count_sum += counts[MRC_PATH_FAILED];
+    _mrc_active_physical_count_sum += physical_counts[MRC_PATH_ACTIVE];
+    _mrc_cooling_physical_count_sum += physical_counts[MRC_PATH_COOLING];
+    _mrc_failed_physical_count_sum += physical_counts[MRC_PATH_FAILED];
+    _mrc_active_count_max = std::max(_mrc_active_count_max,
+                                     counts[MRC_PATH_ACTIVE]);
+    _mrc_backup_count_max = std::max(_mrc_backup_count_max, backup);
+    _mrc_cooling_count_max = std::max(_mrc_cooling_count_max,
+                                      counts[MRC_PATH_COOLING]);
+    _mrc_failed_count_max = std::max(_mrc_failed_count_max,
+                                     counts[MRC_PATH_FAILED]);
+    _mrc_active_physical_count_max = std::max(_mrc_active_physical_count_max,
+                                              physical_counts[MRC_PATH_ACTIVE]);
+    _mrc_cooling_physical_count_max = std::max(_mrc_cooling_physical_count_max,
+                                               physical_counts[MRC_PATH_COOLING]);
+    _mrc_failed_physical_count_max = std::max(_mrc_failed_physical_count_max,
+                                              physical_counts[MRC_PATH_FAILED]);
+}
+
+void RoceSrc::rebuild_shared_weighted_profile(
+        SharedWeightedProfile& profile, uint32_t path_space,
+        const std::array<uint32_t, 4>& level_weights) {
+    if (path_space == 0)
+        path_space = 1;
+    uint32_t bucket_size = weightedShuffledBucketSize(path_space);
+    profile.bucket.clear();
+    profile.tickets.assign(path_space, 0);
+
+    std::vector<uint32_t> weights(path_space, 0);
+    uint32_t active_gcd = 0;
+    uint32_t active_paths = 0;
+    for (uint32_t i = 0; i < path_space; i++) {
+        uint8_t level = i < profile.levels.size() ?
+            profile.levels[i] : STOR_LEVEL_GOOD;
+        if (level > STOR_LEVEL_AVOID)
+            level = STOR_LEVEL_GOOD;
+        uint32_t weight = level_weights[level];
+        if (weight == 0)
+            continue;
+        active_gcd = active_gcd ? selector_gcd(active_gcd, weight) : weight;
+        active_paths++;
+    }
+
+    if (active_gcd > 0) {
+        uint64_t total_weight = 0;
+        for (uint32_t i = 0; i < path_space; i++) {
+            uint8_t level = i < profile.levels.size() ?
+                profile.levels[i] : STOR_LEVEL_GOOD;
+            if (level > STOR_LEVEL_AVOID)
+                level = STOR_LEVEL_GOOD;
+            uint32_t weight = level_weights[level];
+            if (weight > 0)
+                weight /= active_gcd;
+            weights[i] = weight;
+            total_weight += weight;
+        }
+
+        struct Remainder {
+            uint32_t path;
+            uint64_t remainder;
+            uint32_t weight;
+        };
+        std::vector<Remainder> remainders;
+        uint32_t assigned = 0;
+        for (uint32_t i = 0; i < path_space; i++) {
+            if (weights[i] == 0)
+                continue;
+            uint64_t numerator = (uint64_t)bucket_size * weights[i];
+            profile.tickets[i] = (uint32_t)(numerator / total_weight);
+            assigned += profile.tickets[i];
+            Remainder r;
+            r.path = i;
+            r.remainder = numerator % total_weight;
+            r.weight = weights[i];
+            remainders.push_back(r);
+        }
+
+        if (active_paths <= bucket_size) {
+            for (uint32_t i = 0; i < remainders.size(); i++) {
+                uint32_t path = remainders[i].path;
+                if (profile.tickets[path] == 0) {
+                    profile.tickets[path] = 1;
+                    assigned++;
+                }
             }
+        }
+
+        std::sort(remainders.begin(), remainders.end(),
+                  [](const Remainder& a, const Remainder& b) {
+                      if (a.remainder != b.remainder)
+                          return a.remainder > b.remainder;
+                      return a.path < b.path;
+                  });
+
+        uint32_t remaining = assigned < bucket_size ?
+            bucket_size - assigned : 0;
+        for (uint32_t i = 0; i < remaining && !remainders.empty(); i++)
+            profile.tickets[remainders[i % remainders.size()].path]++;
+
+        while (assigned > bucket_size) {
+            uint32_t donor = path_space;
+            for (uint32_t i = path_space; i > 0; i--) {
+                uint32_t path = i - 1;
+                if (profile.tickets[path] > 1) {
+                    donor = path;
+                    break;
+                }
+            }
+            if (donor == path_space)
+                break;
+            profile.tickets[donor]--;
+            assigned--;
+        }
+
+        for (uint32_t i = 0; i < path_space; i++) {
+            for (uint32_t n = 0; n < profile.tickets[i]; n++)
+                profile.bucket.push_back(i);
         }
     }
 }
 
-void RoceSrc::store_nmrc_shared_bitmap() {
-    std::pair<uint32_t, uint32_t> key = nmrc_cache_key();
-    _nmrc_shared_bitmaps[key] = _nmrc_path_bitmap;
-    _nmrc_shared_hold_until[key] = _nmrc_hold_until;
-    if (nmrc_uses_bad_cache_state(_nmrc_state_mode)) {
-        _nmrc_shared_bad_epochs[key] = _nmrc_bad_epochs;
-        _nmrc_shared_bad_epoch_cursor[key] = _nmrc_bad_epoch_cursor;
+void RoceSrc::rebuild_netaware_weighted_profile(
+        SharedWeightedProfile& profile, uint32_t path_space) {
+    if (_netaware_weight_adaptation == NETAWARE_WEIGHT_ADAPTATION_OFF) {
+        rebuild_shared_weighted_profile(profile, path_space,
+                                        _netaware_level_weights);
+        return;
+    }
+
+    if (path_space == 0)
+        path_space = 1;
+    const uint32_t bucket_size = weightedShuffledBucketSize(path_space);
+    profile.bucket.clear();
+    profile.tickets.assign(path_space, 0);
+
+    std::vector<long double> target(path_space, 0.0L);
+    const long double uniform = 1.0L / (long double)path_space;
+    long double raw_sum = 0.0L;
+    for (uint32_t path = 0; path < path_space; path++) {
+        uint8_t level = path < profile.levels.size() ?
+            profile.levels[path] : STOR_LEVEL_GOOD;
+        if (level > STOR_LEVEL_AVOID)
+            level = STOR_LEVEL_GOOD;
+        target[path] = (long double)_netaware_level_weights[level];
+        raw_sum += target[path];
+    }
+    if (raw_sum > 0.0L) {
+        for (uint32_t path = 0; path < path_space; path++)
+            target[path] /= raw_sum;
+    } else {
+        for (uint32_t path = 0; path < path_space; path++)
+            target[path] = uniform;
+    }
+
+    long double alpha = 1.0L;
+    uint32_t good_paths = 0;
+    long double max_good_target = 0.0L;
+    for (uint32_t path = 0; path < path_space; path++) {
+        uint8_t level = path < profile.levels.size() ?
+            profile.levels[path] : STOR_LEVEL_GOOD;
+        if (level > STOR_LEVEL_AVOID)
+            level = STOR_LEVEL_GOOD;
+        if (level == STOR_LEVEL_GOOD) {
+            good_paths++;
+            max_good_target = std::max(max_good_target, target[path]);
+        }
+    }
+    if (good_paths > 0 && max_good_target > uniform) {
+        const long double good_fraction =
+            (long double)good_paths / (long double)path_space;
+        const long double good_cap =
+            (1.0L + good_fraction) / (long double)path_space;
+        if (max_good_target > good_cap) {
+            alpha = (good_cap - uniform) /
+                (max_good_target - uniform);
+        }
+    }
+    alpha = std::max(0.0L, std::min(1.0L, alpha));
+
+    struct Remainder {
+        uint32_t path;
+        long double fraction;
+    };
+    std::vector<Remainder> remainders;
+    uint32_t assigned = 0;
+    for (uint32_t path = 0; path < path_space; path++) {
+        long double probability =
+            uniform + alpha * (target[path] - uniform);
+        long double exact = (long double)bucket_size * probability;
+        uint32_t tickets = (uint32_t)floorl(exact);
+        profile.tickets[path] = tickets;
+        assigned += tickets;
+        Remainder remainder;
+        remainder.path = path;
+        remainder.fraction = exact - (long double)tickets;
+        remainders.push_back(remainder);
+    }
+
+    std::sort(remainders.begin(), remainders.end(),
+              [](const Remainder& a, const Remainder& b) {
+                  if (a.fraction != b.fraction)
+                      return a.fraction > b.fraction;
+                  return a.path < b.path;
+              });
+    for (uint32_t i = assigned; i < bucket_size; i++)
+        profile.tickets[remainders[(i - assigned) % remainders.size()].path]++;
+
+    for (uint32_t path = 0; path < path_space; path++) {
+        for (uint32_t ticket = 0; ticket < profile.tickets[path]; ticket++)
+            profile.bucket.push_back(path);
     }
 }
 
-void RoceSrc::release_nmrc_hold_if_expired(uint32_t path_space) {
-    if (_nmrc_bad_hold_down == 0 || _nmrc_hold_until == 0)
+static uint32_t virtual_feistel(uint32_t value, uint32_t half_bits,
+                                uint32_t key) {
+    uint32_t mask = ((uint32_t)1 << half_bits) - 1;
+    uint32_t left = value >> half_bits;
+    uint32_t right = value & mask;
+    for (uint32_t round = 0; round < 6; round++) {
+        uint32_t mixed = selector_mix(key ^ (round * 0x9e3779b9), right,
+                                  0x85ebca6b ^ round) & mask;
+        uint32_t next_left = right;
+        uint32_t next_right = left ^ mixed;
+        left = next_left;
+        right = next_right;
+    }
+    return (left << half_bits) | right;
+}
+
+uint32_t RoceSrc::virtual_shuffle_index(uint32_t key, uint64_t epoch,
+                                        uint32_t position,
+                                        uint32_t domain) {
+    if (domain <= 1)
+        return 0;
+    uint32_t bits = 0;
+    uint64_t size = 1;
+    while (size < domain) {
+        size <<= 1;
+        bits++;
+    }
+    if (bits & 1) {
+        size <<= 1;
+        bits++;
+    }
+    uint32_t half_bits = bits / 2;
+    uint32_t epoch_key = selector_mix(key, (uint32_t)epoch,
+                                  (uint32_t)(epoch >> 32));
+    uint32_t value = position;
+    do {
+        value = virtual_feistel(value, half_bits, epoch_key);
+    } while (value >= domain);
+    return value;
+}
+
+uint32_t RoceSrc::virtualShuffleIndexForTest(uint32_t key, uint64_t epoch,
+                                             uint32_t position,
+                                             uint32_t domain) {
+    return virtual_shuffle_index(key, epoch, position, domain);
+}
+
+uint32_t RoceSrc::virtual_selector_key(uint32_t prio,
+                                       uint64_t profile_version,
+                                       uint64_t epoch,
+                                       uint32_t mode_tag) const {
+    uint32_t src = _srcaddr == UINT32_MAX ? _node_num : _srcaddr;
+    uint32_t dst = _dstaddr == UINT32_MAX ?
+        (_node_num ^ 0x5bd1e995) : _dstaddr;
+    uint32_t key = selector_mix(src, dst,
+                            _flow.flow_id() ^ (prio * 0x9e3779b9));
+    key = selector_mix(key, (uint32_t)profile_version,
+                   (uint32_t)(profile_version >> 32) ^ mode_tag);
+    return selector_mix(key, (uint32_t)epoch,
+                    (uint32_t)(epoch >> 32) ^ mode_tag);
+}
+
+void RoceSrc::update_stor(const RoceAck& ack) {
+    if (_lb_mode != LB_STOR || !ack.has_stor_feedback())
         return;
-    if (eventlist().now() < _nmrc_hold_until)
+
+    uint32_t path_space = _path_entropy_size ? _path_entropy_size : 1;
+    apply_stor_feedback(ack.stor_feedback(), path_space);
+}
+
+void RoceSrc::update_stor(const RoceNack& nack) {
+    if (_lb_mode != LB_STOR || !nack.has_stor_feedback())
         return;
-    _nmrc_hold_until = 0;
-    _nmrc_path_bitmap.assign(path_space, nmrc_initial_state(_nmrc_state_mode));
-    store_nmrc_shared_bitmap();
+
+    uint32_t path_space = _path_entropy_size ? _path_entropy_size : 1;
+    apply_stor_feedback(nack.stor_feedback(), path_space);
+}
+
+uint32_t RoceSrc::choose_netaware_direct_path(uint32_t prio, uint32_t path_space) {
+    const StorFeedbackLevels& levels = shared_netaware_profile(path_space).levels;
+    uint64_t total_weight = 0;
+    for (uint32_t i = 0; i < path_space; i++) {
+        uint8_t level = i < levels.size() ? levels[i] : STOR_LEVEL_GOOD;
+        if (level > STOR_LEVEL_AVOID)
+            level = STOR_LEVEL_GOOD;
+        total_weight += _netaware_level_weights[level];
+    }
+
+    if (total_weight > 0) {
+        uint64_t ticket = _stor_weight_cursor[prio]++ % total_weight;
+        for (uint32_t offset = 1; offset <= path_space; offset++) {
+            uint32_t candidate = (_selector_cursor[prio] + offset * _selector_stride[prio]) % path_space;
+            uint8_t level = candidate < levels.size() ?
+                levels[candidate] : STOR_LEVEL_GOOD;
+            if (level > STOR_LEVEL_AVOID)
+                level = STOR_LEVEL_GOOD;
+            uint32_t weight = _netaware_level_weights[level];
+            if (ticket < weight) {
+                _selector_cursor[prio] = candidate;
+                record_netaware_selected_level(level);
+                return candidate;
+            }
+            ticket -= weight;
+        }
+    }
+
+    uint32_t candidate = (_selector_cursor[prio] + _selector_stride[prio]) % path_space;
+    _selector_cursor[prio] = candidate;
+    _stor_selected_avoid++;
+    return candidate;
+}
+
+uint32_t RoceSrc::choose_netaware_bucket_path(uint32_t prio, uint32_t path_space) {
+    const StorFeedbackLevels& levels = shared_netaware_profile(path_space).levels;
+    uint64_t total_weight = 0;
+    uint32_t level_counts[4] = {0, 0, 0, 0};
+    for (uint32_t i = 0; i < path_space; i++) {
+        uint8_t level = i < levels.size() ? levels[i] : STOR_LEVEL_GOOD;
+        if (level > STOR_LEVEL_AVOID)
+            level = STOR_LEVEL_GOOD;
+        level_counts[level]++;
+    }
+    for (uint32_t level = STOR_LEVEL_GOOD; level <= STOR_LEVEL_AVOID; level++) {
+        if (level_counts[level] > 0)
+            total_weight += _netaware_level_weights[level] * (uint64_t)level_counts[level];
+    }
+
+    if (total_weight > 0) {
+        uint64_t ticket = _stor_weight_cursor[prio]++ % total_weight;
+        uint8_t chosen_level = STOR_LEVEL_GOOD;
+        for (uint32_t level = STOR_LEVEL_GOOD; level <= STOR_LEVEL_AVOID; level++) {
+            if (level_counts[level] == 0)
+                continue;
+            uint64_t weight = _netaware_level_weights[level] * (uint64_t)level_counts[level];
+            if (ticket < weight) {
+                chosen_level = level;
+                break;
+            }
+            ticket -= weight;
+        }
+
+        for (uint32_t offset = 1; offset <= path_space; offset++) {
+            uint32_t candidate = (_selector_cursor[prio] + offset * _selector_stride[prio]) % path_space;
+            uint8_t level = candidate < levels.size() ?
+                levels[candidate] : STOR_LEVEL_GOOD;
+            if (level > STOR_LEVEL_AVOID)
+                level = STOR_LEVEL_GOOD;
+            if (level == chosen_level) {
+                _selector_cursor[prio] = candidate;
+                record_netaware_selected_level(level);
+                return candidate;
+            }
+        }
+    }
+
+    uint32_t candidate = (_selector_cursor[prio] + _selector_stride[prio]) % path_space;
+    _selector_cursor[prio] = candidate;
+    _stor_selected_avoid++;
+    return candidate;
+}
+
+uint32_t RoceSrc::choose_netaware_virtual_bucket_path(uint32_t prio,
+                                                  uint32_t path_space) {
+    bool stor_mode = _lb_mode == LB_STOR;
+    SharedWeightedProfile& profile = stor_mode ?
+        shared_stor_profile(path_space) : shared_netaware_profile(path_space);
+    const StorFeedbackLevels& levels = profile.levels;
+    uint32_t bucket_size = (uint32_t)profile.bucket.size();
+
+    if (bucket_size > 0) {
+        uint64_t ordinal = _virtual_selector_counter[prio]++;
+        uint64_t epoch = ordinal / bucket_size;
+        uint32_t position = (uint32_t)(ordinal % bucket_size);
+        uint32_t mode_tag = stor_mode ? 0x53544f52 : 0x4e4d5243;
+        uint32_t key = virtual_selector_key(prio, profile.version,
+                                            epoch, mode_tag);
+        uint32_t index = virtual_shuffle_index(key, epoch, position,
+                                               bucket_size);
+        uint32_t candidate = profile.bucket[index];
+        uint8_t level = candidate < levels.size() ?
+            levels[candidate] : STOR_LEVEL_GOOD;
+        if (level > STOR_LEVEL_AVOID)
+            level = STOR_LEVEL_GOOD;
+        _selector_cursor[prio] = candidate;
+        record_netaware_selected_level(level);
+        return candidate;
+    }
+
+    return choose_virtual_binary_path(prio, path_space, levels,
+                                      profile.version,
+                                      stor_mode ? 0x53544642 : 0x4e4d4642);
+}
+
+uint32_t RoceSrc::choose_virtual_binary_path(
+        uint32_t prio, uint32_t path_space,
+        const StorFeedbackLevels& levels, uint64_t profile_version,
+        uint32_t mode_tag) {
+    if (path_space == 0)
+        path_space = 1;
+    uint64_t start = _virtual_selector_counter[prio];
+    for (uint32_t attempt = 0; attempt < path_space; attempt++) {
+        uint64_t ordinal = start + attempt;
+        uint64_t epoch = ordinal / path_space;
+        uint32_t position = (uint32_t)(ordinal % path_space);
+        uint32_t key = virtual_selector_key(prio, profile_version,
+                                            epoch, mode_tag);
+        uint32_t candidate = virtual_shuffle_index(key, epoch, position,
+                                                   path_space);
+        uint8_t level = candidate < levels.size() ?
+            levels[candidate] : STOR_LEVEL_GOOD;
+        if (level != STOR_LEVEL_AVOID) {
+            _virtual_selector_counter[prio] = ordinal + 1;
+            record_netaware_selected_level(level);
+            return candidate;
+        }
+    }
+
+    _virtual_selector_counter[prio] = start + path_space;
+    uint64_t ordinal = _virtual_selector_counter[prio]++;
+    uint64_t epoch = ordinal / path_space;
+    uint32_t position = (uint32_t)(ordinal % path_space);
+    uint32_t key = virtual_selector_key(prio, profile_version,
+                                        epoch, mode_tag ^ 0x46414c4c);
+    uint32_t candidate = virtual_shuffle_index(key, epoch, position,
+                                               path_space);
+    _stor_selected_avoid++;
+    return candidate;
+}
+
+uint32_t RoceSrc::choose_stor_path(Packet::PktPriority priority, uint32_t path_space) {
+    uint32_t prio = selector_priority_index(priority);
+    SharedWeightedProfile& profile = shared_stor_profile(path_space);
+    const StorFeedbackLevels& levels = profile.levels;
+
+    if (_stor_binary_selector)
+        return choose_virtual_binary_path(prio, path_space, levels,
+                                          profile.version, 0x53544249);
+
+    uint32_t avoid_count = 0;
+    for (uint32_t i = 0; i < path_space; i++) {
+        uint8_t level = i < levels.size() ? levels[i] : STOR_LEVEL_GOOD;
+        if (level == STOR_LEVEL_AVOID)
+            avoid_count++;
+    }
+
+    uint32_t probe_interval = weightedShuffledBucketSize(path_space);
+    if (avoid_count > 0 &&
+        _stor_selections_since_probe[prio] + 1 >= probe_interval) {
+        uint32_t target = _stor_avoid_probe_cursor[prio] % avoid_count;
+        uint32_t seen = 0;
+        for (uint32_t candidate = 0; candidate < path_space; candidate++) {
+            uint8_t level = candidate < levels.size() ?
+                levels[candidate] : STOR_LEVEL_GOOD;
+            if (level == STOR_LEVEL_AVOID) {
+                if (seen++ != target)
+                    continue;
+                _stor_avoid_probe_cursor[prio]++;
+                _stor_selections_since_probe[prio] = 0;
+                _selector_cursor[prio] = candidate;
+                record_netaware_selected_level(STOR_LEVEL_AVOID);
+                return candidate;
+            }
+        }
+    }
+
+    _stor_selections_since_probe[prio]++;
+    return choose_netaware_virtual_bucket_path(prio, path_space);
+}
+
+uint32_t RoceSrc::choose_netaware_path(Packet::PktPriority priority, uint32_t path_space) {
+    uint32_t prio = selector_priority_index(priority);
+    shared_netaware_profile(path_space);
+
+    if (_netaware_wrr_mode == NETAWARE_WRR_DIRECT) {
+        init_selector_priority(priority, path_space);
+        return choose_netaware_direct_path(prio, path_space);
+    }
+    if (_netaware_wrr_mode == NETAWARE_WRR_BUCKET) {
+        init_selector_priority(priority, path_space);
+        return choose_netaware_bucket_path(prio, path_space);
+    }
+    return choose_netaware_virtual_bucket_path(prio, path_space);
+}
+
+void RoceSrc::trace_netaware_decision(RocePacket::seq_t seqno, uint32_t path,
+                                  Packet::PktPriority priority) {
+    if (!_netaware_decision_trace || _lb_mode != LB_NETAWARE)
+        return;
+
+    uint32_t path_space = _path_entropy_size ? _path_entropy_size : 1;
+    uint32_t prio = selector_priority_index(priority);
+    SharedWeightedProfile& profile = shared_netaware_profile(path_space);
+    const StorFeedbackLevels& levels = profile.levels;
+    uint32_t ev = path % path_space;
+    uint8_t level = ev < levels.size() ? levels[ev] : STOR_LEVEL_GOOD;
+    if (level > STOR_LEVEL_AVOID)
+        level = STOR_LEVEL_GOOD;
+    uint32_t weight = _netaware_level_weights[level];
+    uint32_t selected_tickets = 0;
+    if (_netaware_wrr_mode == NETAWARE_WRR_SHUFFLED_BUCKET &&
+        ev < profile.tickets.size()) {
+        selected_tickets = profile.tickets[ev];
+    }
+
+    (*_netaware_decision_trace)
+        << timeAsUs(eventlist().now()) << ","
+        << _flow.flow_id() << ","
+        << seqno << ","
+        << ev << ","
+        << path << ","
+        << (uint32_t)level << ","
+        << weight << ",";
+    if (_netaware_wrr_mode == NETAWARE_WRR_SHUFFLED_BUCKET) {
+        uint32_t bucket_size = profile.bucket.empty() ? 1 :
+            (uint32_t)profile.bucket.size();
+        (*_netaware_decision_trace)
+            << (_virtual_selector_counter[prio] / bucket_size) << ","
+            << profile.version << ","
+            << selected_tickets << ",";
+        for (uint32_t i = 0; i < profile.tickets.size(); i++) {
+            if (i)
+                (*_netaware_decision_trace) << "/";
+            (*_netaware_decision_trace) << profile.tickets[i];
+        }
+        (*_netaware_decision_trace) << "\n";
+    } else {
+        (*_netaware_decision_trace) << ",,,\n";
+    }
+}
+
+void RoceSrc::reset_nmrc_evs() {
+    _nmrc_evs.clear();
+    _nmrc_seq_ev.clear();
+    _nmrc_cursor = 0;
+    _nmrc_path_space = 0;
+    _nmrc_initialized_mode = _nmrc_ev_mode;
+    _nmrc_evs_ready = false;
+    _nmrc_select_ordinal = 0;
+}
+
+void RoceSrc::init_nmrc_evs(uint32_t path_space) {
+    if (path_space == 0)
+        path_space = 1;
+    if (_nmrc_evs_ready && _nmrc_path_space == path_space &&
+        _nmrc_initialized_mode == _nmrc_ev_mode)
+        return;
+
+    reset_nmrc_evs();
+    _nmrc_path_space = path_space;
+    _nmrc_initialized_mode = _nmrc_ev_mode;
+
+    uint32_t set_size = _nmrc_ev_mode == NMRC_EV_RANDOM32 ?
+        32 : std::min(path_space, 32U);
+    uint32_t src = _srcaddr == UINT32_MAX ? _node_num : _srcaddr;
+    uint32_t dst = _dstaddr == UINT32_MAX ?
+        (_node_num ^ 0x5bd1e995) : _dstaddr;
+    uint32_t qp_key = selector_mix(src, dst, _flow.flow_id());
+    uint32_t mode_tag = _nmrc_ev_mode == NMRC_EV_ENCODED ?
+        0x454e4300 : 0x524e4400;
+    uint32_t seed = selector_mix(_nmrc_ev_seed, qp_key,
+                                 mode_tag ^ set_size ^ path_space);
+    uint32_t counter = 0;
+
+    if (_nmrc_ev_mode == NMRC_EV_ENCODED) {
+        uint32_t encodable_paths = std::min(path_space, 65536U);
+        std::vector<uint32_t> candidates(encodable_paths);
+        for (uint32_t i = 0; i < encodable_paths; i++)
+            candidates[i] = i;
+        set_size = std::min(set_size, encodable_paths);
+        for (uint32_t i = 0; i < set_size; i++) {
+            uint32_t remaining = encodable_paths - i;
+            uint32_t ix = i + (nmrc_local_next(seed, counter) % remaining);
+            std::swap(candidates[i], candidates[ix]);
+        }
+        for (uint32_t i = 0; i < set_size; i++)
+            _nmrc_evs.push_back(NmrcEv(candidates[i], candidates[i]));
+    } else {
+        std::set<uint32_t> used;
+        while (_nmrc_evs.size() < set_size) {
+            uint32_t ev = nmrc_local_next(seed, counter) & 0xffffU;
+            if (!used.insert(ev).second)
+                continue;
+            uint32_t physical = selector_mix(
+                ev, src ^ _nmrc_ev_seed,
+                dst ^ _flow.flow_id() ^ 0x70617468) % path_space;
+            _nmrc_evs.push_back(NmrcEv(ev, physical));
+        }
+        for (uint32_t i = 0; i < _nmrc_evs.size(); i++) {
+            uint32_t remaining = (uint32_t)_nmrc_evs.size() - i;
+            uint32_t ix = i + (nmrc_local_next(seed, counter) % remaining);
+            std::swap(_nmrc_evs[i], _nmrc_evs[ix]);
+        }
+    }
+
+    _nmrc_evs_ready = true;
+}
+
+uint32_t RoceSrc::nmrc_ev_index(uint32_t ev) const {
+    for (uint32_t i = 0; i < _nmrc_evs.size(); i++) {
+        if (_nmrc_evs[i].ev == ev)
+            return i;
+    }
+    return UINT32_MAX;
+}
+
+uint32_t RoceSrc::nmrc_physical_path(uint32_t ev,
+                                     uint32_t path_space) const {
+    if (path_space == 0)
+        path_space = 1;
+    uint32_t index = nmrc_ev_index(ev);
+    if (index != UINT32_MAX)
+        return _nmrc_evs[index].physical_path % path_space;
+    return ev % path_space;
+}
+
+RoceSrc::NmrcChoice RoceSrc::choose_nmrc_ev(uint32_t path_space) {
+    init_nmrc_evs(path_space);
+    if (_nmrc_evs.empty())
+        return NmrcChoice(UINT32_MAX, 0);
+
+    uint32_t count = (uint32_t)_nmrc_evs.size();
+    for (uint32_t attempt = 0; attempt < count; attempt++) {
+        uint32_t index = _nmrc_cursor % count;
+        _nmrc_cursor = (index + 1) % count;
+        NmrcEv& candidate = _nmrc_evs[index];
+        if (candidate.cooling &&
+            _nmrc_select_ordinal >= candidate.cool_until_select_count) {
+            candidate.cooling = false;
+            candidate.cool_until_select_count = 0;
+            _nmrc_cooling_recoveries++;
+        }
+        if (candidate.cooling) {
+            _nmrc_cooling_skips++;
+            continue;
+        }
+        _nmrc_select_ordinal++;
+        return NmrcChoice(candidate.ev, candidate.physical_path);
+    }
+
+    uint32_t earliest = 0;
+    for (uint32_t i = 1; i < count; i++) {
+        if (_nmrc_evs[i].cool_until_select_count <
+                _nmrc_evs[earliest].cool_until_select_count ||
+            (_nmrc_evs[i].cool_until_select_count ==
+                 _nmrc_evs[earliest].cool_until_select_count &&
+             _nmrc_evs[i].ev < _nmrc_evs[earliest].ev))
+            earliest = i;
+    }
+    _nmrc_all_cooling_fallbacks++;
+    _nmrc_select_ordinal++;
+    return NmrcChoice(_nmrc_evs[earliest].ev,
+                      _nmrc_evs[earliest].physical_path);
+}
+
+RoceSrc::NmrcChoice RoceSrc::choose_nmrc_retx_ev(
+        uint32_t path_space, RocePacket::seq_t seqno) {
+    init_nmrc_evs(path_space);
+    std::map<RocePacket::seq_t, uint32_t>::const_iterator found =
+        _nmrc_seq_ev.find(seqno);
+    if (found == _nmrc_seq_ev.end())
+        return choose_nmrc_ev(path_space);
+    uint32_t index = nmrc_ev_index(found->second);
+    if (index == UINT32_MAX)
+        return choose_nmrc_ev(path_space);
+    _nmrc_select_ordinal++;
+    return NmrcChoice(_nmrc_evs[index].ev,
+                      _nmrc_evs[index].physical_path);
+}
+
+bool RoceSrc::notify_nmrc_ev(uint32_t ev) {
+    uint32_t index = nmrc_ev_index(ev);
+    if (index == UINT32_MAX)
+        return false;
+    NmrcEv& entry = _nmrc_evs[index];
+    if (entry.cooling &&
+        _nmrc_select_ordinal >= entry.cool_until_select_count) {
+        entry.cooling = false;
+        entry.cool_until_select_count = 0;
+        _nmrc_cooling_recoveries++;
+    }
+    if (entry.cooling) {
+        _nmrc_duplicate_notifications++;
+        return false;
+    }
+    entry.cooling = true;
+    entry.cool_until_select_count =
+        _nmrc_select_ordinal + _nmrc_evs.size();
+    _nmrc_cooldown_starts++;
+    return true;
+}
+
+void RoceSrc::note_nmrc_packet_ev(RocePacket::seq_t seqno, uint32_t ev) {
+    if (_lb_mode != LB_NMRC || ev == UINT32_MAX)
+        return;
+    _nmrc_seq_ev[seqno] = ev;
+}
+
+void RoceSrc::init_nmrc_evs_for_test(uint32_t path_space) {
+    init_nmrc_evs(path_space);
+}
+
+std::vector<uint32_t> RoceSrc::nmrc_ev_values_for_test() const {
+    std::vector<uint32_t> values;
+    for (uint32_t i = 0; i < _nmrc_evs.size(); i++)
+        values.push_back(_nmrc_evs[i].ev);
+    return values;
+}
+
+std::vector<uint32_t> RoceSrc::nmrc_physical_paths_for_test() const {
+    std::vector<uint32_t> paths;
+    for (uint32_t i = 0; i < _nmrc_evs.size(); i++)
+        paths.push_back(_nmrc_evs[i].physical_path);
+    return paths;
+}
+
+uint32_t RoceSrc::choose_nmrc_ev_for_test(uint32_t path_space) {
+    return choose_nmrc_ev(path_space).ev;
+}
+
+bool RoceSrc::notify_nmrc_ev_for_test(uint32_t ev) {
+    return notify_nmrc_ev(ev);
+}
+
+bool RoceSrc::nmrc_ev_cooling_for_test(uint32_t ev) const {
+    uint32_t index = nmrc_ev_index(ev);
+    return index != UINT32_MAX && _nmrc_evs[index].cooling &&
+        _nmrc_select_ordinal < _nmrc_evs[index].cool_until_select_count;
+}
+
+uint64_t RoceSrc::nmrc_ev_cool_until_for_test(uint32_t ev) const {
+    uint32_t index = nmrc_ev_index(ev);
+    return index == UINT32_MAX ? 0 :
+        _nmrc_evs[index].cool_until_select_count;
+}
+
+uint64_t RoceSrc::nmrc_selection_ordinal_for_test() const {
+    return _nmrc_select_ordinal;
+}
+
+uint64_t RoceSrc::nmrc_all_cooling_fallbacks_for_test() const {
+    return _nmrc_all_cooling_fallbacks;
+}
+
+uint32_t RoceSrc::nmrc_unique_physical_paths_for_diag() const {
+    std::set<uint32_t> paths;
+    for (uint32_t i = 0; i < _nmrc_evs.size(); i++)
+        paths.insert(_nmrc_evs[i].physical_path);
+    return paths.size();
 }
 
 void RoceSrc::reset_mrc_paths() {
@@ -974,33 +2286,17 @@ void RoceSrc::reset_mrc_paths() {
     _mrc_path_space = 0;
     _mrc_paths_ready = false;
     _mrc_seq_ev.clear();
+    _mrc_select_counter = 0;
 }
 
 uint32_t RoceSrc::mrc_logical_ev_count(uint32_t path_space) const {
-    if (path_space == 0)
-        path_space = 1;
-
-    uint32_t active = _mrc_active_path_count ? _mrc_active_path_count : path_space;
-    uint32_t backup = _mrc_backup_path_count ? _mrc_backup_path_count : active;
-    uint32_t logical = active + backup;
-    if (logical < path_space)
-        logical = path_space;
-    if (!logical)
-        logical = 1;
-    return logical;
+    return path_space ? path_space : 1;
 }
 
 uint32_t RoceSrc::mrc_desired_active_paths(uint32_t path_space) const {
-    if (path_space == 0)
-        path_space = 1;
-
-    uint32_t desired = _mrc_active_path_count ? _mrc_active_path_count : path_space;
-    uint32_t logical = mrc_logical_ev_count(path_space);
-    if (desired > logical)
-        desired = logical;
-    if (!desired)
-        desired = 1;
-    return desired;
+    if (!path_space)
+        return 1;
+    return path_space < 32 ? path_space : 32;
 }
 
 bool RoceSrc::mrc_ev_in_active(uint32_t logical_ev) const {
@@ -1027,44 +2323,33 @@ void RoceSrc::init_mrc_paths(uint32_t path_space) {
     _mrc_seq_ev.clear();
 
     vector<uint32_t> ids(logical_count);
-    vector<uint32_t> physical(path_space);
     for (uint32_t i = 0; i < logical_count; i++)
         ids[i] = i;
-    for (uint32_t i = 0; i < path_space; i++)
-        physical[i] = i;
 
     uint32_t src = _srcaddr == UINT32_MAX ? _node_num : _srcaddr;
     uint32_t dst = _dstaddr == UINT32_MAX ? (_node_num ^ 0x5bd1e995) : _dstaddr;
-    uint32_t seed = nmrc_mix(src, dst, _flow.flow_id() ^ 0x4d524300);
+    uint32_t seed = selector_mix(src, dst, _flow.flow_id() ^ 0x4d524300);
     for (uint32_t i = 0; i < logical_count; i++) {
         uint32_t remaining = logical_count - i;
-        uint32_t ix = i + (nmrc_mix(seed, i, _flow.flow_id()) % remaining);
+        uint32_t ix = i + (selector_mix(seed, i, _flow.flow_id()) % remaining);
         uint32_t tmp = ids[i];
         ids[i] = ids[ix];
         ids[ix] = tmp;
     }
-    for (uint32_t i = 0; i < path_space; i++) {
-        uint32_t remaining = path_space - i;
-        uint32_t ix = i + (nmrc_mix(seed, i, _flow.flow_id() ^ 0x70687973) % remaining);
-        uint32_t tmp = physical[i];
-        physical[i] = physical[ix];
-        physical[ix] = tmp;
-    }
 
     uint32_t desired_active = mrc_desired_active_paths(path_space);
-    uint32_t desired_backup = _mrc_backup_path_count ? _mrc_backup_path_count : desired_active;
-    if (desired_backup > logical_count - desired_active)
-        desired_backup = logical_count - desired_active;
+    uint32_t desired_backup = logical_count - desired_active;
 
     for (uint32_t logical = 0; logical < logical_count; logical++) {
         _mrc_evs[logical].logical_ev = logical;
-        _mrc_evs[logical].physical_path = physical[logical % path_space];
+        _mrc_evs[logical].physical_path = logical;
         _mrc_evs[logical].state = MRC_PATH_UNUSED;
         _mrc_evs[logical].probe_successes = 0;
         _mrc_evs[logical].retry_after = 0;
+        _mrc_evs[logical].cool_until_select_count = 0;
     }
 
-    for (uint32_t i = 0; i < desired_active && i < ids.size(); i++) {
+    for (uint32_t i = 0; i < desired_active; i++) {
         _mrc_evs[ids[i]].state = MRC_PATH_ACTIVE;
         _mrc_active.push_back(ids[i]);
     }
@@ -1075,6 +2360,26 @@ void RoceSrc::init_mrc_paths(uint32_t path_space) {
     _mrc_path_space = path_space;
 }
 
+bool RoceSrc::mrc_cooling_expired(const MrcEv& ev) const {
+    if (ev.state != MRC_PATH_COOLING)
+        return false;
+    if (ev.cool_until_select_count)
+        return _mrc_select_counter >= ev.cool_until_select_count;
+    return eventlist().now() >= ev.retry_after;
+}
+
+RoceSrc::MrcChoice RoceSrc::mrc_note_selected_choice(const MrcChoice& choice) {
+    _mrc_select_counter++;
+    return choice;
+}
+
+uint64_t RoceSrc::mrc_current_cooldown_skip_selections() const {
+    uint32_t active_count = (uint32_t)_mrc_active.size();
+    if (!active_count)
+        active_count = 1;
+    return active_count;
+}
+
 bool RoceSrc::mrc_ev_selectable(uint32_t logical_ev) {
     if (logical_ev >= _mrc_evs.size())
         return false;
@@ -1083,7 +2388,9 @@ bool RoceSrc::mrc_ev_selectable(uint32_t logical_ev) {
     if (ev.state == MRC_PATH_ACTIVE)
         return true;
 
-    if (ev.state == MRC_PATH_COOLING && eventlist().now() >= ev.retry_after) {
+    if (ev.state == MRC_PATH_COOLING && mrc_cooling_expired(ev)) {
+        if (ev.cool_until_select_count)
+            _mrc_cycle_cooling_expiries++;
         mrc_activate_ev(logical_ev);
         return ev.state == MRC_PATH_ACTIVE;
     }
@@ -1101,6 +2408,7 @@ void RoceSrc::mrc_activate_ev(uint32_t logical_ev) {
         if (_mrc_active.size() >= desired) {
             _mrc_evs[logical_ev].state = MRC_PATH_UNUSED;
             _mrc_evs[logical_ev].retry_after = 0;
+            _mrc_evs[logical_ev].cool_until_select_count = 0;
             _mrc_evs[logical_ev].probe_successes = 0;
             return;
         }
@@ -1109,6 +2417,7 @@ void RoceSrc::mrc_activate_ev(uint32_t logical_ev) {
 
     _mrc_evs[logical_ev].state = MRC_PATH_ACTIVE;
     _mrc_evs[logical_ev].retry_after = 0;
+    _mrc_evs[logical_ev].cool_until_select_count = 0;
     _mrc_evs[logical_ev].probe_successes = 0;
 }
 
@@ -1138,13 +2447,19 @@ void RoceSrc::mrc_promote_backup(uint32_t path_space) {
         if (mrc_ev_in_active(logical_ev))
             continue;
         MrcEv& ev = _mrc_evs[logical_ev];
-        if ((ev.state == MRC_PATH_FAILED || ev.state == MRC_PATH_COOLING) &&
-            now < ev.retry_after)
+        if (ev.state == MRC_PATH_FAILED && now < ev.retry_after)
             continue;
+        if (ev.state == MRC_PATH_COOLING && !mrc_cooling_expired(ev))
+            continue;
+        if (ev.state == MRC_PATH_COOLING && ev.cool_until_select_count)
+            _mrc_cycle_cooling_expiries++;
         ev.state = MRC_PATH_ACTIVE;
         ev.retry_after = 0;
+        ev.cool_until_select_count = 0;
         ev.probe_successes = 0;
         _mrc_active.push_back(logical_ev);
+        _mrc_backup_replacement_events++;
+        _mrc_backup_replacement_diff_physical++;
     }
 
     for (uint32_t logical_ev = 0;
@@ -1153,70 +2468,82 @@ void RoceSrc::mrc_promote_backup(uint32_t path_space) {
         if (mrc_ev_in_active(logical_ev))
             continue;
         MrcEv& ev = _mrc_evs[logical_ev];
-        if ((ev.state == MRC_PATH_FAILED || ev.state == MRC_PATH_COOLING) &&
-            now < ev.retry_after)
+        if (ev.state == MRC_PATH_FAILED && now < ev.retry_after)
             continue;
+        if (ev.state == MRC_PATH_COOLING && !mrc_cooling_expired(ev))
+            continue;
+        if (ev.state == MRC_PATH_COOLING && ev.cool_until_select_count)
+            _mrc_cycle_cooling_expiries++;
         ev.state = MRC_PATH_ACTIVE;
         ev.retry_after = 0;
+        ev.cool_until_select_count = 0;
         ev.probe_successes = 0;
         _mrc_active.push_back(logical_ev);
+        _mrc_backup_replacement_events++;
+        _mrc_backup_replacement_diff_physical++;
     }
+
+    sample_mrc_state_counts();
 }
 
-void RoceSrc::mrc_mark_congested(uint32_t logical_ev) {
+void RoceSrc::mrc_mark_congested(uint32_t logical_ev,
+                                 mrc_congestion_signal_t signal) {
     if (logical_ev >= _mrc_evs.size())
         return;
     MrcEv& ev = _mrc_evs[logical_ev];
     if (ev.state == MRC_PATH_FAILED)
         return;
+    bool cwnd_scaled_feedback =
+        _mrc_cooldown_mode == MRC_COOLDOWN_CWND_SCALED;
+    if (cwnd_scaled_feedback) {
+        _mrc_cwnd_scaled_feedback_events++;
+        if (ev.state == MRC_PATH_COOLING) {
+            _mrc_cwnd_scaled_duplicate_feedback_ignored++;
+            return;
+        }
+    }
+    if (ev.state == MRC_PATH_PROBING)
+        _mrc_probe_fail_events++;
 
-    if (_mrc_ecn_cooldown == 0) {
+    uint64_t base_skip = mrc_current_cooldown_skip_selections();
+    uint64_t skip = base_skip;
+    if (cwnd_scaled_feedback)
+        skip = mrcCwndScaledSkipSelections((uint32_t)_mrc_active.size());
+    if (skip == 0) {
         if (mrc_ev_in_active(logical_ev))
             ev.state = MRC_PATH_ACTIVE;
+        ev.retry_after = 0;
+        ev.cool_until_select_count = 0;
         return;
     }
 
-    mrc_remove_active_ev(logical_ev);
     ev.state = MRC_PATH_COOLING;
     ev.probe_successes = 0;
-    ev.retry_after = eventlist().now() + _mrc_ecn_cooldown;
-    mrc_promote_backup(_path_entropy_size ? _path_entropy_size : 1);
-}
-
-void RoceSrc::mrc_mark_physical_congested(uint32_t physical_path) {
-    if (_mrc_evs.empty())
-        return;
-    uint32_t path_space = _path_entropy_size ? _path_entropy_size : 1;
-    uint32_t physical = physical_path % path_space;
-    for (uint32_t i = 0; i < _mrc_evs.size(); i++) {
-        if (_mrc_evs[i].physical_path == physical &&
-            _mrc_evs[i].state != MRC_PATH_UNUSED)
-            mrc_mark_congested(i);
-    }
+    ev.retry_after = 0;
+    ev.cool_until_select_count = _mrc_select_counter + skip;
+    _mrc_cycle_cooling_events++;
+    _mrc_cooling_skip_selection_sum += skip;
+    _mrc_cooling_skip_selection_events++;
+    sample_mrc_state_counts();
 }
 
 void RoceSrc::mrc_mark_failed(uint32_t logical_ev) {
     if (logical_ev >= _mrc_evs.size())
         return;
 
+    MrcEv& ev = _mrc_evs[logical_ev];
+    if (ev.state == MRC_PATH_PROBING)
+        _mrc_probe_fail_events++;
     mrc_remove_active_ev(logical_ev);
-    _mrc_evs[logical_ev].state = MRC_PATH_FAILED;
-    _mrc_evs[logical_ev].probe_successes = 0;
-    _mrc_evs[logical_ev].retry_after = eventlist().now() + _mrc_failed_retry;
+    ev.state = MRC_PATH_FAILED;
+    ev.probe_successes = 0;
+    ev.retry_after = eventlist().now() + _mrc_failed_retry;
+    ev.cool_until_select_count = 0;
+    uint64_t replacements_before = _mrc_backup_replacement_events;
     mrc_promote_backup(_path_entropy_size ? _path_entropy_size : 1);
-}
-
-void RoceSrc::mrc_mark_physical_failed(uint32_t physical_path) {
-    if (_mrc_evs.empty())
-        return;
-    uint32_t path_space = _path_entropy_size ? _path_entropy_size : 1;
-    uint32_t physical = physical_path % path_space;
-    for (uint32_t i = 0; i < _mrc_evs.size(); i++) {
-        if (_mrc_evs[i].physical_path == physical &&
-            _mrc_evs[i].state != MRC_PATH_UNUSED &&
-            _mrc_evs[i].state != MRC_PATH_FAILED)
-            mrc_mark_failed(i);
-    }
+    _mrc_failure_backup_promotions +=
+        _mrc_backup_replacement_events - replacements_before;
+    sample_mrc_state_counts();
 }
 
 uint32_t RoceSrc::mrc_choose_probe_ev(uint32_t path_space) {
@@ -1229,6 +2556,9 @@ uint32_t RoceSrc::mrc_choose_probe_ev(uint32_t path_space) {
         if (_mrc_evs[i].state == MRC_PATH_FAILED && now >= _mrc_evs[i].retry_after) {
             _mrc_evs[i].state = MRC_PATH_PROBING;
             _mrc_evs[i].probe_successes = 0;
+            _mrc_evs[i].cool_until_select_count = 0;
+            _mrc_probe_events++;
+            sample_mrc_state_counts();
             return i;
         }
     }
@@ -1242,6 +2572,9 @@ uint32_t RoceSrc::mrc_choose_probe_ev(uint32_t path_space) {
         if (_mrc_evs[logical_ev].state == MRC_PATH_UNUSED) {
             _mrc_evs[logical_ev].state = MRC_PATH_PROBING;
             _mrc_evs[logical_ev].probe_successes = 0;
+            _mrc_evs[logical_ev].cool_until_select_count = 0;
+            _mrc_probe_events++;
+            sample_mrc_state_counts();
             return logical_ev;
         }
     }
@@ -1250,6 +2583,9 @@ uint32_t RoceSrc::mrc_choose_probe_ev(uint32_t path_space) {
         if (_mrc_evs[i].state == MRC_PATH_UNUSED) {
             _mrc_evs[i].state = MRC_PATH_PROBING;
             _mrc_evs[i].probe_successes = 0;
+            _mrc_evs[i].cool_until_select_count = 0;
+            _mrc_probe_events++;
+            sample_mrc_state_counts();
             return i;
         }
     }
@@ -1263,18 +2599,21 @@ uint32_t RoceSrc::choose_mrc_path(uint32_t path_space) {
 
 RoceSrc::MrcChoice RoceSrc::choose_mrc_ev(uint32_t path_space) {
     init_mrc_paths(path_space);
+    sample_mrc_state_counts();
 
     uint32_t probe = mrc_choose_probe_ev(path_space);
     if (probe != UINT32_MAX)
-        return MrcChoice(probe, _mrc_evs[probe].physical_path % path_space);
+        return mrc_note_selected_choice(
+            MrcChoice(probe, _mrc_evs[probe].physical_path % path_space));
 
-    uint32_t min_active = _mrc_min_active_paths;
-    uint32_t desired = mrc_desired_active_paths(path_space);
-    if (min_active > desired)
-        min_active = desired;
-    if (_mrc_active.size() < min_active)
+    if (_mrc_active.empty())
         mrc_promote_backup(path_space);
 
+    uint32_t earliest_cooling = UINT32_MAX;
+    uint32_t first_cooling = UINT32_MAX;
+    uint32_t first_cooling_index = 0;
+    simtime_picosec earliest_retry = 0;
+    uint64_t earliest_select_count = 0;
     if (!_mrc_active.empty()) {
         uint32_t tries = (uint32_t)_mrc_active.size();
         for (uint32_t i = 0; i < tries; i++) {
@@ -1282,13 +2621,57 @@ RoceSrc::MrcChoice RoceSrc::choose_mrc_ev(uint32_t path_space) {
             uint32_t logical_ev = _mrc_active[ix];
             _mrc_active_cursor = (ix + 1) % _mrc_active.size();
             if (mrc_ev_selectable(logical_ev))
-                return MrcChoice(logical_ev, _mrc_evs[logical_ev].physical_path % path_space);
+                return mrc_note_selected_choice(
+                    MrcChoice(logical_ev,
+                              _mrc_evs[logical_ev].physical_path % path_space));
+            if (logical_ev < _mrc_evs.size()) {
+                MrcEv& ev = _mrc_evs[logical_ev];
+                if (ev.state == MRC_PATH_COOLING) {
+                    if (first_cooling == UINT32_MAX) {
+                        first_cooling = logical_ev;
+                        first_cooling_index = ix;
+                    }
+                    bool better = earliest_cooling == UINT32_MAX;
+                    if (!better && ev.cool_until_select_count)
+                        better = earliest_select_count == 0 ||
+                            ev.cool_until_select_count < earliest_select_count ||
+                            (ev.cool_until_select_count == earliest_select_count &&
+                             logical_ev < earliest_cooling);
+                    if (!better && !ev.cool_until_select_count)
+                        better = ev.retry_after < earliest_retry ||
+                            (ev.retry_after == earliest_retry &&
+                             logical_ev < earliest_cooling);
+                    if (!better)
+                        continue;
+                    earliest_cooling = logical_ev;
+                    earliest_retry = ev.retry_after;
+                    earliest_select_count = ev.cool_until_select_count;
+                }
+            }
         }
+    }
+
+    if (earliest_cooling != UINT32_MAX) {
+        _mrc_forced_cooling_use++;
+        uint32_t selected = earliest_cooling;
+        if (_mrc_all_cooling_fallback == MRC_ALL_COOLING_ROUND_ROBIN &&
+            first_cooling != UINT32_MAX) {
+            selected = first_cooling;
+            _mrc_active_cursor =
+                (first_cooling_index + 1) % _mrc_active.size();
+            _mrc_forced_cooling_round_robin_use++;
+        } else {
+            _mrc_forced_cooling_earliest_use++;
+        }
+        return mrc_note_selected_choice(
+            MrcChoice(selected,
+                      _mrc_evs[selected].physical_path % path_space));
     }
 
     for (uint32_t i = 0; i < _mrc_evs.size(); i++) {
         if (mrc_ev_selectable(i))
-            return MrcChoice(i, _mrc_evs[i].physical_path % path_space);
+            return mrc_note_selected_choice(
+                MrcChoice(i, _mrc_evs[i].physical_path % path_space));
     }
 
     simtime_picosec now = eventlist().now();
@@ -1296,16 +2679,65 @@ RoceSrc::MrcChoice RoceSrc::choose_mrc_ev(uint32_t path_space) {
         if (_mrc_evs[i].state == MRC_PATH_FAILED && now >= _mrc_evs[i].retry_after) {
             _mrc_evs[i].state = MRC_PATH_PROBING;
             _mrc_evs[i].probe_successes = 0;
-            return MrcChoice(i, _mrc_evs[i].physical_path % path_space);
+            _mrc_evs[i].cool_until_select_count = 0;
+            _mrc_probe_events++;
+            sample_mrc_state_counts();
+            return mrc_note_selected_choice(
+                MrcChoice(i, _mrc_evs[i].physical_path % path_space));
         }
     }
 
     if (!_mrc_evs.empty()) {
         uint32_t logical = random() % _mrc_evs.size();
-        return MrcChoice(logical, _mrc_evs[logical].physical_path % path_space);
+        return mrc_note_selected_choice(
+            MrcChoice(logical, _mrc_evs[logical].physical_path % path_space));
     }
 
-    return MrcChoice(UINT32_MAX, random() % path_space);
+    return mrc_note_selected_choice(MrcChoice(UINT32_MAX, random() % path_space));
+}
+
+RoceSrc::MrcChoice RoceSrc::choose_mrc_retx_ev(uint32_t path_space,
+                                               uint32_t original_logical_ev) {
+    init_mrc_paths(path_space);
+
+    if (original_logical_ev == UINT32_MAX ||
+        original_logical_ev >= _mrc_evs.size())
+        return choose_mrc_ev(path_space);
+
+    MrcEv& original = _mrc_evs[original_logical_ev];
+    bool need_alternative = original.state == MRC_PATH_COOLING ||
+        original.state == MRC_PATH_FAILED;
+    if (!need_alternative)
+        return choose_mrc_ev(path_space);
+
+    uint32_t original_physical = original.physical_path % path_space;
+    uint32_t same_physical_fallback = UINT32_MAX;
+    if (!_mrc_active.empty()) {
+        uint32_t tries = (uint32_t)_mrc_active.size();
+        for (uint32_t i = 0; i < tries; i++) {
+            uint32_t ix = _mrc_active_cursor % _mrc_active.size();
+            uint32_t logical_ev = _mrc_active[ix];
+            _mrc_active_cursor = (ix + 1) % _mrc_active.size();
+            if (logical_ev == original_logical_ev ||
+                logical_ev >= _mrc_evs.size())
+                continue;
+        if (!mrc_ev_selectable(logical_ev))
+            continue;
+        uint32_t physical = _mrc_evs[logical_ev].physical_path % path_space;
+        if (physical != original_physical)
+            return mrc_note_selected_choice(MrcChoice(logical_ev, physical));
+        if (same_physical_fallback == UINT32_MAX)
+            same_physical_fallback = logical_ev;
+        }
+    }
+
+    if (same_physical_fallback != UINT32_MAX) {
+        uint32_t physical = _mrc_evs[same_physical_fallback].physical_path % path_space;
+        return mrc_note_selected_choice(MrcChoice(same_physical_fallback, physical));
+    }
+
+    _mrc_retx_fallback_events++;
+    return choose_mrc_ev(path_space);
 }
 
 void RoceSrc::note_mrc_packet_ev(RocePacket::seq_t seqno, uint32_t logical_ev) {
@@ -1317,6 +2749,16 @@ void RoceSrc::note_mrc_packet_ev(RocePacket::seq_t seqno, uint32_t logical_ev) {
 }
 
 void RoceSrc::clean_mrc_seq_evs() {
+    if (_lb_mode == LB_NMRC) {
+        while (!_nmrc_seq_ev.empty()) {
+            map<RocePacket::seq_t, uint32_t>::iterator it =
+                _nmrc_seq_ev.begin();
+            if (it->first > _last_acked)
+                break;
+            _nmrc_seq_ev.erase(it);
+        }
+        return;
+    }
     if (_lb_mode != LB_MRC)
         return;
     while (!_mrc_seq_ev.empty()) {
@@ -1327,14 +2769,9 @@ void RoceSrc::clean_mrc_seq_evs() {
     }
 }
 
-void RoceSrc::fail_mrc_sequence(RocePacket::seq_t seqno) {
-    map<RocePacket::seq_t, uint32_t>::iterator it = _mrc_seq_ev.find(seqno);
-    if (it == _mrc_seq_ev.end())
-        return;
-    mrc_mark_failed(it->second);
-}
-
-void RoceSrc::mrc_note_clean_ack(RocePacket::seq_t ackno) {
+void RoceSrc::mrc_note_clean_ack(RocePacket::seq_t ackno,
+                                 uint32_t explicit_ev) {
+    (void)explicit_ev;
     for (map<RocePacket::seq_t, uint32_t>::iterator it = _mrc_seq_ev.begin();
          it != _mrc_seq_ev.end() && it->first <= ackno; it++) {
         uint32_t logical_ev = it->second;
@@ -1343,24 +2780,55 @@ void RoceSrc::mrc_note_clean_ack(RocePacket::seq_t ackno) {
         MrcEv& ev = _mrc_evs[logical_ev];
         if (ev.state == MRC_PATH_PROBING) {
             ev.probe_successes++;
+            _mrc_probe_success_events++;
             mrc_activate_ev(logical_ev);
         } else if (ev.state == MRC_PATH_COOLING &&
-                   eventlist().now() >= ev.retry_after) {
+                   mrc_cooling_expired(ev)) {
+            if (ev.cool_until_select_count)
+                _mrc_cycle_cooling_expiries++;
             mrc_activate_ev(logical_ev);
         }
     }
 }
 
-void RoceSrc::mrc_note_ecn_ack(RocePacket::seq_t ackno, uint32_t physical_path) {
-    map<RocePacket::seq_t, uint32_t>::iterator it = _mrc_seq_ev.upper_bound(ackno);
+uint32_t RoceSrc::mrc_resolve_encoded_feedback_ev(
+        uint32_t explicit_ev, RocePacket::seq_t sequence,
+        uint32_t physical_path) {
+    uint32_t sequence_ev = UINT32_MAX;
+    map<RocePacket::seq_t, uint32_t>::const_iterator it =
+        _mrc_seq_ev.upper_bound(sequence);
     if (it != _mrc_seq_ev.begin()) {
         --it;
-        if (it->first <= ackno) {
-            mrc_mark_congested(it->second);
-            return;
+        if (it->first <= sequence && it->second < _mrc_evs.size())
+            sequence_ev = it->second;
+    }
+
+    if (explicit_ev < _mrc_evs.size()) {
+        _mrc_feedback_exact_ev_events++;
+        if (sequence_ev != UINT32_MAX && sequence_ev != explicit_ev)
+            _mrc_feedback_cumulative_mismatch_events++;
+        return explicit_ev;
+    }
+
+    if (sequence_ev != UINT32_MAX) {
+        _mrc_feedback_sequence_fallback_events++;
+        return sequence_ev;
+    }
+
+    uint32_t path_space = _path_entropy_size ? _path_entropy_size : 1;
+    uint32_t physical = physical_path % path_space;
+    if (physical < _mrc_evs.size() &&
+        _mrc_evs[physical].physical_path % path_space == physical) {
+        _mrc_feedback_physical_fallback_events++;
+        return physical;
+    }
+    for (uint32_t i = 0; i < _mrc_evs.size(); i++) {
+        if (_mrc_evs[i].physical_path % path_space == physical) {
+            _mrc_feedback_physical_fallback_events++;
+            return i;
         }
     }
-    mrc_mark_physical_congested(physical_path);
+    return UINT32_MAX;
 }
 
 void RoceSrc::update_mrc_on_ack(const RoceAck& ack) {
@@ -1370,12 +2838,21 @@ void RoceSrc::update_mrc_on_ack(const RoceAck& ack) {
     uint32_t path_space = _path_entropy_size ? _path_entropy_size : 1;
     init_mrc_paths(path_space);
 
-    if (ack.flags() & ECN_ECHO)
-        mrc_note_ecn_ack(ack.ackno(), ack.pathid());
-    else
-        mrc_note_clean_ack(ack.ackno());
+    if (ack.flags() & ECN_ECHO) {
+        _mrc_ecn_cooldown_events++;
+        _mrc_ecn_physical_hist[ack.pathid() % path_space]++;
+        uint32_t ev = mrc_resolve_encoded_feedback_ev(
+            ack.has_mrc_ev() ? ack.mrc_ev() : UINT32_MAX,
+            ack.ackno(), ack.pathid());
+        if (ev != UINT32_MAX)
+            mrc_mark_congested(ev, MRC_CONGESTION_ECN);
+    } else {
+        mrc_note_clean_ack(
+            ack.ackno(), ack.has_mrc_ev() ? ack.mrc_ev() : UINT32_MAX);
+    }
 
     clean_mrc_seq_evs();
+    sample_mrc_state_counts();
 }
 
 void RoceSrc::update_mrc_on_nack(const RoceNack& nack) {
@@ -1385,58 +2862,44 @@ void RoceSrc::update_mrc_on_nack(const RoceNack& nack) {
     uint32_t path_space = _path_entropy_size ? _path_entropy_size : 1;
     init_mrc_paths(path_space);
     RocePacket::seq_t first_missing = _last_acked + 1;
-    bool marked = false;
-
     if (nack.reason() == RoceNack::TRIM) {
-        map<RocePacket::seq_t, uint32_t>::iterator it = _mrc_seq_ev.find(first_missing);
-        if (it != _mrc_seq_ev.end())
-            mrc_mark_congested(it->second);
-        else
-            mrc_mark_physical_congested(nack.pathid());
+        _mrc_trim_events++;
+        _mrc_trim_physical_hist[nack.pathid() % path_space]++;
+        _mrc_nack_physical_hist[nack.pathid() % path_space]++;
+        _mrc_trim_cooling_events++;
+        uint32_t ev = mrc_resolve_encoded_feedback_ev(
+            nack.has_mrc_ev() ? nack.mrc_ev() : UINT32_MAX,
+            first_missing, nack.pathid());
+        if (ev != UINT32_MAX)
+            mrc_mark_congested(ev, MRC_CONGESTION_TRIM);
+        sample_mrc_state_counts();
         return;
     }
 
-    if (first_missing <= _highest_sent) {
-        map<RocePacket::seq_t, uint32_t>::iterator it = _mrc_seq_ev.find(first_missing);
-        if (it != _mrc_seq_ev.end()) {
-            mrc_mark_failed(it->second);
-            marked = true;
-        }
+    if (nack.reason() == RoceNack::OOO) {
+        _mrc_nack_physical_hist[nack.pathid() % path_space]++;
+        _mrc_ooo_nack_physical_hist[nack.pathid() % path_space]++;
+        _mrc_nack_ooo_ignored_for_failure++;
+        sample_mrc_state_counts();
+        return;
     }
 
-    if (nack.has_sack()) {
-        RocePacket::seq_t sack_start = nack.sack_bitmap_start_psn();
-        if (sack_start == 0)
-            sack_start = first_missing + (uint64_t)nack.sack_offset() * _mss;
-
-        if (sack_start > first_missing) {
-            for (RocePacket::seq_t seq = first_missing; seq < sack_start; seq += _mss) {
-                map<RocePacket::seq_t, uint32_t>::iterator it = _mrc_seq_ev.find(seq);
-                if (it != _mrc_seq_ev.end()) {
-                    mrc_mark_failed(it->second);
-                    marked = true;
-                }
-            }
-        }
-
-        uint16_t valid_length = nack.sack_bitmap_valid_length();
-        if (valid_length > _sack_bitmap_bits)
-            valid_length = _sack_bitmap_bits;
-
-        for (uint32_t bit = 0; bit < valid_length; bit++) {
-            if (nack.sack_bit(bit))
-                continue;
-            RocePacket::seq_t seq = sack_start + (uint64_t)bit * _mss;
-            map<RocePacket::seq_t, uint32_t>::iterator it = _mrc_seq_ev.find(seq);
-            if (it != _mrc_seq_ev.end()) {
-                mrc_mark_failed(it->second);
-                marked = true;
-            }
-        }
+    if (nack.reason() != RoceNack::LOSS) {
+        _mrc_nack_unknown_ignored_for_failure++;
+        _mrc_nack_physical_hist[nack.pathid() % path_space]++;
+        sample_mrc_state_counts();
+        return;
     }
 
-    if (!marked)
-        mrc_mark_physical_failed(nack.pathid());
+    _mrc_nack_physical_hist[nack.pathid() % path_space]++;
+    _mrc_loss_nack_physical_hist[nack.pathid() % path_space]++;
+    _mrc_nack_loss_fail_events++;
+    uint32_t ev = mrc_resolve_encoded_feedback_ev(
+        nack.has_mrc_ev() ? nack.mrc_ev() : UINT32_MAX,
+        first_missing, nack.pathid());
+    if (ev != UINT32_MAX)
+        mrc_mark_failed(ev);
+    sample_mrc_state_counts();
 }
 
 void RoceSrc::update_mrc_on_rto() {
@@ -1446,8 +2909,15 @@ void RoceSrc::update_mrc_on_rto() {
     uint32_t path_space = _path_entropy_size ? _path_entropy_size : 1;
     init_mrc_paths(path_space);
     RocePacket::seq_t first_missing = _last_acked + 1;
-    if (first_missing <= _highest_sent)
-        fail_mrc_sequence(first_missing);
+    if (first_missing <= _highest_sent) {
+        map<RocePacket::seq_t, uint32_t>::iterator it =
+            _mrc_seq_ev.find(first_missing);
+        if (it != _mrc_seq_ev.end() && it->second < _mrc_evs.size()) {
+            _mrc_rto_fail_events++;
+            mrc_mark_failed(it->second);
+        }
+        sample_mrc_state_counts();
+    }
 }
 
 void RoceSrc::init_ndp_paths(uint32_t path_space) {
@@ -1494,7 +2964,11 @@ uint32_t RoceSrc::choose_path(Packet::PktPriority priority, bool retransmitted) 
         ensure_reps_buffer();
         if (!retransmitted && _reps_explore_remaining > 0) {
             _reps_explore_remaining--;
-            return random() % path_space;
+            uint32_t path = random() % path_space;
+            _reps_random_sends++;
+            record_path_selection(path, path);
+            sample_reps_buffer_occupancy();
+            return path;
         }
         if (_reps_valid_count > 0) {
             uint32_t offset = (_reps_head + _reps_buffer.size() - _reps_valid_count) % _reps_buffer.size();
@@ -1502,97 +2976,67 @@ uint32_t RoceSrc::choose_path(Packet::PktPriority priority, bool retransmitted) 
             uint32_t path = _reps_buffer[offset].cached_ev;
             _reps_buffer[offset].valid = false;
             _reps_valid_count--;
-            return path % path_space;
+            path %= path_space;
+            _reps_cached_sends++;
+            record_path_selection(path, path);
+            sample_reps_buffer_occupancy();
+            return path;
         }
-        return random() % path_space;
+        uint32_t path = random() % path_space;
+        _reps_random_sends++;
+        record_path_selection(path, path);
+        sample_reps_buffer_occupancy();
+        return path;
+    }
+
+    if (_lb_mode == LB_NETAWARE) {
+        uint32_t path = choose_netaware_path(priority, path_space);
+        record_path_selection(path, path);
+        return path;
+    }
+
+    if (_lb_mode == LB_STOR) {
+        uint32_t path = choose_stor_path(priority, path_space);
+        record_path_selection(path, path);
+        return path;
+    }
+
+    if (_lb_mode == LB_MRC) {
+        MrcChoice choice = choose_mrc_ev(path_space);
+        record_path_selection(choice.logical_ev, choice.physical_path);
+        return choice.physical_path;
     }
 
     if (_lb_mode == LB_NMRC) {
-        uint32_t prio = nmrc_priority_index(priority);
-        init_nmrc_priority(priority, path_space);
-        ensure_nmrc_bitmap(path_space);
-        load_nmrc_shared_bitmap(path_space);
-        if (!nmrc_uses_bad_cache_state(_nmrc_state_mode))
-            release_nmrc_hold_if_expired(path_space);
-
-        if (nmrc_uses_bad_cache_state(_nmrc_state_mode)) {
-            if (nmrc_bitmap_any(_nmrc_path_bitmap)) {
-                for (uint32_t offset = 1; offset <= path_space; offset++) {
-                    uint32_t candidate = (_nmrc_cursor[prio] + offset * _nmrc_stride[prio]) % path_space;
-                    if (_nmrc_path_bitmap[candidate]) {
-                        _nmrc_cursor[prio] = candidate;
-                        return candidate;
-                    }
-                }
-            }
-            return random() % path_space;
-        }
-
-        if (nmrc_uses_2bit_state(_nmrc_state_mode)) {
-            uint32_t min_good_paths = _nmrc_min_good_paths;
-            if (min_good_paths > path_space)
-                min_good_paths = path_space;
-
-            if (_nmrc_weak_sample_pkts > 0 &&
-                _packets_sent > 0 &&
-                _packets_sent % _nmrc_weak_sample_pkts == 0) {
-                for (uint32_t offset = 1; offset <= path_space; offset++) {
-                    uint32_t candidate = (_nmrc_cursor[prio] + offset * _nmrc_stride[prio]) % path_space;
-                    if (_nmrc_path_bitmap[candidate] == 1) {
-                        _nmrc_cursor[prio] = candidate;
-                        return candidate;
-                    }
-                }
-            }
-
-            uint8_t min_state = 3;
-            if (nmrc_bitmap_count_at_least(_nmrc_path_bitmap, 3) < min_good_paths) {
-                if (nmrc_bitmap_count_at_least(_nmrc_path_bitmap, 2) >= min_good_paths)
-                    min_state = 2;
-                else if (nmrc_bitmap_count_at_least(_nmrc_path_bitmap, 1) > 0)
-                    min_state = 1;
-            }
-
-            for (uint32_t offset = 1; offset <= path_space; offset++) {
-                uint32_t candidate = (_nmrc_cursor[prio] + offset * _nmrc_stride[prio]) % path_space;
-                if (_nmrc_path_bitmap[candidate] >= min_state) {
-                    _nmrc_cursor[prio] = candidate;
-                    return candidate;
-                }
-            }
-            return random() % path_space;
-        }
-
-        if (nmrc_bitmap_any(_nmrc_path_bitmap)) {
-            for (uint32_t offset = 1; offset <= path_space; offset++) {
-                uint32_t candidate = (_nmrc_cursor[prio] + offset * _nmrc_stride[prio]) % path_space;
-                if (_nmrc_path_bitmap[candidate]) {
-                    _nmrc_cursor[prio] = candidate;
-                    return candidate;
-                }
-            }
-        }
-        return random() % path_space;
+        NmrcChoice choice = choose_nmrc_ev(path_space);
+        record_path_selection(choice.ev, choice.physical_path);
+        return choice.ev;
     }
 
-    if (_lb_mode == LB_MRC)
-        return choose_mrc_path(path_space);
-
     if (_lb_mode == LB_RR) {
-        uint32_t prio = nmrc_priority_index(priority);
-        init_nmrc_priority(priority, path_space);
-        uint32_t candidate = (_nmrc_cursor[prio] + _nmrc_stride[prio]) % path_space;
-        _nmrc_cursor[prio] = candidate;
+        uint32_t prio = selector_priority_index(priority);
+        init_selector_priority(priority, path_space);
+        uint32_t candidate = (_selector_cursor[prio] + _selector_stride[prio]) % path_space;
+        _selector_cursor[prio] = candidate;
+        record_path_selection(candidate, candidate);
         return candidate;
     }
 
-    if (_lb_mode == LB_OPS)
-        return random() % path_space;
+    if (_lb_mode == LB_OPS) {
+        uint32_t path = random() % path_space;
+        record_path_selection(path, path);
+        return path;
+    }
 
-    if (_lb_mode == LB_NDP)
-        return choose_ndp_path(path_space);
+    if (_lb_mode == LB_NDP) {
+        uint32_t path = choose_ndp_path(path_space);
+        record_path_selection(path, path);
+        return path;
+    }
 
-    return _pathid % path_space;
+    uint32_t path = _pathid % path_space;
+    record_path_selection(path, path);
+    return path;
 }
 
 void RoceSrc::ensure_reps_buffer() {
@@ -1615,8 +3059,11 @@ void RoceSrc::reset_reps_buffer() {
 void RoceSrc::update_reps(const RoceAck& ack) {
     if (_lb_mode != LB_REPS)
         return;
-    if (ack.flags() & ECN_ECHO)
+    if (ack.flags() & ECN_ECHO) {
+        _reps_ecn_ack_discarded++;
+        sample_reps_buffer_occupancy();
         return;
+    }
 
     ensure_reps_buffer();
     uint32_t path_space = _path_entropy_size ? _path_entropy_size : 1;
@@ -1625,6 +3072,8 @@ void RoceSrc::update_reps(const RoceAck& ack) {
     _reps_buffer[_reps_head].cached_ev = ack.pathid() % path_space;
     _reps_buffer[_reps_head].valid = true;
     _reps_head = (_reps_head + 1) % _reps_buffer.size();
+    _reps_clean_ack_cached++;
+    sample_reps_buffer_occupancy();
 }
 
 void RoceSrc::update_conweave(const RoceAck& ack, simtime_picosec rtt) {
@@ -1648,98 +3097,37 @@ void RoceSrc::update_conweave(const RoceAck& ack, simtime_picosec rtt) {
     _conweave_last_reroute = now;
 }
 
-void RoceSrc::update_nmrc(const RoceAck& ack) {
-    if (_lb_mode != LB_NMRC)
+void RoceSrc::update_netaware(const RoceAck& ack) {
+    if (_lb_mode != LB_NETAWARE || !ack.has_netaware_feedback())
         return;
 
     uint32_t path_space = _path_entropy_size ? _path_entropy_size : 1;
-    ensure_nmrc_bitmap(path_space);
+    apply_netaware_snapshot(ack.netaware_feedback(), path_space);
+}
 
-    if (!ack.has_nmrc_feedback())
-        return;
+void RoceSrc::processFastCnp(const RoceFastCnp& fast_cnp) {
+    _nmrc_fastcnp_arrived++;
+    _nmrc_fastcnp_bytes += fast_cnp.size();
+    if (eventlist().now() >= fast_cnp.trigger_time())
+        _nmrc_fastcnp_latency_sum +=
+            eventlist().now() - fast_cnp.trigger_time();
 
-    NmrcBitmap fresh_bitmap = ack.nmrc_bitmap();
-    if (fresh_bitmap.size() != path_space)
-        fresh_bitmap.resize(path_space, 1);
-
-    if (nmrc_uses_bad_cache_state(_nmrc_state_mode)) {
-        apply_nmrc_bad_cache_feedback(fresh_bitmap, path_space);
-        store_nmrc_shared_bitmap();
-        return;
-    }
-
-    uint32_t min_good_paths = _nmrc_min_good_paths;
-    if (min_good_paths > path_space)
-        min_good_paths = path_space;
-
-    if (nmrc_uses_2bit_state(_nmrc_state_mode)) {
-        for (uint32_t i = 0; i < path_space; i++) {
-            if (!fresh_bitmap[i]) {
-                if (_nmrc_state_mode == 2) {
-                    if (_nmrc_ecn_degrade_mode == 1 && _nmrc_path_bitmap[i] > 1)
-                        _nmrc_path_bitmap[i]--;
-                    else
-                        _nmrc_path_bitmap[i] = 1;
-                } else {
-                    _nmrc_path_bitmap[i] = 0;
-                }
-            } else if (fresh_bitmap[i] > 1 && _nmrc_path_bitmap[i] < 3) {
-                _nmrc_path_bitmap[i]++;
-            } else if (_nmrc_unknown_reopen && fresh_bitmap[i] == 1 && _nmrc_path_bitmap[i] < 2) {
-                _nmrc_path_bitmap[i]++;
-            }
-        }
-        store_nmrc_shared_bitmap();
+    if (_done) {
+        _nmrc_fastcnp_after_done++;
         return;
     }
 
-    bool hold_bad = false;
-    for (uint32_t i = 0; i < path_space; i++) {
-        if (!fresh_bitmap[i]) {
-            hold_bad = true;
-            break;
-        }
-    }
-
-    if (_nmrc_bad_hold_down > 0) {
-        release_nmrc_hold_if_expired(path_space);
-        if (hold_bad)
-            _nmrc_hold_until = eventlist().now() + _nmrc_bad_hold_down;
-        if (_nmrc_hold_until && eventlist().now() < _nmrc_hold_until) {
-            NmrcBitmap held = _nmrc_path_bitmap;
-            for (uint32_t i = 0; i < path_space; i++) {
-                if (!fresh_bitmap[i])
-                    held[i] = 0;
-            }
-            if (nmrc_bitmap_count(held) < min_good_paths) {
-                for (uint32_t i = 0; i < path_space; i++) {
-                    if (fresh_bitmap[i])
-                        held[i] = 1;
-                }
-            }
-            if (!nmrc_bitmap_any(held))
-                held.assign(path_space, 1);
-            _nmrc_path_bitmap = held;
-            store_nmrc_shared_bitmap();
-            return;
-        }
-    }
-
-    if (nmrc_bitmap_count(fresh_bitmap) >= min_good_paths) {
-        _nmrc_path_bitmap = fresh_bitmap;
-        store_nmrc_shared_bitmap();
+    if (_lb_mode != LB_NMRC || &fast_cnp.flow() != &_flow ||
+        fast_cnp.source_host() != _srcaddr) {
+        _nmrc_fastcnp_unknown_qp++;
         return;
     }
 
-    NmrcBitmap merged = _nmrc_path_bitmap;
-    for (uint32_t i = 0; i < path_space; i++) {
-        if (fresh_bitmap[i])
-            merged[i] = 1;
+    if (nmrc_ev_index(fast_cnp.ev()) == UINT32_MAX) {
+        _nmrc_fastcnp_unknown_ev++;
+        return;
     }
-    if (!nmrc_bitmap_any(merged))
-        merged.assign(path_space, 1);
-    _nmrc_path_bitmap = merged;
-    store_nmrc_shared_bitmap();
+    notify_nmrc_ev(fast_cnp.ev());
 }
 
 void RoceSrc::processPause(const EthPausePacket& p) {
@@ -1770,6 +3158,12 @@ void RoceSrc::receivePacket(Packet& pkt)
         _stop_time = 0;
     }
 
+    if (_done && pkt.type() == ROCEFASTCNP) {
+        processFastCnp((const RoceFastCnp&)pkt);
+        pkt.free();
+        return;
+    }
+
     if (_done)
         return;
 
@@ -1781,6 +3175,10 @@ void RoceSrc::receivePacket(Packet& pkt)
     case ROCENACK: 
         _nacks_received++;
         processNack((const RoceNack&)pkt);
+        pkt.free();
+        return;
+    case ROCEFASTCNP:
+        processFastCnp((const RoceFastCnp&)pkt);
         pkt.free();
         return;
     case ROCEACK:
@@ -1798,6 +3196,8 @@ bool RoceSrc::send_packet() {
     RocePacket* p = NULL;
     bool last_packet = false;
     bool retransmitted = false;
+    uint8_t bounded_attempt_id = 0;
+    bool bounded_used_reserve = false;
     RocePacket::seq_t seqno = 0;
     if (_log_me)
         cout << "Src " << get_id() << " send_packet\n";
@@ -1817,6 +3217,15 @@ bool RoceSrc::send_packet() {
         if (_log_me)
             cout << "Src " << get_id() << " flow is finished, not sending\n";
         return false;
+    }
+
+    if (retransmitted &&
+        _transport_semantics == TRANSPORT_MRC_EXACT_BOUNDED) {
+        if (!bounded_begin_retransmission(seqno, bounded_attempt_id,
+                                          bounded_used_reserve)) {
+            _rtx_queue.insert(seqno);
+            return false;
+        }
     }
 
     if (!retransmitted) {
@@ -1841,18 +3250,67 @@ bool RoceSrc::send_packet() {
     
     assert(p);
     p->set_src(_srcaddr);
+    if (_transport_semantics == TRANSPORT_MRC_EXACT_BOUNDED) {
+        if (!retransmitted) {
+            bounded_note_new_send(seqno);
+            bounded_attempt_id = _bounded_packets[seqno].attempt_id;
+        }
+        p->set_attempt_id(bounded_attempt_id);
+    }
     uint32_t path = 0;
     uint32_t logical_ev = UINT32_MAX;
     if (_lb_mode == LB_MRC) {
         uint32_t path_space = _path_entropy_size ? _path_entropy_size : 1;
-        MrcChoice choice = choose_mrc_ev(path_space);
+        uint32_t original_physical = UINT32_MAX;
+        uint32_t original_logical = UINT32_MAX;
+        if (retransmitted) {
+            map<RocePacket::seq_t, uint32_t>::const_iterator it =
+                _mrc_seq_ev.find(seqno);
+            if (it != _mrc_seq_ev.end() && it->second < _mrc_evs.size()) {
+                original_logical = it->second;
+                original_physical = _mrc_evs[it->second].physical_path % path_space;
+            }
+        }
+        MrcChoice choice = retransmitted ?
+            choose_mrc_retx_ev(path_space, original_logical) :
+            choose_mrc_ev(path_space);
         path = choice.physical_path;
         logical_ev = choice.logical_ev;
+        if (retransmitted) {
+            if (original_physical == UINT32_MAX)
+                _mrc_retx_unknown_original++;
+            else if (original_physical == (path % path_space)) {
+                _mrc_retx_original_physical++;
+                if (original_logical != UINT32_MAX &&
+                    logical_ev != UINT32_MAX &&
+                    logical_ev != original_logical)
+                    _mrc_retx_same_physical_new_ev++;
+            } else {
+                _mrc_retx_different_physical++;
+                if (original_logical != UINT32_MAX &&
+                    logical_ev != UINT32_MAX &&
+                    logical_ev != original_logical)
+                    _mrc_retx_different_physical_new_ev++;
+            }
+        }
+        record_path_selection(logical_ev, path);
+    } else if (_lb_mode == LB_NMRC) {
+        uint32_t path_space = _path_entropy_size ? _path_entropy_size : 1;
+        NmrcChoice choice = retransmitted ?
+            choose_nmrc_retx_ev(path_space, seqno) :
+            choose_nmrc_ev(path_space);
+        path = choice.ev;
+        logical_ev = choice.ev;
+        record_path_selection(choice.ev, choice.physical_path);
     } else {
         path = choose_path(p->priority(), retransmitted);
     }
     p->set_pathid(path);
+    if (logical_ev != UINT32_MAX)
+        p->set_mrc_ev(logical_ev);
+    trace_netaware_decision(seqno, path, p->priority());
     note_mrc_packet_ev(seqno, logical_ev);
+    note_nmrc_packet_ev(seqno, logical_ev);
 
     p->flow().logTraffic(*p,*this,TrafficLogger::PKT_CREATESEND);
     p->set_ts(eventlist().now());
@@ -1868,6 +3326,7 @@ bool RoceSrc::send_packet() {
         _new_packets_sent++;
     }
     _packets_sent++;
+    trace_cc_state(retransmitted ? "send_retx" : "send_new", seqno);
     if (_highest_sent > _last_acked && _rtx_timeout == timeInf)
         reset_rtx_timeout();
 
@@ -1891,6 +3350,8 @@ void RoceSrc::rtx_timer_hook(simtime_picosec now, simtime_picosec period) {
     if (now < _rtx_timeout)
         return;
 
+    trace_cc_state("rto_pre", _last_acked + 1);
+
     if (_log_me) {
         cout << "Src " << get_id() << " RTO at " << timeAsUs(now)
              << " us, rto " << timeAsUs(_rto)
@@ -1899,11 +3360,23 @@ void RoceSrc::rtx_timer_hook(simtime_picosec now, simtime_picosec period) {
     }
 
     _global_rto_count++;
+    bool bounded_failure_accepted = false;
     if (_rx_mode == RX_SP_RETX_QUEUE) {
         RocePacket::seq_t first_missing = _last_acked + 1;
         if (first_missing <= _highest_sent &&
             (!_flow_size || first_missing <= _flow_size)) {
-            _rtx_queue.insert(first_missing);
+            if (_transport_semantics == TRANSPORT_MRC_EXACT_BOUNDED) {
+                map<RocePacket::seq_t, BoundedPacketState>::const_iterator it =
+                    _bounded_packets.find(first_missing);
+                if (it != _bounded_packets.end())
+                    bounded_failure_accepted = bounded_queue_failure(
+                        first_missing, it->second.attempt_id);
+                if (!bounded_failure_accepted)
+                    bounded_failure_accepted =
+                        bounded_expire_recovery_reserve();
+            } else {
+                _rtx_queue.insert(first_missing);
+            }
         }
     } else {
         if (_last_acked < _highest_sent)
@@ -1912,7 +3385,10 @@ void RoceSrc::rtx_timer_hook(simtime_picosec now, simtime_picosec period) {
     }
 
     update_mrc_on_rto();
-    update_congestion_control_on_nack();
+    if (_transport_semantics != TRANSPORT_MRC_EXACT_BOUNDED ||
+        bounded_failure_accepted) {
+        update_congestion_control_on_nack();
+    }
     if (!(_rx_mode == RX_SP_RETX_QUEUE && _rto_high)) {
         if (_rto < _min_rto)
             _rto = _min_rto;
@@ -1923,8 +3399,10 @@ void RoceSrc::rtx_timer_hook(simtime_picosec now, simtime_picosec period) {
 
     if (_lb_mode == LB_NDP)
         grant_ndp_credit();
-    if (_state_send == READY && (has_retransmit_work() || congestion_window_allows_send()))
+    if (_state_send == READY &&
+        (has_retransmit_work() || congestion_window_allows_send()))
         schedule_send_now();
+    trace_cc_state("rto_post", _last_acked + 1);
 }
 
 void RoceSrc::doNextEvent() {
@@ -1952,10 +3430,13 @@ void RoceSrc::doNextEvent() {
         return;
 
     clean_retransmit_queue();
-    if (!has_retransmit_work() && !congestion_window_allows_send())
+    if (!has_retransmit_work() && !congestion_window_allows_send()) {
+        trace_cc_state("send_block_awnd");
         return;
+    }
 
     if (_flow_size && _highest_sent >= _flow_size && !has_retransmit_work()) {
+        trace_cc_state("send_block_all_sent");
         if (_log_me) 
             cout << "Src " << get_id()  << " stopping send coz highest_sent is " << _highest_sent << endl;
         return;
@@ -1996,11 +3477,13 @@ RoceSink::RoceSink()
     //if (get_id() == 144214)
     //    _log_me = true;
     _total_received = 0;
+    _rx_rcvd_bytes = 0;
     _ooo_first_time = 0;
     _nack_silent_until = 0;
     _ooo_nack_event_pending = false;
     _ooo_nack_event_time = 0;
     _ooo_nack_path_id = 0;
+    _ooo_nack_mrc_ev = UINT32_MAX;
 }
 
 void RoceSink::log_me() {
@@ -2023,10 +3506,24 @@ void RoceSink::connect(RoceSrc& src, Route* route)
     _drops = 0;
     _ooo_packets.clear();
     _highest_seqno = 0;
+    _rx_rcvd_bytes = 0;
     _ooo_first_time = 0;
     _nack_silent_until = 0;
     cancel_ooo_nack_timer();
     _ooo_nack_path_id = 0;
+    _ooo_nack_mrc_ev = UINT32_MAX;
+}
+
+void RoceSink::refresh_ooo_nack_metadata() {
+    if (_ooo_packets.empty()) {
+        _ooo_nack_path_id = 0;
+        _ooo_nack_mrc_ev = UINT32_MAX;
+        return;
+    }
+
+    const OooPacketInfo& first = _ooo_packets.begin()->second;
+    _ooo_nack_path_id = first.path_id;
+    _ooo_nack_mrc_ev = first.mrc_ev;
 }
 
 void RoceSink::arm_ooo_nack_timer(simtime_picosec when) {
@@ -2061,6 +3558,8 @@ void RoceSink::ooo_nack_timer_hook() {
     if (RoceSrc::_rx_mode != RoceSrc::RX_SP_RETX_QUEUE || _ooo_packets.empty())
         return;
 
+    refresh_ooo_nack_metadata();
+
     simtime_picosec now = EventList::now();
     simtime_picosec ooo_ready = _ooo_first_time + RoceSrc::_ooo_tolerance;
     if (_ooo_first_time != 0 && now < ooo_ready) {
@@ -2081,7 +3580,7 @@ void RoceSink::ooo_nack_timer_hook() {
                       sack_start_psn, sack_valid_length, sack_offset);
     send_nack(now, _cumulative_ack, _ooo_nack_path_id, bitmap_low, sack_offset,
               true, RoceNack::OOO, bitmap_high, sack_start_psn,
-              sack_valid_length);
+              sack_valid_length, _ooo_nack_mrc_ev);
     _nack_silent_until = now + RoceSrc::_nack_interval;
 
     if (!_ooo_packets.empty())
@@ -2129,7 +3628,8 @@ void RoceSink::receivePacket(Packet& pkt) {
         }
         send_nack(ts, _cumulative_ack, p->path_id(), bitmap_low, sack_offset,
                   has_sack, RoceNack::TRIM, bitmap_high, sack_start_psn,
-                  sack_valid_length);
+                  sack_valid_length, p->mrc_ev(), p->seqno(),
+                  p->attempt_id());
         pkt.flow().logTraffic(pkt,*this,TrafficLogger::PKT_RCVDESTROY);
         pkt.free();
         return;
@@ -2137,21 +3637,31 @@ void RoceSink::receivePacket(Packet& pkt) {
 
     int size = p->size()-RocePacket::ACKSIZE; 
     RocePacket::seq_t packet_end = seqno + size - 1;
+    bool duplicate_ack = false;
+    bool old_duplicate_ack = false;
+    bool first_full_receipt = false;
     if (packet_end > _highest_seqno)
         _highest_seqno = packet_end;
 
     if (seqno > _cumulative_ack+1) {
         if (RoceSrc::_rx_mode != RoceSrc::RX_SP_RETX_QUEUE) {
-            send_nack(ts, _cumulative_ack, p->path_id());
+            send_nack(ts, _cumulative_ack, p->path_id(), 0, 0, false,
+                      RoceNack::LOSS, 0, 0, 0, p->mrc_ev());
             pkt.flow().logTraffic(pkt,*this,TrafficLogger::PKT_RCVDESTROY);
             pkt.free();
             return;
         }
 
-        _ooo_packets[seqno] = size;
+        duplicate_ack = _ooo_packets.find(seqno) != _ooo_packets.end();
+        first_full_receipt = !duplicate_ack;
+        _ooo_packets[seqno] = OooPacketInfo(size, p->path_id(), p->mrc_ev());
+        if (first_full_receipt) {
+            _rx_rcvd_bytes += size;
+            _total_received = _rx_rcvd_bytes;
+        }
+        refresh_ooo_nack_metadata();
         if (_ooo_first_time == 0) {
             _ooo_first_time = EventList::now();
-            _ooo_nack_path_id = p->path_id();
             arm_ooo_nack_timer(_ooo_first_time + RoceSrc::_ooo_tolerance);
         }
         if (should_send_sp_nack()) {
@@ -2164,7 +3674,7 @@ void RoceSink::receivePacket(Packet& pkt) {
                               sack_start_psn, sack_valid_length, sack_offset);
             send_nack(ts, _cumulative_ack, p->path_id(), bitmap_low, sack_offset,
                       true, RoceNack::OOO, bitmap_high, sack_start_psn,
-                      sack_valid_length);
+                      sack_valid_length, p->mrc_ev());
             _nack_silent_until = EventList::now() + RoceSrc::_nack_interval;
             arm_ooo_nack_timer(_nack_silent_until);
             pkt.flow().logTraffic(pkt,*this,TrafficLogger::PKT_RCVDESTROY);
@@ -2172,10 +3682,13 @@ void RoceSink::receivePacket(Packet& pkt) {
             return;
         }
     } else if (seqno == _cumulative_ack+1) { // it's the next expected seq no
+        first_full_receipt = true;
+        _rx_rcvd_bytes += size;
+        _total_received = _rx_rcvd_bytes;
         _cumulative_ack = seqno + size - 1;
         while (_ooo_packets.find(_cumulative_ack + 1) != _ooo_packets.end()) {
             RocePacket::seq_t next_seq = _cumulative_ack + 1;
-            int next_size = _ooo_packets[next_seq];
+            int next_size = _ooo_packets[next_seq].size;
             _ooo_packets.erase(next_seq);
             _cumulative_ack = next_seq + next_size - 1;
         }
@@ -2185,12 +3698,15 @@ void RoceSink::receivePacket(Packet& pkt) {
                 cancel_ooo_nack_timer();
             }
             else {
+                refresh_ooo_nack_metadata();
                 _ooo_first_time = EventList::now();
                 arm_ooo_nack_timer(_ooo_first_time + RoceSrc::_ooo_tolerance);
             }
         }
     } else if (seqno < _cumulative_ack+1) {
         //must have been a bad retransmit
+        duplicate_ack = true;
+        old_duplicate_ack = true;
         if (RoceSrc::_rx_mode == RoceSrc::RX_SP_RETX_QUEUE && should_send_sp_nack()) {
             uint16_t sack_offset = 0;
             uint16_t sack_valid_length = 0;
@@ -2201,7 +3717,7 @@ void RoceSink::receivePacket(Packet& pkt) {
                               sack_start_psn, sack_valid_length, sack_offset);
             send_nack(ts, _cumulative_ack, p->path_id(), bitmap_low, sack_offset,
                       true, RoceNack::OOO, bitmap_high, sack_start_psn,
-                      sack_valid_length);
+                      sack_valid_length, p->mrc_ev());
             _nack_silent_until = EventList::now() + RoceSrc::_nack_interval;
             arm_ooo_nack_timer(_nack_silent_until);
             pkt.flow().logTraffic(pkt,*this,TrafficLogger::PKT_RCVDESTROY);
@@ -2209,23 +3725,32 @@ void RoceSink::receivePacket(Packet& pkt) {
             return;
         }
     }
-    send_ack(*p, ts);
+    send_ack(*p, ts, duplicate_ack, old_duplicate_ack);
     // have we seen everything yet?
     pkt.flow().logTraffic(pkt,*this,TrafficLogger::PKT_RCVDESTROY);
     pkt.free();
 }
 
-void RoceSink::send_ack(const RocePacket& pkt, simtime_picosec ts) {
+void RoceSink::send_ack(const RocePacket& pkt, simtime_picosec ts,
+                        bool duplicate_ack, bool old_duplicate_ack) {
     RoceAck *ack = 0;
     ack = RoceAck::newpkt(_src->_flow, *_route, _cumulative_ack,_srcaddr);
     if (_log_me)
         cout << "Sink " << get_id() << " sending ack " << _cumulative_ack << endl;
     ack->set_pathid(pkt.path_id());
+    if (pkt.has_mrc_ev())
+        ack->set_mrc_ev(pkt.mrc_ev());
+    ack->set_duplicate_ack(duplicate_ack);
+    ack->set_old_duplicate_ack(old_duplicate_ack);
+    if (RoceSrc::_transport_semantics ==
+            RoceSrc::TRANSPORT_MRC_EXACT_BOUNDED && !duplicate_ack) {
+        ack->set_delivered_psn(pkt.seqno());
+    }
     ack->set_ts(ts);
+    ack->set_stor_peer(_src->_dstaddr);
+    ack->set_netaware_peer(_src->_dstaddr);
     if (pkt.flags() & ECN_CE)
         ack->set_flags(ack->flags() | ECN_ECHO);
-    if (pkt.has_nmrc_feedback())
-        ack->set_nmrc_feedback(pkt.nmrc_bitmap());
     ack->sendOn();
 }
 
@@ -2242,7 +3767,7 @@ void RoceSink::build_sack_bitmap(RocePacket::seq_t ackno, uint64_t& sack_bitmap_
     sack_bitmap_start_psn = first_traced;
     uint64_t first_ooo_offset = UINT64_MAX;
 
-    for (map<RocePacket::seq_t, int>::const_iterator it = _ooo_packets.begin();
+    for (map<RocePacket::seq_t, OooPacketInfo>::const_iterator it = _ooo_packets.begin();
          it != _ooo_packets.end(); it++) {
         if (it->first < first_traced)
             continue;
@@ -2293,7 +3818,10 @@ RoceNack* RoceSink::send_nack(simtime_picosec ts, RocePacket::seq_t ackno, uint3
                               RoceNack::nack_reason_t reason,
                               uint64_t sack_bitmap_high,
                               RocePacket::seq_t sack_bitmap_start_psn,
-                              uint16_t sack_bitmap_valid_length) {
+                              uint16_t sack_bitmap_valid_length,
+                              uint32_t mrc_ev,
+                              RocePacket::seq_t missing_psn,
+                              uint8_t missing_attempt_id) {
     RoceNack *nack = NULL;
     nack = RoceNack::newpkt(_src->_flow, *_route, ackno,_srcaddr,sack_bitmap,
                             sack_offset, has_sack, sack_bitmap_high,
@@ -2308,7 +3836,17 @@ RoceNack* RoceSink::send_nack(simtime_picosec ts, RocePacket::seq_t ackno, uint3
              << " bitmap_high " << sack_bitmap_high << endl;
 
     nack->set_pathid(path_id);
+    if (mrc_ev != UINT32_MAX)
+        nack->set_mrc_ev(mrc_ev);
+    if (missing_psn != 0) {
+        nack->set_missing_psn(missing_psn);
+        if (RoceSrc::_transport_semantics ==
+            RoceSrc::TRANSPORT_MRC_EXACT_BOUNDED) {
+            nack->set_attempt_id(missing_attempt_id);
+        }
+    }
     nack->set_reason(reason);
+    nack->set_stor_peer(_src->_dstaddr);
     assert(nack);
     nack->flow().logTraffic(*nack,*this,TrafficLogger::PKT_CREATE);
     nack->set_ts(ts);
