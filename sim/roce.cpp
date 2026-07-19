@@ -2059,7 +2059,6 @@ void RoceSrc::trace_netaware_decision(RocePacket::seq_t seqno, uint32_t path,
 
 void RoceSrc::reset_nmrc_evs() {
     _nmrc_evs.clear();
-    _nmrc_seq_ev.clear();
     _nmrc_cursor = 0;
     _nmrc_path_space = 0;
     _nmrc_initialized_mode = _nmrc_ev_mode;
@@ -2181,21 +2180,6 @@ RoceSrc::NmrcChoice RoceSrc::choose_nmrc_ev(uint32_t path_space) {
                       _nmrc_evs[earliest].physical_path);
 }
 
-RoceSrc::NmrcChoice RoceSrc::choose_nmrc_retx_ev(
-        uint32_t path_space, RocePacket::seq_t seqno) {
-    init_nmrc_evs(path_space);
-    std::map<RocePacket::seq_t, uint32_t>::const_iterator found =
-        _nmrc_seq_ev.find(seqno);
-    if (found == _nmrc_seq_ev.end())
-        return choose_nmrc_ev(path_space);
-    uint32_t index = nmrc_ev_index(found->second);
-    if (index == UINT32_MAX)
-        return choose_nmrc_ev(path_space);
-    _nmrc_select_ordinal++;
-    return NmrcChoice(_nmrc_evs[index].ev,
-                      _nmrc_evs[index].physical_path);
-}
-
 bool RoceSrc::notify_nmrc_ev(uint32_t ev) {
     uint32_t index = nmrc_ev_index(ev);
     if (index == UINT32_MAX)
@@ -2216,12 +2200,6 @@ bool RoceSrc::notify_nmrc_ev(uint32_t ev) {
         _nmrc_select_ordinal + _nmrc_evs.size();
     _nmrc_cooldown_starts++;
     return true;
-}
-
-void RoceSrc::note_nmrc_packet_ev(RocePacket::seq_t seqno, uint32_t ev) {
-    if (_lb_mode != LB_NMRC || ev == UINT32_MAX)
-        return;
-    _nmrc_seq_ev[seqno] = ev;
 }
 
 void RoceSrc::init_nmrc_evs_for_test(uint32_t path_space) {
@@ -2749,16 +2727,6 @@ void RoceSrc::note_mrc_packet_ev(RocePacket::seq_t seqno, uint32_t logical_ev) {
 }
 
 void RoceSrc::clean_mrc_seq_evs() {
-    if (_lb_mode == LB_NMRC) {
-        while (!_nmrc_seq_ev.empty()) {
-            map<RocePacket::seq_t, uint32_t>::iterator it =
-                _nmrc_seq_ev.begin();
-            if (it->first > _last_acked)
-                break;
-            _nmrc_seq_ev.erase(it);
-        }
-        return;
-    }
     if (_lb_mode != LB_MRC)
         return;
     while (!_mrc_seq_ev.empty()) {
@@ -3296,9 +3264,7 @@ bool RoceSrc::send_packet() {
         record_path_selection(logical_ev, path);
     } else if (_lb_mode == LB_NMRC) {
         uint32_t path_space = _path_entropy_size ? _path_entropy_size : 1;
-        NmrcChoice choice = retransmitted ?
-            choose_nmrc_retx_ev(path_space, seqno) :
-            choose_nmrc_ev(path_space);
+        NmrcChoice choice = choose_nmrc_ev(path_space);
         path = choice.ev;
         logical_ev = choice.ev;
         record_path_selection(choice.ev, choice.physical_path);
@@ -3310,7 +3276,6 @@ bool RoceSrc::send_packet() {
         p->set_mrc_ev(logical_ev);
     trace_netaware_decision(seqno, path, p->priority());
     note_mrc_packet_ev(seqno, logical_ev);
-    note_nmrc_packet_ev(seqno, logical_ev);
 
     p->flow().logTraffic(*p,*this,TrafficLogger::PKT_CREATESEND);
     p->set_ts(eventlist().now());

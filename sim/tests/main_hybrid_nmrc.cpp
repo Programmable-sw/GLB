@@ -235,7 +235,7 @@ static void test_all_cooling_uses_earliest_expiry_fallback() {
            "all-cooling fallback must have a dedicated diagnostic counter");
 }
 
-static void test_data_packet_carries_exact_ev_and_retransmission_reuses_it() {
+static void test_data_packet_carries_exact_ev_and_retransmission_reselects_it() {
     DataCaptureSink capture;
     Route route;
     route.push_back(&capture);
@@ -245,6 +245,7 @@ static void test_data_packet_carries_exact_ev_and_retransmission_reuses_it() {
     RoceSrc::setNmrcEvMode(RoceSrc::NMRC_EV_RANDOM_MATCHED);
     RoceSrc::setCongestionControl(RoceSrc::CC_NONE);
     RoceSrc::setTransportSemantics(RoceSrc::TRANSPORT_LEGACY);
+    RoceSrc::setReceiveMode(RoceSrc::RX_SP_RETX_QUEUE);
     RoceSrc* src = make_src(1301);
     src->_route = &route;
     src->_flow_started = true;
@@ -258,10 +259,13 @@ static void test_data_packet_carries_exact_ev_and_retransmission_reuses_it() {
     expect(capture.evs[0] <= 65535,
            "packet metadata must carry a 16-bit logical EV");
 
-    RoceSrc::NmrcChoice retransmission =
-        src->choose_nmrc_retx_ev(8, capture.seqs[0]);
-    expect(retransmission.ev == capture.evs[0],
-           "retransmission path selection must preserve the packet EV identity");
+    src->_rtx_queue.insert(capture.seqs[0]);
+    expect(src->send_packet(),
+           "hybrid n-MRC source should send the queued retransmission");
+    expect(capture.seqs.size() == 2 && capture.seqs[1] == capture.seqs[0],
+           "retransmission must preserve the packet sequence number");
+    expect(capture.evs[1] != capture.evs[0],
+           "n-MRC retransmission must select the next eligible EV");
 }
 
 static RoceFastCnp* make_fast_cnp(PacketFlow& flow, Route& route,
@@ -410,7 +414,7 @@ int main() {
     test_ev_initialization_does_not_consume_global_random();
     test_one_round_cooling_and_idempotence();
     test_all_cooling_uses_earliest_expiry_fallback();
-    test_data_packet_carries_exact_ev_and_retransmission_reuses_it();
+    test_data_packet_carries_exact_ev_and_retransmission_reselects_it();
     test_fast_cnp_metadata_priority_and_recycling();
     test_fast_cnp_only_cools_ev_without_transport_or_cc_changes();
     std::cout << "Hybrid n-MRC EV-state tests passed" << std::endl;

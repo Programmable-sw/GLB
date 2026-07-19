@@ -632,10 +632,7 @@ private:
     void reset_nmrc_evs();
     void init_nmrc_evs(uint32_t path_space);
     NmrcChoice choose_nmrc_ev(uint32_t path_space);
-    NmrcChoice choose_nmrc_retx_ev(uint32_t path_space,
-                                   RocePacket::seq_t seqno);
     bool notify_nmrc_ev(uint32_t ev);
-    void note_nmrc_packet_ev(RocePacket::seq_t seqno, uint32_t ev);
     uint32_t nmrc_ev_index(uint32_t ev) const;
     uint32_t nmrc_physical_path(uint32_t ev, uint32_t path_space) const;
     void init_selector_priority(Packet::PktPriority priority, uint32_t path_space);
@@ -778,7 +775,6 @@ private:
     bool _mrc_paths_ready;
     std::map<RocePacket::seq_t, uint32_t> _mrc_seq_ev;
     std::vector<NmrcEv> _nmrc_evs;
-    std::map<RocePacket::seq_t, uint32_t> _nmrc_seq_ev;
     uint32_t _nmrc_cursor;
     uint32_t _nmrc_path_space;
     nmrc_ev_mode_t _nmrc_initialized_mode;
