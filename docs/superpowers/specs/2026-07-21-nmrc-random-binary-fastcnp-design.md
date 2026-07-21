@@ -1,18 +1,47 @@
-# n-mrc1 随机端侧与 n-mrc2 二态 FastCNP 设计
+# N-MRC 全冷恢复、n-mrc1 随机端侧与 n-mrc2 二态 FastCNP 设计
 
 ## 目标
 
-在现有 `mrc`、`sglb` 和 `n-mrc` 基线上增加两个可独立复现实验的变体：
+在现有 `mrc`、`sglb` 和 `n-mrc` 基线上增加三个可独立复现实验的变体：
 
+- `n-mrc-allcool-rr-reset`：只修改原 n-mrc 的 all-cooling fallback；全部 EV cooling 后完整轮询所有路径一轮，再清空全部 cooldown 状态；
 - `n-mrc1`：端侧不维护 EV cooldown，每个数据包随机写入一个有效 EV，由源 ToR 的现有 GLB 逻辑兜底；
 - `n-mrc2`：保留现有端侧 EV 轮询和一轮 cooldown，但把源 ToR 的多级质量判断改为一个固定阈值的二态判断；达到阈值时，换路和 FastCNP 必须作为同一次动作发生。
 
-这两个变体用于回答两个机制问题：
+三个变体用于回答三个机制问题：
 
-1. 去掉端侧记忆后，仅靠逐包随机 EV 和网侧兜底能达到什么性能；
-2. 当前 n-mrc 的问题是否来自多级、相对路径判定引起的过度换路和过度 cooldown，改成有明确 ECN 概率含义的二态判定后能否改善。
+1. 只修改全冷 fallback 并在一轮后恢复全部路径，能否消除原 n-mrc 的 WebSearch 回退；
+2. 去掉端侧记忆后，仅靠逐包随机 EV 和网侧兜底能达到什么性能；
+3. 当前 n-mrc 的问题是否来自多级、相对路径判定引起的过度换路和过度 cooldown，改成有明确 ECN 概率含义的二态判定后能否改善。
 
 现有 `mrc`、`sglb` 和 `n-mrc` 的默认行为必须保持不变。
+
+## n-mrc-allcool-rr-reset：全冷后一轮全路径恢复
+
+该方案是原 n-mrc 的单变量消融，不属于 n-mrc1 或 n-mrc2，也不改变网侧 GLB、FastCNP 触发、TRIM、EV 构造或普通 cooldown 语义。
+
+正常状态继续使用原 n-mrc：从 per-QP 打乱后的 encoded EV 向量开始扫描，跳过 cooling EV，并在剩余 active EV 中轮询。
+
+当一次选择完整扫描全部 EV 仍未找到 active EV 时：
+
+1. 进入一个 per-QP `all-cooling RR-reset episode`；
+2. 从进入时的 `_nmrc_cursor` 开始，忽略 cooling 标记，严格按该 QP 已打乱的 EV 向量选择；
+3. episode 内连续执行恰好 `P` 次选择，使每个 encoded EV/物理路径恰好使用一次；
+4. 每次选择仍正常增加 `_nmrc_select_ordinal`，但 episode 内到达的重复 FastCNP/TRIM 不延长 deadline；
+5. 第 `P` 次选择提交后，将该 QP 所有 EV 的 `cooling=false`、`cool_until_select_count=0`，结束 episode；
+6. 下一次选择从刚完成一轮后的 cursor 进入原 n-mrc 正常逻辑。
+
+因此它不是“第一条路径到期即退出”，也不是当前 earliest-expiry fallback。它保证一次完整全路径 RR 后所有路径恢复正常，避免同 expiry 时连续选择最小 logical EV。flow 结束、EV set 重建或 path-space 变化时必须清除 episode 状态。
+
+该 preset 的其他 resolved 配置与旧 n-mrc 完全相同：
+
+```text
+endpoint_policy    = rr_cooldown
+reroute_policy     = better_ge3
+fastcnp            = on
+ev_mode            = encoded
+all_cooling_policy = rr_reset
+```
 
 ## 共同路径分数
 
@@ -114,7 +143,7 @@ n-mrc2 保留当前 n-mrc 的端侧行为：
 
 内部继续使用一个 `LB_NMRC`，不新增 `LB_NMRC1`/`LB_NMRC2` 枚举。原因是当前发送、TRIM、FastCNP、诊断和 source-ToR gate 有多处精确检查 `LB_NMRC`；新建 LB 枚举容易产生行为遗漏。
 
-增加两个正交策略：
+增加三个正交策略：
 
 ```text
 endpoint policy:
@@ -125,11 +154,22 @@ reroute policy:
     any_better        # 现有
     better_ge3        # 当前 n-mrc 和 n-mrc1
     binary_score      # n-mrc2
+
+all-cooling policy:
+    earliest          # 当前 n-mrc、n-mrc2
+    rr_reset          # n-mrc-allcool-rr-reset
 ```
 
-建议提供 `-lb n-mrc1` 和 `-lb n-mrc2` 作为 parser preset，解析后仍映射到 `LB_NMRC`：
+建议提供 `-lb n-mrc-allcool-rr-reset`、`-lb n-mrc1` 和 `-lb n-mrc2` 作为 parser preset，解析后仍映射到 `LB_NMRC`：
 
 ```text
+n-mrc-allcool-rr-reset:
+    endpoint_policy = rr_cooldown
+    reroute_policy  = better_ge3
+    fastcnp         = on
+    ev_mode         = encoded
+    all_cooling_policy = rr_reset
+
 n-mrc1:
     endpoint_policy = random_stateless
     reroute_policy  = better_ge3
@@ -148,6 +188,7 @@ n-mrc2:
 
 - `-lb n-mrc1` 必须拒绝 `rr_cooldown`、FastCNP on 和非 encoded EV mode 等冲突 override；
 - `-lb n-mrc2` 必须拒绝非 `0.50` 阈值、FastCNP off、非 `rr_cooldown`、非 `binary_score` 和非 encoded EV mode；
+- `-lb n-mrc-allcool-rr-reset` 必须拒绝非 `rr_reset` all-cooling policy，以及任何会改变旧 n-mrc 其余 resolved config 的 override；
 - 通用 `binary_score` policy 也强制 FastCNP on，禁止退化成 silent reroute；
 - n-mrc2 固定使用当前 `q_min=0.20`、`q_max=0.80`、noisy-OR 和与其一致的 RED ECN 标尺，冲突配置必须报错。
 
@@ -179,6 +220,7 @@ selected_level = 0  # SAFE
 - 原路径和目标路径 score 的计数、总和与最大值；
 - n-mrc1 随机选择的每 EV/物理路径计数、路径份额最大偏差和均匀性统计；
 - FastCNP generated/arrived、cooldown starts/skips/recoveries、TRIM cooldown 和 all-cooling fallback。
+- `all_cooling_rr_episodes`、`all_cooling_rr_selections`、`all_cooling_rr_resets`，并验证每个完成 episode 的 selections 恰为 `P`；
 
 对 n-mrc2，`binary_paired_actions` 必须等于实际 binary reroute 数，也必须等于 FastCNP generated 数；三个计数只在控制包成功注入后一起提交。FastCNP 可能在真实队列中延迟，因此 generated 不要求等于 arrived。旧四级 transition 若继续输出，只能作为旁路诊断，不能参与决策。
 
@@ -188,11 +230,16 @@ selected_level = 0  # SAFE
 
 ### 端侧测试
 
-1. n-mrc1 相同 seed/QP 的随机 EV 序列可复现，不同 QP 去相位；
-2. 随机选择只产生 `0..P-1` encoded EV，且不是当前 RR 顺序；
-3. 新包和重传包都满足 `pathid == mrc_ev`；
-4. n-mrc1 收到 FastCNP 或 accepted TRIM 都不启动 cooldown；意外到达的 FastCNP 可以计入 arrived/ignored，但 cooldown start/skip/recovery 必须保持零；
-5. 当前 n-mrc 的 RR、FastCNP cooldown、TRIM cooldown 和重传重选测试保持通过。
+1. 旧 n-mrc 的 earliest-expiry fallback 序列和默认行为保持不变；
+2. `P=8` 全部 cooling 时，rr-reset 按 per-QP 向量从 cursor 开始返回每个 EV 恰好一次；
+3. rr-reset 前七次不提前清除状态，第八次后全部 EV active、deadline 为零；
+4. episode 中到达的 FastCNP/TRIM 不延长 episode，完成后下一次选择恢复旧 n-mrc RR；
+5. 两个 QP 使用各自打乱顺序，不因最小 logical EV tie-break 同步到 path 0；
+6. n-mrc1 相同 seed/QP 的随机 EV 序列可复现，不同 QP 去相位；
+7. 随机选择只产生 `0..P-1` encoded EV，且不是当前 RR 顺序；
+8. 新包和重传包都满足 `pathid == mrc_ev`；
+9. n-mrc1 收到 FastCNP 或 accepted TRIM 都不启动 cooldown；意外到达的 FastCNP 可以计入 arrived/ignored，但 cooldown start/skip/recovery 必须保持零；
+10. 当前 n-mrc 的 RR、FastCNP cooldown、TRIM cooldown 和重传重选测试保持通过。
 
 ### 二态选择纯函数测试
 
@@ -216,6 +263,25 @@ selected_level = 0  # SAFE
 8. SGLB、MRC 和旧 n-mrc 的 golden smoke 输出与旧基线一致。
 
 ## 代表实验
+
+### 第一阶段：WebSearch 100% 四方案同二进制对照
+
+先只运行 `healthy_p2p_websearch_100pct`，固定 128 nodes、8 paths、现有 traffic matrices 和 seeds `13/29/47`，四个方案均使用同一次新构建的 simulator：
+
+```text
+n-mrc
+n-mrc-allcool-rr-reset
+n-mrc1
+n-mrc2@T=0.5
+```
+
+不得复用旧 n-mrc 正式结果；四方案共 12 个单元全部重跑。按已有日志估算约 87 分钟串行 simulator 时间，按 scheme 分成四个独立 worker 时预计约 22--30 分钟墙钟时间。
+
+主指标为三 seed `p99_fct_us` 几何均值，同时报告每 seed、p99.9/max、reroute/check、FastCNP、cooldown starts/selection、cooling skips/selection、all-cooling episode/rate、ECN/TRIM、queue CV/p99 fraction。至少输出绝对 p99 对照图、相对旧 n-mrc 加速比图和机制计数表。
+
+第一阶段只回答 WebSearch 100% 下四个模块变量的效果，不据此声称适用于全部健康、非对称或 all-to-all 场景。
+
+### 第二阶段：五个代表场景
 
 复用已有 seeds `13/29/47` 和完全相同的 traffic matrix。正式新增矩阵为 n-mrc1/n-mrc2 共 30 个单元，但旧基线只有通过下列资格重放后才能复用：
 
@@ -279,11 +345,13 @@ speedup_vs_mrc = MRC_metric / scheme_metric
 ## 完成标准
 
 - 新旧单元和接口测试全部通过；
+- `n-mrc-allcool-rr-reset` 每个完成 episode 恰好选择 P 次、覆盖 P 个不同 EV，随后全部 cooldown 清零；
 - n-mrc1 `fastcnp_generated=0`，端侧 cooldown start/skip/recovery 为零，随机 EV 分布和可复现性测试通过；
 - n-mrc2 只在 `original_score >= 0.5` 且存在 SAFE 候选时执行动作；
 - n-mrc2 每次动作严格满足一个 reroute 对应一个 FastCNP generated；
 - 旧 n-mrc 默认配置和 golden smoke 不变；
-- 30 个新实验单元无失败、无缺失且 traffic SHA 与基线一致；
+- WebSearch 第一阶段 12 个单元无失败、无缺失且四方案 traffic SHA 一致；
+- 第二阶段启动后，30 个新实验单元无失败、无缺失且 traffic SHA 与基线一致；
 - CSV、原始日志、汇总、诊断说明和四类图均可追溯到配置与 seed。
 
 ## 非目标与风险
