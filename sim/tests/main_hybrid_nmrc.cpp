@@ -478,11 +478,16 @@ static void test_data_packet_carries_exact_ev_and_retransmission_reselects_it() 
 
 static RoceFastCnp* make_fast_cnp(PacketFlow& flow, Route& route,
                                   uint32_t source_host, uint32_t ev,
-                                  RocePacket::seq_t psn) {
+                                  RocePacket::seq_t psn,
+                                  bool need_endpoint_cooldown = true) {
     return RoceFastCnp::newpkt(
         flow, route, source_host, ev, psn,
         7, 3, STOR_LEVEL_BAD, STOR_LEVEL_GOOD,
-        41, timeFromUs(9.0));
+        41, timeFromUs(9.0), 0,
+        std::numeric_limits<double>::quiet_NaN(),
+        std::numeric_limits<double>::quiet_NaN(),
+        std::numeric_limits<double>::quiet_NaN(), 0,
+        need_endpoint_cooldown);
 }
 
 static bool bounded_packet_maps_equal(
@@ -522,7 +527,8 @@ static void test_fast_cnp_metadata_priority_and_recycling() {
     RoceFastCnp* first = RoceFastCnp::newpkt(
         flow, route, 17, 0xabcd, 9001,
         7, 3, STOR_LEVEL_BAD, STOR_LEVEL_GOOD, 41, timeFromUs(9.0),
-        attempt_id, original_score, selected_score, selected_gap, action_key);
+        attempt_id, original_score, selected_score, selected_gap, action_key,
+        false);
     expect(first->type() == ROCEFASTCNP,
            "path notification needs its own RoCE FastCNP packet type");
     expect(first->size() == RocePacket::ACKSIZE,
@@ -544,7 +550,8 @@ static void test_fast_cnp_metadata_priority_and_recycling() {
                first->original_score() == original_score &&
                first->selected_score() == selected_score &&
                first->selected_gap() == selected_gap &&
-               first->action_key() == action_key,
+               first->action_key() == action_key &&
+               !first->need_endpoint_cooldown(),
            "N-MRC4 FastCNP must preserve the complete action tuple");
     first->free();
 
@@ -564,7 +571,8 @@ static void test_fast_cnp_metadata_priority_and_recycling() {
                std::isnan(recycled->original_score()) &&
                std::isnan(recycled->selected_score()) &&
                std::isnan(recycled->selected_gap()) &&
-               recycled->action_key() == 0,
+               recycled->action_key() == 0 &&
+               recycled->need_endpoint_cooldown(),
            "recycled FastCNP packets must reset every metadata field");
     recycled->free();
 }
@@ -760,6 +768,14 @@ static void test_fast_cnp_only_cools_ev_without_transport_or_cc_changes() {
            "path FastCNP must not enter DCQCN or alter the send window");
     expect(src->nmrcFastCnpCcMutations() == 0,
            "FastCNP processing must report no transport or CC mutation");
+
+    RoceFastCnp* reroute_only = make_fast_cnp(
+        src->_flow, route, 17, selected_ev, 11000, false);
+    src->receivePacket(*reroute_only);
+    expect(!src->nmrc_ev_cooling_for_test(selected_ev),
+           "reroute-only FastCNP must not cool its named EV");
+    expect(src->_nmrc_cooldown_starts == 1,
+           "reroute-only FastCNP must not start a cooldown");
 
     uint64_t expiry = src->nmrc_ev_cool_until_for_test(ev);
     RoceFastCnp* duplicate = make_fast_cnp(

@@ -373,7 +373,8 @@ public:
             double original_score = std::numeric_limits<double>::quiet_NaN(),
             double selected_score = std::numeric_limits<double>::quiet_NaN(),
             double selected_gap = std::numeric_limits<double>::quiet_NaN(),
-            uint64_t action_key = 0) {
+            uint64_t action_key = 0,
+            bool need_endpoint_cooldown = true) {
         assert(ev <= 0xffffU);
         RoceFastCnp* p = _packetdb.allocPacket();
         p->set_route(flow, route, RocePacket::ACKSIZE, (packetid_t)psn);
@@ -395,6 +396,7 @@ public:
         p->_selected_score = selected_score;
         p->_selected_gap = selected_gap;
         p->_action_key = action_key;
+        p->_need_endpoint_cooldown = need_endpoint_cooldown;
         p->set_dst(source_host);
         p->set_pathid(UINT32_MAX);
         p->set_flags(0);
@@ -416,6 +418,9 @@ public:
     inline double selected_score() const {return _selected_score;}
     inline double selected_gap() const {return _selected_gap;}
     inline uint64_t action_key() const {return _action_key;}
+    inline bool need_endpoint_cooldown() const {
+        return _need_endpoint_cooldown;
+    }
     virtual PktPriority priority() const {return Packet::PRIO_HI;}
     virtual ~RoceFastCnp() {}
 
@@ -434,6 +439,7 @@ protected:
     double _selected_score;
     double _selected_gap;
     uint64_t _action_key;
+    bool _need_endpoint_cooldown;
     static PacketDB<RoceFastCnp> _packetdb;
 };
 

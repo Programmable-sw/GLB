@@ -3392,7 +3392,8 @@ void RoceSrc::processFastCnp(const RoceFastCnp& fast_cnp) {
         record_cc_mutation();
         return;
     }
-    notify_nmrc_ev(fast_cnp.ev());
+    if (fast_cnp.need_endpoint_cooldown())
+        notify_nmrc_ev(fast_cnp.ev());
     record_cc_mutation();
 }
 

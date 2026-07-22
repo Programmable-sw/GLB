@@ -128,7 +128,8 @@ public:
         NMRC_NETWORK_GRADED = 0,
         NMRC_NETWORK_BINARY_SCORE = 1,
         NMRC_NETWORK_RELATIVE_DELTA = 2,
-        NMRC_NETWORK_PIECEWISE_DELTA = 3
+        NMRC_NETWORK_PIECEWISE_DELTA = 3,
+        NMRC_NETWORK_TWO_STAGE_DELTA = 4
     };
 
     enum NmrcRelativeDecisionReason {
@@ -169,13 +170,14 @@ public:
         double selected_score;
         double best_gap;
         double selected_gap;
+        bool request_cooldown;
         NmrcRelativeDecisionReason reason;
 
         NmrcRelativeDecision()
             : reroute(false), selected_index(UINT32_MAX), candidate_count(0),
               original_score(std::numeric_limits<double>::quiet_NaN()),
               selected_score(std::numeric_limits<double>::quiet_NaN()),
-              best_gap(0.0), selected_gap(0.0),
+              best_gap(0.0), selected_gap(0.0), request_cooldown(true),
               reason(NMRC_RELATIVE_INVALID_INPUT) {}
     };
 
@@ -212,6 +214,14 @@ public:
         double breakpoint,
         double delta_below,
         double delta_above,
+        uint32_t selection_value);
+    static NmrcRelativeDecision nmrc_select_two_stage_delta_path(
+        uint32_t original_index,
+        const vector<double>& scores,
+        const vector<bool>& two_hop_valid,
+        const vector<bool>& available,
+        double route_delta,
+        double cooldown_delta,
         uint32_t selection_value);
     static uint64_t nmrc_relative_action_key(
         uint32_t flow_id, RocePacket::seq_t psn, uint8_t attempt,
@@ -566,6 +576,8 @@ public:
     static double _nmrc_relative_delta;
     static double _nmrc_piecewise_delta_below;
     static double _nmrc_piecewise_delta_above;
+    static double _nmrc_route_delta;
+    static double _nmrc_cooldown_delta;
     static const double NMRC_RELATIVE_EPSILON;
     static uint64_t _nmrc_diag_route_checks;
     static uint64_t _nmrc_diag_reroutes;
@@ -593,6 +605,8 @@ public:
     static uint64_t _nmrc_diag_relative_reverse_path_blocked;
     static uint64_t _nmrc_diag_relative_paired_actions;
     static uint64_t _nmrc_diag_relative_reroutes;
+    static uint64_t _nmrc_diag_two_stage_reroute_only;
+    static uint64_t _nmrc_diag_two_stage_cooldown_requested;
     static uint64_t _nmrc_diag_relative_selected_gap_violations;
     static uint64_t _nmrc_diag_relative_decision_ce_set;
     static uint64_t _nmrc_diag_relative_decision_ce_cleared;
@@ -787,7 +801,8 @@ private:
     bool nmrc_inject_relative_fastcnp(
         RocePacket& data, uint32_t original_egress,
         uint32_t selected_egress, double original_score,
-        double selected_score, uint64_t action_key);
+        double selected_score, uint64_t action_key,
+        bool need_endpoint_cooldown = true);
     void maybe_update_netaware_feedback(Packet& pkt);
     void maybe_update_stor_feedback(Packet& pkt);
     BaseQueue* netaware_local_queue_for_ev(uint32_t dst, uint32_t ev);

@@ -413,6 +413,8 @@ double FatTreeSwitch::_nmrc_absolute_threshold = 0.50;
 double FatTreeSwitch::_nmrc_relative_delta = 0.25;
 double FatTreeSwitch::_nmrc_piecewise_delta_below = 0.25;
 double FatTreeSwitch::_nmrc_piecewise_delta_above = 0.15;
+double FatTreeSwitch::_nmrc_route_delta = 0.10;
+double FatTreeSwitch::_nmrc_cooldown_delta = 0.30;
 const double FatTreeSwitch::NMRC_RELATIVE_EPSILON = 1e-12;
 uint64_t FatTreeSwitch::_nmrc_diag_route_checks = 0;
 uint64_t FatTreeSwitch::_nmrc_diag_reroutes = 0;
@@ -440,6 +442,8 @@ uint64_t FatTreeSwitch::_nmrc_diag_relative_no_delta_candidate = 0;
 uint64_t FatTreeSwitch::_nmrc_diag_relative_reverse_path_blocked = 0;
 uint64_t FatTreeSwitch::_nmrc_diag_relative_paired_actions = 0;
 uint64_t FatTreeSwitch::_nmrc_diag_relative_reroutes = 0;
+uint64_t FatTreeSwitch::_nmrc_diag_two_stage_reroute_only = 0;
+uint64_t FatTreeSwitch::_nmrc_diag_two_stage_cooldown_requested = 0;
 uint64_t FatTreeSwitch::_nmrc_diag_relative_selected_gap_violations = 0;
 uint64_t FatTreeSwitch::_nmrc_diag_relative_decision_ce_set = 0;
 uint64_t FatTreeSwitch::_nmrc_diag_relative_decision_ce_cleared = 0;
@@ -983,6 +987,8 @@ void FatTreeSwitch::reset_nmrc_hybrid_diag() {
     _nmrc_diag_relative_reverse_path_blocked = 0;
     _nmrc_diag_relative_paired_actions = 0;
     _nmrc_diag_relative_reroutes = 0;
+    _nmrc_diag_two_stage_reroute_only = 0;
+    _nmrc_diag_two_stage_cooldown_requested = 0;
     _nmrc_diag_relative_selected_gap_violations = 0;
     _nmrc_diag_relative_decision_ce_set = 0;
     _nmrc_diag_relative_decision_ce_cleared = 0;
@@ -1616,6 +1622,58 @@ FatTreeSwitch::nmrc_select_piecewise_delta_path(
     return decision;
 }
 
+FatTreeSwitch::NmrcRelativeDecision
+FatTreeSwitch::nmrc_select_two_stage_delta_path(
+        uint32_t original_index,
+        const vector<double>& scores,
+        const vector<bool>& two_hop_valid,
+        const vector<bool>& available,
+        double route_delta,
+        double cooldown_delta,
+        uint32_t selection_value) {
+    NmrcRelativeDecision decision;
+    if (original_index >= scores.size() ||
+        scores.size() != two_hop_valid.size() ||
+        scores.size() != available.size() ||
+        !std::isfinite(route_delta) || route_delta <= 0.0 ||
+        !std::isfinite(cooldown_delta) || cooldown_delta > 1.0 ||
+        route_delta > cooldown_delta)
+        return decision;
+    if (!available[original_index]) {
+        decision.reason = NMRC_RELATIVE_ORIGINAL_UNAVAILABLE;
+        return decision;
+    }
+    if (!two_hop_valid[original_index] ||
+        !std::isfinite(scores[original_index])) {
+        decision.reason = NMRC_RELATIVE_ORIGINAL_UNKNOWN;
+        return decision;
+    }
+    decision.original_score = scores[original_index];
+    vector<uint32_t> candidates;
+    for (uint32_t i = 0; i < scores.size(); i++) {
+        if (i == original_index || !available[i] ||
+            !two_hop_valid[i] || !std::isfinite(scores[i]))
+            continue;
+        const double gap = decision.original_score - scores[i];
+        decision.best_gap = std::max(decision.best_gap, gap);
+        if (gap >= route_delta - NMRC_RELATIVE_EPSILON)
+            candidates.push_back(i);
+    }
+    decision.candidate_count = candidates.size();
+    if (candidates.empty()) {
+        decision.reason = NMRC_RELATIVE_NO_DELTA_CANDIDATE;
+        return decision;
+    }
+    decision.selected_index = candidates[selection_value % candidates.size()];
+    decision.selected_score = scores[decision.selected_index];
+    decision.selected_gap = decision.original_score - decision.selected_score;
+    decision.request_cooldown =
+        decision.selected_gap >= cooldown_delta - NMRC_RELATIVE_EPSILON;
+    decision.reroute = true;
+    decision.reason = NMRC_RELATIVE_SELECTED;
+    return decision;
+}
+
 bool FatTreeSwitch::nmrc_is_source_leaf_data(
         Packet& pkt, vector<FibEntry*>* available_hops) const {
     if (!_nmrc_hybrid_enabled || _type != TOR || !_ft ||
@@ -1669,7 +1727,8 @@ uint64_t FatTreeSwitch::nmrc_relative_action_key(
 bool FatTreeSwitch::nmrc_inject_relative_fastcnp(
         RocePacket& data, uint32_t original_egress,
         uint32_t selected_egress, double original_score,
-        double selected_score, uint64_t action_key) {
+        double selected_score, uint64_t action_key,
+        bool need_endpoint_cooldown) {
     HostFibEntry* host = _fib->getHostRoute(data.src(), data.flow_id());
     if (!host || !host->getEgressPort())
         return false;
@@ -1679,7 +1738,7 @@ bool FatTreeSwitch::nmrc_inject_relative_fastcnp(
         data.seqno(), original_egress, selected_egress,
         UINT8_MAX, UINT8_MAX, _id, eventlist().now(), data.attempt_id(),
         original_score, selected_score, original_score - selected_score,
-        action_key);
+        action_key, need_endpoint_cooldown);
     fast_cnp->sendOn();
     return true;
 }
@@ -1711,7 +1770,8 @@ uint32_t FatTreeSwitch::nmrc_maybe_reroute(
     _nmrc_diag_observed_flow_paths.insert(flow_key | original_choice);
 
     if (_nmrc_network_decision_mode == NMRC_NETWORK_RELATIVE_DELTA ||
-        _nmrc_network_decision_mode == NMRC_NETWORK_PIECEWISE_DELTA) {
+        _nmrc_network_decision_mode == NMRC_NETWORK_PIECEWISE_DELTA ||
+        _nmrc_network_decision_mode == NMRC_NETWORK_TWO_STAGE_DELTA) {
         _nmrc_diag_relative_checks++;
         const bool ce_before = (data.flags() & ECN_CE) != 0;
         const auto finish_relative = [&data, ce_before](uint32_t choice) {
@@ -1739,7 +1799,11 @@ uint32_t FatTreeSwitch::nmrc_maybe_reroute(
             pkt.flow_id(), data.mrc_ev(),
             (uint32_t)data.seqno() ^ _hash_salt);
         NmrcRelativeDecision decision;
-        if (_nmrc_network_decision_mode == NMRC_NETWORK_PIECEWISE_DELTA)
+        if (_nmrc_network_decision_mode == NMRC_NETWORK_TWO_STAGE_DELTA)
+            decision = nmrc_select_two_stage_delta_path(
+                original_choice, scores, two_hop_valid, available,
+                _nmrc_route_delta, _nmrc_cooldown_delta, selection_value);
+        else if (_nmrc_network_decision_mode == NMRC_NETWORK_PIECEWISE_DELTA)
             decision = nmrc_select_piecewise_delta_path(
                 original_choice, scores, two_hop_valid, available,
                 _nmrc_absolute_threshold, _nmrc_piecewise_delta_below,
@@ -1778,7 +1842,9 @@ uint32_t FatTreeSwitch::nmrc_maybe_reroute(
         }
 
         const double required_delta =
-            _nmrc_network_decision_mode == NMRC_NETWORK_PIECEWISE_DELTA
+            _nmrc_network_decision_mode == NMRC_NETWORK_TWO_STAGE_DELTA
+            ? _nmrc_route_delta
+            : _nmrc_network_decision_mode == NMRC_NETWORK_PIECEWISE_DELTA
             ? (decision.original_score < _nmrc_absolute_threshold
                 ? _nmrc_piecewise_delta_below
                 : _nmrc_piecewise_delta_above)
@@ -1797,7 +1863,7 @@ uint32_t FatTreeSwitch::nmrc_maybe_reroute(
         if (!nmrc_inject_relative_fastcnp(
                 data, original_choice, decision.selected_index,
                 decision.original_score, decision.selected_score,
-                action_key)) {
+                action_key, decision.request_cooldown)) {
             _nmrc_diag_relative_reverse_path_blocked++;
             _nmrc_diag_fastcnp_route_missing++;
             return finish_relative(original_choice);
@@ -1809,6 +1875,12 @@ uint32_t FatTreeSwitch::nmrc_maybe_reroute(
         _nmrc_diag_fastcnp_generated++;
         _nmrc_diag_relative_paired_actions++;
         _nmrc_diag_relative_reroutes++;
+        if (_nmrc_network_decision_mode == NMRC_NETWORK_TWO_STAGE_DELTA) {
+            if (decision.request_cooldown)
+                _nmrc_diag_two_stage_cooldown_requested++;
+            else
+                _nmrc_diag_two_stage_reroute_only++;
+        }
         _nmrc_diag_relative_reroute_key_count++;
         _nmrc_diag_relative_reroute_key_sum += action_key;
         _nmrc_diag_relative_reroute_key_xor ^= action_key;

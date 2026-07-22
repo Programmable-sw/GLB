@@ -221,6 +221,29 @@ static void test_nmrc_relative_delta_selector() {
            "a non-finite absolute threshold must fail closed");
 }
 
+static void test_nmrc_two_stage_delta_selector() {
+    std::vector<double> scores{0.70, 0.55, 0.35};
+    std::vector<bool> valid(3, true);
+    std::vector<bool> available(3, true);
+    FatTreeSwitch::NmrcRelativeDecision d =
+        FatTreeSwitch::nmrc_select_two_stage_delta_path(
+            0, scores, valid, available, 0.10, 0.30, 1);
+    expect(d.reroute && d.request_cooldown,
+           "a gap above the cooldown delta must request endpoint cooldown");
+    scores = {0.70, 0.55};
+    valid.assign(2, true);
+    available.assign(2, true);
+    d = FatTreeSwitch::nmrc_select_two_stage_delta_path(
+        0, scores, valid, available, 0.10, 0.30, 0);
+    expect(d.reroute && !d.request_cooldown,
+           "a middle-band gap must reroute without endpoint cooldown");
+    scores[1] = 0.65;
+    d = FatTreeSwitch::nmrc_select_two_stage_delta_path(
+        0, scores, valid, available, 0.10, 0.30, 0);
+    expect(!d.reroute,
+           "a gap below the route delta must keep the original path");
+}
+
 static void test_nmrc_piecewise_delta_selector() {
     std::vector<bool> valid(3, true);
     std::vector<bool> available(3, true);
@@ -414,6 +437,7 @@ int main() {
     }
 
     test_nmrc_relative_delta_selector();
+    test_nmrc_two_stage_delta_selector();
     test_nmrc_piecewise_delta_selector();
     test_nmrc_relative_action_identity_and_histogram_boundaries();
 

@@ -752,6 +752,8 @@ const char* nmrc_network_decision_name(
         return "relative_delta";
     case FatTreeSwitch::NMRC_NETWORK_PIECEWISE_DELTA:
         return "piecewise_delta";
+    case FatTreeSwitch::NMRC_NETWORK_TWO_STAGE_DELTA:
+        return "two_stage_delta";
     }
     return "unknown";
 }
@@ -761,6 +763,7 @@ void exit_error(char* progr) {
     cout << "\t[-roce_sack_bitmap_bits 64|128]" << endl;
     cout << "\tAdditional LB preset: n-mrc5 (piecewise delta 0.25/0.15)"
          << endl;
+    cout << "\tAdditional LB preset: n-mrc6 (two-stage delta)" << endl;
     cout << "\t[-roce_transport_semantics legacy|mrc_exact_bounded]" << endl;
     cout << "\t[-roce_trim_recovery cumulative|exact]" << endl;
     cout << "\t[-cc dcqcn_variant_nodup_old]" << endl;
@@ -810,6 +813,7 @@ void exit_error(char* progr) {
     cout << "\t[-nmrc_binary_threshold 0.5]" << endl;
     cout << "\t[-nmrc_absolute_threshold VALUE]" << endl;
     cout << "\t[-nmrc_relative_delta VALUE]" << endl;
+    cout << "\t[-nmrc_route_delta VALUE] [-nmrc_cooldown_delta VALUE]" << endl;
     cout << "\t[-queue_cv_sample_us x]" << endl;
     exit(1);
 }
@@ -947,6 +951,8 @@ int main(int argc, char **argv) {
     double nmrc_binary_threshold = 0.5;
     double nmrc_absolute_threshold = 0.50;
     double nmrc_relative_delta = 0.25;
+    double nmrc_route_delta = 0.10;
+    double nmrc_cooldown_delta = 0.30;
     bool nmrc_fastcnp = true;
     bool nmrc_option_user_set = false;
     bool nmrc_ev_mode_user_set = false;
@@ -958,6 +964,8 @@ int main(int argc, char **argv) {
     bool nmrc_binary_threshold_user_set = false;
     bool nmrc_absolute_threshold_user_set = false;
     bool nmrc_relative_delta_user_set = false;
+    bool nmrc_route_delta_user_set = false;
+    bool nmrc_cooldown_delta_user_set = false;
     double ecn_thresh = 1.0;
     uint32_t mrc_logical_evs = 0;
     uint32_t mrc_active_paths = 0;
@@ -1168,6 +1176,11 @@ int main(int argc, char **argv) {
                 FatTreeSwitch::set_strategy(FatTreeSwitch::ECMP);
                 roce_lb_mode = RoceSrc::LB_NMRC;
                 lb_scheme_name = "n-mrc5";
+            } else if (!strcmp(argv[i+1], "n-mrc6")) {
+                route_strategy = ECMP_FIB;
+                FatTreeSwitch::set_strategy(FatTreeSwitch::ECMP);
+                roce_lb_mode = RoceSrc::LB_NMRC;
+                lb_scheme_name = "n-mrc6";
             } else if (!strcmp(argv[i+1], "mrc")) {
                 route_strategy = ECMP_FIB;
                 FatTreeSwitch::set_strategy(FatTreeSwitch::ECMP);
@@ -2233,6 +2246,36 @@ int main(int argc, char **argv) {
             nmrc_option_user_set = true;
             nmrc_relative_delta_user_set = true;
             i++;
+        } else if (!strcmp(argv[i],"-nmrc_route_delta") ||
+                   !strcmp(argv[i],"-nmrc_cooldown_delta")) {
+            const bool route_option =
+                !strcmp(argv[i], "-nmrc_route_delta");
+            if (i + 1 >= argc) {
+                cerr << "missing value for " << argv[i] << endl;
+                exit(1);
+            }
+            bool& already_set = route_option ? nmrc_route_delta_user_set
+                                             : nmrc_cooldown_delta_user_set;
+            if (already_set) {
+                cerr << argv[i] << " may only be specified once" << endl;
+                exit(1);
+            }
+            char* end = NULL;
+            errno = 0;
+            double value = strtod(argv[i+1], &end);
+            if (errno || end == argv[i+1] || *end != '\0' ||
+                !std::isfinite(value) || value <= 0.0 || value > 1.0) {
+                cerr << "invalid " << argv[i] << " " << argv[i+1]
+                     << "; expected 0 < value <= 1" << endl;
+                exit(1);
+            }
+            if (route_option)
+                nmrc_route_delta = value;
+            else
+                nmrc_cooldown_delta = value;
+            already_set = true;
+            nmrc_option_user_set = true;
+            i++;
         } else if (!strcmp(argv[i],"-avail_ecn_only")) {
             avail_ecn_only = true;
             cout << "avail ECN-only override enabled" << endl;
@@ -2471,6 +2514,17 @@ int main(int argc, char **argv) {
         cerr << "-nmrc_absolute_threshold requires -lb n-mrc4" << endl;
         exit(1);
     }
+    if ((nmrc_route_delta_user_set || nmrc_cooldown_delta_user_set) &&
+        lb_scheme_name != "n-mrc6") {
+        cerr << "-nmrc_route_delta and -nmrc_cooldown_delta require -lb n-mrc6"
+             << endl;
+        exit(1);
+    }
+    if (lb_scheme_name == "n-mrc6" &&
+        nmrc_route_delta > nmrc_cooldown_delta) {
+        cerr << "n-mrc6 requires route_delta <= cooldown_delta" << endl;
+        exit(1);
+    }
     if (nmrc_option_user_set && roce_lb_mode != RoceSrc::LB_NMRC) {
         cerr << "n-MRC options require an N-MRC load-balancing preset" << endl;
         exit(1);
@@ -2495,6 +2549,8 @@ int main(int argc, char **argv) {
             required_network = FatTreeSwitch::NMRC_NETWORK_RELATIVE_DELTA;
         } else if (lb_scheme_name == "n-mrc5") {
             required_network = FatTreeSwitch::NMRC_NETWORK_PIECEWISE_DELTA;
+        } else if (lb_scheme_name == "n-mrc6") {
+            required_network = FatTreeSwitch::NMRC_NETWORK_TWO_STAGE_DELTA;
         }
 
         const char* ev_mode_name =
@@ -2528,7 +2584,8 @@ int main(int argc, char **argv) {
                  << "; requires encoded" << endl;
             exit(1);
         }
-        if ((lb_scheme_name == "n-mrc4" || lb_scheme_name == "n-mrc5") &&
+        if ((lb_scheme_name == "n-mrc4" || lb_scheme_name == "n-mrc5" ||
+             lb_scheme_name == "n-mrc6") &&
             nmrc_reroute_policy_user_set) {
             cerr << "n-MRC preset " << lb_scheme_name
                  << " does not allow -nmrc_reroute_policy" << endl;
@@ -2572,7 +2629,8 @@ int main(int argc, char **argv) {
                  << required_network_name << endl;
             exit(1);
         }
-        if ((lb_scheme_name == "n-mrc4" || lb_scheme_name == "n-mrc5") &&
+        if ((lb_scheme_name == "n-mrc4" || lb_scheme_name == "n-mrc5" ||
+             lb_scheme_name == "n-mrc6") &&
             nmrc_binary_threshold_user_set) {
             cerr << "n-MRC preset " << lb_scheme_name
                  << " does not allow -nmrc_binary_threshold" << endl;
@@ -2883,6 +2941,8 @@ int main(int argc, char **argv) {
     FatTreeSwitch::_nmrc_network_decision_mode = nmrc_network_decision;
     FatTreeSwitch::_nmrc_absolute_threshold = nmrc_absolute_threshold;
     FatTreeSwitch::_nmrc_relative_delta = nmrc_relative_delta;
+    FatTreeSwitch::_nmrc_route_delta = nmrc_route_delta;
+    FatTreeSwitch::_nmrc_cooldown_delta = nmrc_cooldown_delta;
     if (roce_lb_mode == RoceSrc::LB_NMRC) {
         FatTreeSwitch::_sglb_score_mode =
             FatTreeSwitch::SGLB_SCORE_NMRC_QUANTIZED_TOPK;
@@ -3302,7 +3362,21 @@ int main(int argc, char **argv) {
             32 : min(path_space, 32U);
         const char* network_decision_name =
             nmrc_network_decision_name(nmrc_network_decision);
-        if (lb_scheme_name == "n-mrc4" || lb_scheme_name == "n-mrc5") {
+        if (lb_scheme_name == "n-mrc6") {
+            cout << "HybridNmrcConfig ev_mode=" << ev_mode_name
+                 << " preset=" << lb_scheme_name
+                 << " endpoint_policy=" << RoceSrc::nmrcEndpointPolicyName()
+                 << " all_cooling_policy="
+                 << RoceSrc::nmrcAllCoolingPolicyName()
+                 << " network_decision=" << network_decision_name
+                 << " route_delta=" << nmrc_route_delta
+                 << " cooldown_delta=" << nmrc_cooldown_delta
+                 << " fastcnp=" << (nmrc_fastcnp ? "on" : "off")
+                 << " reroute_policy=n/a trim_cooldown=actual_path"
+                 << " paths=" << path_space
+                 << " ev_set_size=" << ev_set_size
+                 << " ev_mapping=path_unique" << endl;
+        } else if (lb_scheme_name == "n-mrc4" || lb_scheme_name == "n-mrc5") {
             cout << "HybridNmrcConfig ev_mode=" << ev_mode_name
                  << " preset=" << lb_scheme_name
                  << " endpoint_policy=" << RoceSrc::nmrcEndpointPolicyName()
@@ -4297,6 +4371,10 @@ int main(int argc, char **argv) {
              << FatTreeSwitch::_nmrc_diag_relative_paired_actions
              << " relative_reroutes="
              << FatTreeSwitch::_nmrc_diag_relative_reroutes
+             << " two_stage_reroute_only="
+             << FatTreeSwitch::_nmrc_diag_two_stage_reroute_only
+             << " two_stage_cooldown_requested="
+             << FatTreeSwitch::_nmrc_diag_two_stage_cooldown_requested
              << " relative_reroute_key_count="
              << FatTreeSwitch::_nmrc_diag_relative_reroute_key_count
              << " relative_reroute_key_sum="
