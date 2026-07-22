@@ -221,6 +221,31 @@ static void test_nmrc_relative_delta_selector() {
            "a non-finite absolute threshold must fail closed");
 }
 
+static void test_nmrc_piecewise_delta_selector() {
+    std::vector<bool> valid(3, true);
+    std::vector<bool> available(3, true);
+    std::vector<double> scores{0.49, 0.23, 0.30};
+    FatTreeSwitch::NmrcRelativeDecision d =
+        FatTreeSwitch::nmrc_select_piecewise_delta_path(
+            0, scores, valid, available, 0.50, 0.25, 0.15, 0);
+    expect(d.reroute && d.selected_index == 1,
+           "below the breakpoint the selector must use delta 0.25");
+
+    scores = {0.70, 0.54, 0.60};
+    d = FatTreeSwitch::nmrc_select_piecewise_delta_path(
+        0, scores, valid, available, 0.50, 0.25, 0.15, 0);
+    expect(d.reroute && d.selected_index == 1 && d.selected_score > 0.50,
+           "above the breakpoint delta 0.15 must allow a relatively better congested path");
+
+    scores = {0.49, 0.25, 0.10};
+    available[2] = false;
+    d = FatTreeSwitch::nmrc_select_piecewise_delta_path(
+        0, scores, valid, available, 0.50, 0.25, 0.15, 0);
+    expect(!d.reroute &&
+               d.reason == FatTreeSwitch::NMRC_RELATIVE_NO_DELTA_CANDIDATE,
+           "piecewise delta must fail closed without an eligible path");
+}
+
 static void test_nmrc_relative_action_identity_and_histogram_boundaries() {
     const uint32_t flow_id = 1601;
     const RocePacket::seq_t psn = 0x123456789abcdef0ULL;
@@ -389,6 +414,7 @@ int main() {
     }
 
     test_nmrc_relative_delta_selector();
+    test_nmrc_piecewise_delta_selector();
     test_nmrc_relative_action_identity_and_histogram_boundaries();
 
     {

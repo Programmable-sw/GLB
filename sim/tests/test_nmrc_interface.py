@@ -34,6 +34,10 @@ def main():
     assert_contains(main_roce, "_nmrc_absolute_threshold = nmrc_absolute_threshold", "N-MRC4 absolute threshold assignment")
     assert_contains(main_roce, "absolute_threshold=", "N-MRC4 resolved absolute threshold")
     assert_contains(main_roce, "double nmrc_relative_delta = 0.25", "N-MRC4 relative delta default")
+    assert_contains(main_roce, '"n-mrc5"', "piecewise N-MRC preset")
+    assert_contains(main_roce, "NMRC_NETWORK_PIECEWISE_DELTA", "piecewise N-MRC decision mode")
+    assert_contains(switch_cpp, "_nmrc_piecewise_delta_below = 0.25", "piecewise lower-score delta")
+    assert_contains(switch_cpp, "_nmrc_piecewise_delta_above = 0.15", "piecewise higher-score delta")
 
     assert_contains(main_roce, "netaware", "main_roce NetAware CLI")
     assert_contains(main_roce, "LB_NETAWARE", "main_roce NetAware mode")

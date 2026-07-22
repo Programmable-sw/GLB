@@ -127,7 +127,8 @@ public:
     enum NmrcNetworkDecisionMode {
         NMRC_NETWORK_GRADED = 0,
         NMRC_NETWORK_BINARY_SCORE = 1,
-        NMRC_NETWORK_RELATIVE_DELTA = 2
+        NMRC_NETWORK_RELATIVE_DELTA = 2,
+        NMRC_NETWORK_PIECEWISE_DELTA = 3
     };
 
     enum NmrcRelativeDecisionReason {
@@ -202,6 +203,15 @@ public:
         const vector<bool>& available,
         double absolute_threshold,
         double delta,
+        uint32_t selection_value);
+    static NmrcRelativeDecision nmrc_select_piecewise_delta_path(
+        uint32_t original_index,
+        const vector<double>& scores,
+        const vector<bool>& two_hop_valid,
+        const vector<bool>& available,
+        double breakpoint,
+        double delta_below,
+        double delta_above,
         uint32_t selection_value);
     static uint64_t nmrc_relative_action_key(
         uint32_t flow_id, RocePacket::seq_t psn, uint8_t attempt,
@@ -554,6 +564,8 @@ public:
     static NmrcNetworkDecisionMode _nmrc_network_decision_mode;
     static double _nmrc_absolute_threshold;
     static double _nmrc_relative_delta;
+    static double _nmrc_piecewise_delta_below;
+    static double _nmrc_piecewise_delta_above;
     static const double NMRC_RELATIVE_EPSILON;
     static uint64_t _nmrc_diag_route_checks;
     static uint64_t _nmrc_diag_reroutes;
