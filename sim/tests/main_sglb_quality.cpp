@@ -244,6 +244,29 @@ static void test_nmrc_two_stage_delta_selector() {
            "a gap below the route delta must keep the original path");
 }
 
+static void test_nmrc_absolute_reroute_selector() {
+    std::vector<double> scores{0.70, 0.60, 0.35};
+    std::vector<bool> valid(3, true);
+    std::vector<bool> available(3, true);
+    FatTreeSwitch::NmrcRelativeDecision d =
+        FatTreeSwitch::nmrc_select_absolute_reroute_path(
+            0, scores, valid, available, 0.50, 0.30, 0);
+    expect(d.reroute && d.selected_index == 2 && d.request_cooldown,
+           "absolute reroute must choose a best path and cool an outlier");
+    scores = {0.70, 0.60};
+    valid.assign(2, true);
+    available.assign(2, true);
+    d = FatTreeSwitch::nmrc_select_absolute_reroute_path(
+        0, scores, valid, available, 0.50, 0.30, 0);
+    expect(d.reroute && !d.request_cooldown,
+           "absolute reroute must rescue without cooling for a small gap");
+    scores = {0.49, 0.10};
+    d = FatTreeSwitch::nmrc_select_absolute_reroute_path(
+        0, scores, valid, available, 0.50, 0.30, 0);
+    expect(!d.reroute,
+           "a non-congested original must not trigger absolute reroute");
+}
+
 static void test_nmrc_piecewise_delta_selector() {
     std::vector<bool> valid(3, true);
     std::vector<bool> available(3, true);
@@ -438,6 +461,7 @@ int main() {
 
     test_nmrc_relative_delta_selector();
     test_nmrc_two_stage_delta_selector();
+    test_nmrc_absolute_reroute_selector();
     test_nmrc_piecewise_delta_selector();
     test_nmrc_relative_action_identity_and_histogram_boundaries();
 

@@ -129,7 +129,8 @@ public:
         NMRC_NETWORK_BINARY_SCORE = 1,
         NMRC_NETWORK_RELATIVE_DELTA = 2,
         NMRC_NETWORK_PIECEWISE_DELTA = 3,
-        NMRC_NETWORK_TWO_STAGE_DELTA = 4
+        NMRC_NETWORK_TWO_STAGE_DELTA = 4,
+        NMRC_NETWORK_ABSOLUTE_REROUTE = 5
     };
 
     enum NmrcRelativeDecisionReason {
@@ -221,6 +222,14 @@ public:
         const vector<bool>& two_hop_valid,
         const vector<bool>& available,
         double route_delta,
+        double cooldown_delta,
+        uint32_t selection_value);
+    static NmrcRelativeDecision nmrc_select_absolute_reroute_path(
+        uint32_t original_index,
+        const vector<double>& scores,
+        const vector<bool>& two_hop_valid,
+        const vector<bool>& available,
+        double absolute_threshold,
         double cooldown_delta,
         uint32_t selection_value);
     static uint64_t nmrc_relative_action_key(
