@@ -741,8 +741,21 @@ static uint32_t install_sglb_background(FatTreeTopology* top,
     return added;
 }
 
+const char* nmrc_network_decision_name(
+    FatTreeSwitch::NmrcNetworkDecisionMode decision) {
+    switch (decision) {
+    case FatTreeSwitch::NMRC_NETWORK_GRADED:
+        return "graded";
+    case FatTreeSwitch::NMRC_NETWORK_BINARY_SCORE:
+        return "binary_score";
+    case FatTreeSwitch::NMRC_NETWORK_RELATIVE_DELTA:
+        return "relative_delta";
+    }
+    return "unknown";
+}
+
 void exit_error(char* progr) {
-    cout << "Usage " << progr << " [-nodes N]\n\t[-conns C]\n\t[-q queue_size]\n\t[-queue_type composite|composite_ecn|composite_ecn_lb|lossless|lossless_input|lossless_input_ecn]\n\t[-tm traffic_matrix_file]\n\t[-lb ecmp|ecmp_rr|adaptive-routing|sglb|drill|reps|avail|grade|mrc|netaware|n-mrc|rr|ops|conweave|ndp]\n\t[-cc none|dcqcn|dcqcn_variant|mprdma]\n\t[-cc_iw_pkts pkts]\n\t[-cc_min_cwnd_pkts pkts]\n\t[-cc_max_cwnd_pkts pkts]\n\t[-dcqcn_g x]\n\t[-dcqcn_initial_alpha x]\n\t[-dcqcn_ai_mbps x]\n\t[-dcqcn_min_rate_mbps x]\n\t[-dcqcn_alpha_us x]\n\t[-dcqcn_rate_us x]\n\t[-dcqcn_cnp_us x]\n\t[-dcqcn_byte_counter bytes]\n\t[-dcqcn_fast_recovery_steps N]\n\t[-roce_rx_mode gbn|sp]\n\t[-roce_ooo_us x]\n\t[-roce_loss_trace_window_pkts N]\n\t[-roce_ooo_window_pkts N]\n\t[-roce_bdp_bytes bytes]\n\t[-roce_nack_interval_us x]\n\t[-roce_rto_us x]\n\t[-roce_rto_high_us x]\n\t[-seed random_seed]\n\t[-end end_time_in_usec]\n\t[-mtu MTU]\n\t[-linkspeed Mbps]\n\t[-hop_latency us]\n\t[-switch_latency us]\n\t[-slow_tor_uplinks N]\n\t[-slow_tor_uplink_divisor N]\n\t[-slow_tor_uplink_select spaced|random-sparse]\n\t[-ecn_thresh kmax_fraction]\n\t[-mrc_cooldown_mode cwnd_scaled|one_cycle]\n\t[-mrc_cooldown_reference_pkts N]\n\t[-mrc_all_cooling_fallback earliest|round_robin]\n\t[-mrc_failed_retry_us x]\n\t[-mrc_probe_interval_pkts N]\n\t[-conweave_rtt_us x]\n\t[-ndp_cwnd pkts]\n\t[-pfc_thresholds low high]" << endl;
+    cout << "Usage " << progr << " [-nodes N]\n\t[-conns C]\n\t[-q queue_size]\n\t[-queue_type composite|composite_ecn|composite_ecn_lb|lossless|lossless_input|lossless_input_ecn]\n\t[-tm traffic_matrix_file]\n\t[-lb ecmp|ecmp_rr|adaptive-routing|sglb|drill|reps|avail|grade|mrc|netaware|n-mrc|n-mrc-allcool-rr-reset|n-mrc1|n-mrc2|n-mrc4|rr|ops|conweave|ndp]\n\t[-cc none|dcqcn|dcqcn_variant|mprdma]\n\t[-cc_iw_pkts pkts]\n\t[-cc_min_cwnd_pkts pkts]\n\t[-cc_max_cwnd_pkts pkts]\n\t[-dcqcn_g x]\n\t[-dcqcn_initial_alpha x]\n\t[-dcqcn_ai_mbps x]\n\t[-dcqcn_min_rate_mbps x]\n\t[-dcqcn_alpha_us x]\n\t[-dcqcn_rate_us x]\n\t[-dcqcn_cnp_us x]\n\t[-dcqcn_byte_counter bytes]\n\t[-dcqcn_fast_recovery_steps N]\n\t[-roce_rx_mode gbn|sp]\n\t[-roce_ooo_us x]\n\t[-roce_loss_trace_window_pkts N]\n\t[-roce_ooo_window_pkts N]\n\t[-roce_bdp_bytes bytes]\n\t[-roce_nack_interval_us x]\n\t[-roce_rto_us x]\n\t[-roce_rto_high_us x]\n\t[-seed random_seed]\n\t[-end end_time_in_usec]\n\t[-mtu MTU]\n\t[-linkspeed Mbps]\n\t[-hop_latency us]\n\t[-switch_latency us]\n\t[-slow_tor_uplinks N]\n\t[-slow_tor_uplink_divisor N]\n\t[-slow_tor_uplink_select spaced|random-sparse]\n\t[-ecn_thresh kmax_fraction]\n\t[-mrc_cooldown_mode cwnd_scaled|one_cycle]\n\t[-mrc_cooldown_reference_pkts N]\n\t[-mrc_all_cooling_fallback earliest|round_robin]\n\t[-mrc_failed_retry_us x]\n\t[-mrc_probe_interval_pkts N]\n\t[-conweave_rtt_us x]\n\t[-ndp_cwnd pkts]\n\t[-pfc_thresholds low high]" << endl;
     cout << "\t[-roce_sack_bitmap_bits 64|128]" << endl;
     cout << "\t[-roce_transport_semantics legacy|mrc_exact_bounded]" << endl;
     cout << "\t[-roce_trim_recovery cumulative|exact]" << endl;
@@ -787,6 +800,12 @@ void exit_error(char* progr) {
     cout << "\t[-nmrc_ev_mode encoded|random_matched|random32]" << endl;
     cout << "\t[-nmrc_reroute_policy any_better|better_ge3]" << endl;
     cout << "\t[-nmrc_fastcnp on|off]" << endl;
+    cout << "\t[-nmrc_endpoint_policy rr_cooldown|random_stateless]" << endl;
+    cout << "\t[-nmrc_all_cooling_policy earliest|rr_reset]" << endl;
+    cout << "\t[-nmrc_network_decision graded|binary_score|relative_delta]" << endl;
+    cout << "\t[-nmrc_binary_threshold 0.5]" << endl;
+    cout << "\t[-nmrc_absolute_threshold VALUE]" << endl;
+    cout << "\t[-nmrc_relative_delta VALUE]" << endl;
     cout << "\t[-queue_cv_sample_us x]" << endl;
     exit(1);
 }
@@ -915,8 +934,26 @@ int main(int argc, char **argv) {
     RoceSrc::nmrc_ev_mode_t nmrc_ev_mode = RoceSrc::NMRC_EV_ENCODED;
     FatTreeSwitch::NmrcReroutePolicy nmrc_reroute_policy =
         FatTreeSwitch::NMRC_REROUTE_BETTER_GE3;
+    RoceSrc::nmrc_endpoint_policy_t nmrc_endpoint_policy =
+        RoceSrc::NMRC_ENDPOINT_RR_COOLDOWN;
+    RoceSrc::nmrc_all_cooling_policy_t nmrc_all_cooling_policy =
+        RoceSrc::NMRC_ALL_COOLING_EARLIEST;
+    FatTreeSwitch::NmrcNetworkDecisionMode nmrc_network_decision =
+        FatTreeSwitch::NMRC_NETWORK_GRADED;
+    double nmrc_binary_threshold = 0.5;
+    double nmrc_absolute_threshold = 0.50;
+    double nmrc_relative_delta = 0.25;
     bool nmrc_fastcnp = true;
     bool nmrc_option_user_set = false;
+    bool nmrc_ev_mode_user_set = false;
+    bool nmrc_reroute_policy_user_set = false;
+    bool nmrc_fastcnp_user_set = false;
+    bool nmrc_endpoint_policy_user_set = false;
+    bool nmrc_all_cooling_policy_user_set = false;
+    bool nmrc_network_decision_user_set = false;
+    bool nmrc_binary_threshold_user_set = false;
+    bool nmrc_absolute_threshold_user_set = false;
+    bool nmrc_relative_delta_user_set = false;
     double ecn_thresh = 1.0;
     uint32_t mrc_logical_evs = 0;
     uint32_t mrc_active_paths = 0;
@@ -1102,6 +1139,26 @@ int main(int argc, char **argv) {
                 FatTreeSwitch::set_strategy(FatTreeSwitch::ECMP);
                 roce_lb_mode = RoceSrc::LB_NMRC;
                 lb_scheme_name = "n-mrc";
+            } else if (!strcmp(argv[i+1], "n-mrc-allcool-rr-reset")) {
+                route_strategy = ECMP_FIB;
+                FatTreeSwitch::set_strategy(FatTreeSwitch::ECMP);
+                roce_lb_mode = RoceSrc::LB_NMRC;
+                lb_scheme_name = "n-mrc-allcool-rr-reset";
+            } else if (!strcmp(argv[i+1], "n-mrc1")) {
+                route_strategy = ECMP_FIB;
+                FatTreeSwitch::set_strategy(FatTreeSwitch::ECMP);
+                roce_lb_mode = RoceSrc::LB_NMRC;
+                lb_scheme_name = "n-mrc1";
+            } else if (!strcmp(argv[i+1], "n-mrc2")) {
+                route_strategy = ECMP_FIB;
+                FatTreeSwitch::set_strategy(FatTreeSwitch::ECMP);
+                roce_lb_mode = RoceSrc::LB_NMRC;
+                lb_scheme_name = "n-mrc2";
+            } else if (!strcmp(argv[i+1], "n-mrc4")) {
+                route_strategy = ECMP_FIB;
+                FatTreeSwitch::set_strategy(FatTreeSwitch::ECMP);
+                roce_lb_mode = RoceSrc::LB_NMRC;
+                lb_scheme_name = "n-mrc4";
             } else if (!strcmp(argv[i+1], "mrc")) {
                 route_strategy = ECMP_FIB;
                 FatTreeSwitch::set_strategy(FatTreeSwitch::ECMP);
@@ -1993,6 +2050,10 @@ int main(int argc, char **argv) {
             cout << "netaware path trace period " << netaware_trace_period_us << "us" << endl;
             i++;
         } else if (!strcmp(argv[i],"-nmrc_ev_mode")) {
+            if (i + 1 >= argc) {
+                cerr << "missing value for -nmrc_ev_mode" << endl;
+                exit(1);
+            }
             if (!strcmp(argv[i+1], "encoded"))
                 nmrc_ev_mode = RoceSrc::NMRC_EV_ENCODED;
             else if (!strcmp(argv[i+1], "random_matched"))
@@ -2004,8 +2065,13 @@ int main(int argc, char **argv) {
                 exit(1);
             }
             nmrc_option_user_set = true;
+            nmrc_ev_mode_user_set = true;
             i++;
         } else if (!strcmp(argv[i],"-nmrc_reroute_policy")) {
+            if (i + 1 >= argc) {
+                cerr << "missing value for -nmrc_reroute_policy" << endl;
+                exit(1);
+            }
             if (!strcmp(argv[i+1], "any_better"))
                 nmrc_reroute_policy = FatTreeSwitch::NMRC_REROUTE_ANY_BETTER;
             else if (!strcmp(argv[i+1], "better_ge3"))
@@ -2015,8 +2081,13 @@ int main(int argc, char **argv) {
                 exit(1);
             }
             nmrc_option_user_set = true;
+            nmrc_reroute_policy_user_set = true;
             i++;
         } else if (!strcmp(argv[i],"-nmrc_fastcnp")) {
+            if (i + 1 >= argc) {
+                cerr << "missing value for -nmrc_fastcnp" << endl;
+                exit(1);
+            }
             if (!strcmp(argv[i+1], "on"))
                 nmrc_fastcnp = true;
             else if (!strcmp(argv[i+1], "off"))
@@ -2026,6 +2097,132 @@ int main(int argc, char **argv) {
                 exit(1);
             }
             nmrc_option_user_set = true;
+            nmrc_fastcnp_user_set = true;
+            i++;
+        } else if (!strcmp(argv[i],"-nmrc_endpoint_policy")) {
+            if (i + 1 >= argc) {
+                cerr << "missing value for -nmrc_endpoint_policy" << endl;
+                exit(1);
+            }
+            if (!strcmp(argv[i+1], "rr_cooldown"))
+                nmrc_endpoint_policy = RoceSrc::NMRC_ENDPOINT_RR_COOLDOWN;
+            else if (!strcmp(argv[i+1], "random_stateless"))
+                nmrc_endpoint_policy = RoceSrc::NMRC_ENDPOINT_RANDOM_STATELESS;
+            else {
+                cerr << "invalid n-MRC endpoint policy " << argv[i+1]
+                     << "; expected rr_cooldown or random_stateless" << endl;
+                exit(1);
+            }
+            nmrc_option_user_set = true;
+            nmrc_endpoint_policy_user_set = true;
+            i++;
+        } else if (!strcmp(argv[i],"-nmrc_all_cooling_policy")) {
+            if (i + 1 >= argc) {
+                cerr << "missing value for -nmrc_all_cooling_policy" << endl;
+                exit(1);
+            }
+            if (!strcmp(argv[i+1], "earliest"))
+                nmrc_all_cooling_policy =
+                    RoceSrc::NMRC_ALL_COOLING_EARLIEST;
+            else if (!strcmp(argv[i+1], "rr_reset"))
+                nmrc_all_cooling_policy =
+                    RoceSrc::NMRC_ALL_COOLING_RR_RESET;
+            else {
+                cerr << "invalid n-MRC all-cooling policy " << argv[i+1]
+                     << "; expected earliest or rr_reset" << endl;
+                exit(1);
+            }
+            nmrc_option_user_set = true;
+            nmrc_all_cooling_policy_user_set = true;
+            i++;
+        } else if (!strcmp(argv[i],"-nmrc_network_decision")) {
+            if (i + 1 >= argc) {
+                cerr << "missing value for -nmrc_network_decision" << endl;
+                exit(1);
+            }
+            if (!strcmp(argv[i+1], "graded"))
+                nmrc_network_decision = FatTreeSwitch::NMRC_NETWORK_GRADED;
+            else if (!strcmp(argv[i+1], "binary_score"))
+                nmrc_network_decision =
+                    FatTreeSwitch::NMRC_NETWORK_BINARY_SCORE;
+            else if (!strcmp(argv[i+1], "relative_delta"))
+                nmrc_network_decision =
+                    FatTreeSwitch::NMRC_NETWORK_RELATIVE_DELTA;
+            else {
+                cerr << "invalid n-MRC network decision " << argv[i+1]
+                     << "; expected graded, binary_score, or relative_delta"
+                     << endl;
+                exit(1);
+            }
+            nmrc_option_user_set = true;
+            nmrc_network_decision_user_set = true;
+            i++;
+        } else if (!strcmp(argv[i],"-nmrc_binary_threshold")) {
+            if (i + 1 >= argc) {
+                cerr << "missing value for -nmrc_binary_threshold" << endl;
+                exit(1);
+            }
+            char* end = NULL;
+            errno = 0;
+            nmrc_binary_threshold = strtod(argv[i+1], &end);
+            if (errno || end == argv[i+1] || *end != '\0' ||
+                !std::isfinite(nmrc_binary_threshold) ||
+                nmrc_binary_threshold != 0.5) {
+                cerr << "invalid n-MRC binary threshold " << argv[i+1]
+                     << "; expected 0.5" << endl;
+                exit(1);
+            }
+            nmrc_option_user_set = true;
+            nmrc_binary_threshold_user_set = true;
+            i++;
+        } else if (!strcmp(argv[i],"-nmrc_absolute_threshold")) {
+            if (i + 1 >= argc) {
+                cerr << "missing value for -nmrc_absolute_threshold" << endl;
+                exit(1);
+            }
+            if (nmrc_absolute_threshold_user_set) {
+                cerr << "-nmrc_absolute_threshold may only be specified once"
+                     << endl;
+                exit(1);
+            }
+            char* end = NULL;
+            errno = 0;
+            double parsed_absolute_threshold = strtod(argv[i+1], &end);
+            if (errno || end == argv[i+1] || *end != '\0' ||
+                !std::isfinite(parsed_absolute_threshold) ||
+                parsed_absolute_threshold <= 0.0 ||
+                parsed_absolute_threshold > 1.0) {
+                cerr << "invalid n-MRC absolute threshold " << argv[i+1]
+                     << "; expected 0 < value <= 1" << endl;
+                exit(1);
+            }
+            nmrc_absolute_threshold = parsed_absolute_threshold;
+            nmrc_option_user_set = true;
+            nmrc_absolute_threshold_user_set = true;
+            i++;
+        } else if (!strcmp(argv[i],"-nmrc_relative_delta")) {
+            if (i + 1 >= argc) {
+                cerr << "missing value for -nmrc_relative_delta" << endl;
+                exit(1);
+            }
+            if (nmrc_relative_delta_user_set) {
+                cerr << "-nmrc_relative_delta may only be specified once"
+                     << endl;
+                exit(1);
+            }
+            char* end = NULL;
+            errno = 0;
+            double parsed_relative_delta = strtod(argv[i+1], &end);
+            if (errno || end == argv[i+1] || *end != '\0' ||
+                !std::isfinite(parsed_relative_delta) ||
+                parsed_relative_delta <= 0.0 || parsed_relative_delta > 1.0) {
+                cerr << "invalid n-MRC relative delta " << argv[i+1]
+                     << "; expected 0 < value <= 1" << endl;
+                exit(1);
+            }
+            nmrc_relative_delta = parsed_relative_delta;
+            nmrc_option_user_set = true;
+            nmrc_relative_delta_user_set = true;
             i++;
         } else if (!strcmp(argv[i],"-avail_ecn_only")) {
             avail_ecn_only = true;
@@ -2244,7 +2441,6 @@ int main(int argc, char **argv) {
     srand(seed);
     srandom(seed);
     RoceSrc::setNmrcEvSeed(seed);
-    RoceSrc::setNmrcEvMode(nmrc_ev_mode);
 
     if (grade_complex_score && lb_scheme_name != "grade") {
         cerr << "grade complex override requires -lb grade" << endl;
@@ -2258,10 +2454,142 @@ int main(int argc, char **argv) {
         cerr << "MRC cooldown reference override requires -lb mrc" << endl;
         exit(1);
     }
-    if (nmrc_option_user_set && lb_scheme_name != "n-mrc") {
-        cerr << "n-MRC options require -lb n-mrc" << endl;
+    if (nmrc_relative_delta_user_set && lb_scheme_name != "n-mrc4") {
+        cerr << "-nmrc_relative_delta requires -lb n-mrc4" << endl;
         exit(1);
     }
+    if (nmrc_absolute_threshold_user_set && lb_scheme_name != "n-mrc4") {
+        cerr << "-nmrc_absolute_threshold requires -lb n-mrc4" << endl;
+        exit(1);
+    }
+    if (nmrc_option_user_set && roce_lb_mode != RoceSrc::LB_NMRC) {
+        cerr << "n-MRC options require an N-MRC load-balancing preset" << endl;
+        exit(1);
+    }
+    if (roce_lb_mode == RoceSrc::LB_NMRC && lb_scheme_name != "n-mrc") {
+        RoceSrc::nmrc_endpoint_policy_t required_endpoint =
+            RoceSrc::NMRC_ENDPOINT_RR_COOLDOWN;
+        RoceSrc::nmrc_all_cooling_policy_t required_all_cooling =
+            RoceSrc::NMRC_ALL_COOLING_EARLIEST;
+        FatTreeSwitch::NmrcNetworkDecisionMode required_network =
+            FatTreeSwitch::NMRC_NETWORK_GRADED;
+        bool required_fastcnp = true;
+
+        if (lb_scheme_name == "n-mrc-allcool-rr-reset") {
+            required_all_cooling = RoceSrc::NMRC_ALL_COOLING_RR_RESET;
+        } else if (lb_scheme_name == "n-mrc1") {
+            required_endpoint = RoceSrc::NMRC_ENDPOINT_RANDOM_STATELESS;
+            required_fastcnp = false;
+        } else if (lb_scheme_name == "n-mrc2") {
+            required_network = FatTreeSwitch::NMRC_NETWORK_BINARY_SCORE;
+        } else if (lb_scheme_name == "n-mrc4") {
+            required_network = FatTreeSwitch::NMRC_NETWORK_RELATIVE_DELTA;
+        }
+
+        const char* ev_mode_name =
+            nmrc_ev_mode == RoceSrc::NMRC_EV_ENCODED ? "encoded" :
+            (nmrc_ev_mode == RoceSrc::NMRC_EV_RANDOM_MATCHED ?
+                "random_matched" : "random32");
+        const char* reroute_policy_name =
+            nmrc_reroute_policy == FatTreeSwitch::NMRC_REROUTE_ANY_BETTER ?
+                "any_better" : "better_ge3";
+        const char* endpoint_policy_name =
+            nmrc_endpoint_policy == RoceSrc::NMRC_ENDPOINT_RR_COOLDOWN ?
+                "rr_cooldown" : "random_stateless";
+        const char* all_cooling_policy_name =
+            nmrc_all_cooling_policy == RoceSrc::NMRC_ALL_COOLING_EARLIEST ?
+                "earliest" : "rr_reset";
+        const char* network_decision_name =
+            nmrc_network_decision_name(nmrc_network_decision);
+        const char* required_endpoint_name =
+            required_endpoint == RoceSrc::NMRC_ENDPOINT_RR_COOLDOWN ?
+                "rr_cooldown" : "random_stateless";
+        const char* required_all_cooling_name =
+            required_all_cooling == RoceSrc::NMRC_ALL_COOLING_EARLIEST ?
+                "earliest" : "rr_reset";
+        const char* required_network_name =
+            nmrc_network_decision_name(required_network);
+
+        if (nmrc_ev_mode_user_set &&
+            nmrc_ev_mode != RoceSrc::NMRC_EV_ENCODED) {
+            cerr << "n-MRC preset " << lb_scheme_name
+                 << " conflicts with -nmrc_ev_mode " << ev_mode_name
+                 << "; requires encoded" << endl;
+            exit(1);
+        }
+        if (lb_scheme_name == "n-mrc4" && nmrc_reroute_policy_user_set) {
+            cerr << "n-MRC preset " << lb_scheme_name
+                 << " does not allow -nmrc_reroute_policy" << endl;
+            exit(1);
+        }
+        if (nmrc_reroute_policy_user_set &&
+            nmrc_reroute_policy != FatTreeSwitch::NMRC_REROUTE_BETTER_GE3) {
+            cerr << "n-MRC preset " << lb_scheme_name
+                 << " conflicts with -nmrc_reroute_policy "
+                 << reroute_policy_name << "; requires better_ge3" << endl;
+            exit(1);
+        }
+        if (nmrc_fastcnp_user_set && nmrc_fastcnp != required_fastcnp) {
+            cerr << "n-MRC preset " << lb_scheme_name
+                 << " conflicts with -nmrc_fastcnp "
+                 << (nmrc_fastcnp ? "on" : "off") << "; requires "
+                 << (required_fastcnp ? "on" : "off") << endl;
+            exit(1);
+        }
+        if (nmrc_endpoint_policy_user_set &&
+            nmrc_endpoint_policy != required_endpoint) {
+            cerr << "n-MRC preset " << lb_scheme_name
+                 << " conflicts with -nmrc_endpoint_policy "
+                 << endpoint_policy_name << "; requires "
+                 << required_endpoint_name << endl;
+            exit(1);
+        }
+        if (nmrc_all_cooling_policy_user_set &&
+            nmrc_all_cooling_policy != required_all_cooling) {
+            cerr << "n-MRC preset " << lb_scheme_name
+                 << " conflicts with -nmrc_all_cooling_policy "
+                 << all_cooling_policy_name << "; requires "
+                 << required_all_cooling_name << endl;
+            exit(1);
+        }
+        if (nmrc_network_decision_user_set &&
+            nmrc_network_decision != required_network) {
+            cerr << "n-MRC preset " << lb_scheme_name
+                 << " conflicts with -nmrc_network_decision "
+                 << network_decision_name << "; requires "
+                 << required_network_name << endl;
+            exit(1);
+        }
+        if (lb_scheme_name == "n-mrc4" && nmrc_binary_threshold_user_set) {
+            cerr << "n-MRC preset " << lb_scheme_name
+                 << " does not allow -nmrc_binary_threshold" << endl;
+            exit(1);
+        }
+        if (nmrc_binary_threshold_user_set && nmrc_binary_threshold != 0.5) {
+            cerr << "n-MRC preset " << lb_scheme_name
+                 << " conflicts with -nmrc_binary_threshold "
+                 << nmrc_binary_threshold << "; requires 0.5" << endl;
+            exit(1);
+        }
+
+        nmrc_ev_mode = RoceSrc::NMRC_EV_ENCODED;
+        nmrc_reroute_policy = FatTreeSwitch::NMRC_REROUTE_BETTER_GE3;
+        nmrc_fastcnp = required_fastcnp;
+        nmrc_endpoint_policy = required_endpoint;
+        nmrc_all_cooling_policy = required_all_cooling;
+        nmrc_network_decision = required_network;
+        nmrc_binary_threshold = 0.5;
+    }
+    if (roce_lb_mode == RoceSrc::LB_NMRC &&
+        nmrc_network_decision == FatTreeSwitch::NMRC_NETWORK_BINARY_SCORE &&
+        !nmrc_fastcnp) {
+        cerr << "n-MRC binary_score network decision requires "
+             << "-nmrc_fastcnp on" << endl;
+        exit(1);
+    }
+    RoceSrc::setNmrcEvMode(nmrc_ev_mode);
+    RoceSrc::setNmrcEndpointPolicy(nmrc_endpoint_policy);
+    RoceSrc::setNmrcAllCoolingPolicy(nmrc_all_cooling_policy);
     FatTreeSwitch::_stor_binary_trim_bad = !avail_ecn_only;
     if (lb_scheme_name == "avail") {
         if (stor_score_profile_user_set &&
@@ -2539,6 +2867,9 @@ int main(int argc, char **argv) {
         roce_lb_mode == RoceSrc::LB_NMRC;
     FatTreeSwitch::_nmrc_fastcnp_enabled = nmrc_fastcnp;
     FatTreeSwitch::_nmrc_reroute_policy = nmrc_reroute_policy;
+    FatTreeSwitch::_nmrc_network_decision_mode = nmrc_network_decision;
+    FatTreeSwitch::_nmrc_absolute_threshold = nmrc_absolute_threshold;
+    FatTreeSwitch::_nmrc_relative_delta = nmrc_relative_delta;
     if (roce_lb_mode == RoceSrc::LB_NMRC) {
         FatTreeSwitch::_sglb_score_mode =
             FatTreeSwitch::SGLB_SCORE_NMRC_QUANTIZED_TOPK;
@@ -2956,16 +3287,44 @@ int main(int argc, char **argv) {
                 "any_better" : "better_ge3";
         uint32_t ev_set_size = nmrc_ev_mode == RoceSrc::NMRC_EV_RANDOM32 ?
             32 : min(path_space, 32U);
-        cout << "HybridNmrcConfig ev_mode=" << ev_mode_name
-             << " reroute_policy=" << reroute_policy_name
-             << " fastcnp=" << (nmrc_fastcnp ? "on" : "off")
-             << " trim_cooldown=actual_path"
-             << " paths=" << path_space
-             << " ev_set_size=" << ev_set_size
-             << " ev_mapping="
-             << (nmrc_ev_mode == RoceSrc::NMRC_EV_ENCODED ?
-                    "path_unique" : "flow_ev_hash")
-             << endl;
+        const char* network_decision_name =
+            nmrc_network_decision_name(nmrc_network_decision);
+        if (lb_scheme_name == "n-mrc4") {
+            cout << "HybridNmrcConfig ev_mode=" << ev_mode_name
+                 << " preset=" << lb_scheme_name
+                 << " endpoint_policy=" << RoceSrc::nmrcEndpointPolicyName()
+                 << " all_cooling_policy="
+                 << RoceSrc::nmrcAllCoolingPolicyName()
+                 << " network_decision=" << network_decision_name
+                 << " absolute_threshold=" << nmrc_absolute_threshold
+                 << " relative_delta=" << nmrc_relative_delta
+                 << " fastcnp=" << (nmrc_fastcnp ? "on" : "off")
+                 << " reroute_policy=n/a"
+                 << " trim_cooldown=actual_path"
+                 << " paths=" << path_space
+                 << " ev_set_size=" << ev_set_size
+                 << " ev_mapping="
+                 << (nmrc_ev_mode == RoceSrc::NMRC_EV_ENCODED ?
+                        "path_unique" : "flow_ev_hash")
+                 << endl;
+        } else {
+            cout << "HybridNmrcConfig ev_mode=" << ev_mode_name
+                 << " reroute_policy=" << reroute_policy_name
+                 << " fastcnp=" << (nmrc_fastcnp ? "on" : "off")
+                 << " trim_cooldown=actual_path"
+                 << " paths=" << path_space
+                 << " ev_set_size=" << ev_set_size
+                 << " ev_mapping="
+                 << (nmrc_ev_mode == RoceSrc::NMRC_EV_ENCODED ?
+                        "path_unique" : "flow_ev_hash")
+                 << " preset=" << lb_scheme_name
+                 << " endpoint_policy=" << RoceSrc::nmrcEndpointPolicyName()
+                 << " all_cooling_policy="
+                 << RoceSrc::nmrcAllCoolingPolicyName()
+                 << " network_decision=" << network_decision_name
+                 << " binary_threshold=" << nmrc_binary_threshold
+                 << endl;
+        }
     }
     if (roce_lb_mode == RoceSrc::LB_MRC) {
         const char* mrc_cooldown_mode_name =
@@ -3360,6 +3719,9 @@ int main(int argc, char **argv) {
     uint64_t nmrc_fastcnp_latency_sum = 0;
     uint64_t nmrc_fastcnp_unknown_qp = 0;
     uint64_t nmrc_fastcnp_unknown_ev = 0;
+    uint64_t nmrc_fastcnp_cc_mutations = 0;
+    uint64_t nmrc_ecn_nominal_ce = 0;
+    uint64_t nmrc_ecn_detour_ce = 0;
     uint64_t nmrc_trim_non_detour = 0;
     uint64_t nmrc_trim_detour = 0;
     uint64_t nmrc_trim_nominal_cooldown_starts = 0;
@@ -3371,6 +3733,11 @@ int main(int argc, char **argv) {
     uint64_t nmrc_cooling_recoveries = 0;
     uint64_t nmrc_duplicate_notifications = 0;
     uint64_t nmrc_all_cooling_fallbacks = 0;
+    uint64_t nmrc_all_cooling_rr_episodes = 0;
+    uint64_t nmrc_all_cooling_rr_selections = 0;
+    uint64_t nmrc_all_cooling_rr_resets = 0;
+    uint64_t nmrc_fastcnp_policy_ignored = 0;
+    uint64_t nmrc_trim_policy_ignored = 0;
     uint64_t mrc_state_samples = 0, mrc_active_count_sum = 0;
     uint64_t mrc_backup_count_sum = 0, mrc_cooling_count_sum = 0;
     uint64_t mrc_failed_count_sum = 0;
@@ -3502,6 +3869,10 @@ int main(int argc, char **argv) {
             roce_srcs[ix]->_nmrc_fastcnp_unknown_qp;
         nmrc_fastcnp_unknown_ev +=
             roce_srcs[ix]->_nmrc_fastcnp_unknown_ev;
+        nmrc_fastcnp_cc_mutations +=
+            roce_srcs[ix]->nmrcFastCnpCcMutations();
+        nmrc_ecn_nominal_ce += roce_srcs[ix]->ecnNominalCeForDiag();
+        nmrc_ecn_detour_ce += roce_srcs[ix]->ecnDetourCeForDiag();
         nmrc_trim_non_detour += roce_srcs[ix]->_nmrc_trim_non_detour;
         nmrc_trim_detour += roce_srcs[ix]->_nmrc_trim_detour;
         nmrc_trim_nominal_cooldown_starts +=
@@ -3522,6 +3893,16 @@ int main(int argc, char **argv) {
             roce_srcs[ix]->nmrc_duplicate_notifications_for_diag();
         nmrc_all_cooling_fallbacks +=
             roce_srcs[ix]->nmrc_all_cooling_fallbacks_for_diag();
+        nmrc_all_cooling_rr_episodes +=
+            roce_srcs[ix]->nmrc_all_cooling_rr_episodes_for_diag();
+        nmrc_all_cooling_rr_selections +=
+            roce_srcs[ix]->nmrc_all_cooling_rr_selections_for_diag();
+        nmrc_all_cooling_rr_resets +=
+            roce_srcs[ix]->nmrc_all_cooling_rr_resets_for_diag();
+        nmrc_fastcnp_policy_ignored +=
+            roce_srcs[ix]->nmrc_fastcnp_policy_ignored_for_diag();
+        nmrc_trim_policy_ignored +=
+            roce_srcs[ix]->nmrc_trim_policy_ignored_for_diag();
         mrc_state_samples += roce_srcs[ix]->_mrc_state_samples;
         mrc_active_count_sum += roce_srcs[ix]->_mrc_active_count_sum;
         mrc_backup_count_sum += roce_srcs[ix]->_mrc_backup_count_sum;
@@ -3764,10 +4145,40 @@ int main(int argc, char **argv) {
          << endl;
     if (roce_lb_mode == RoceSrc::LB_NMRC) {
         map<uint32_t, uint64_t> better_count_hist;
+        map<uint32_t, uint64_t> binary_actual_egress_hist;
+        map<uint32_t, uint64_t> relative_candidate_count_hist;
+        map<uint32_t, uint64_t> relative_best_gap_hist;
+        map<uint32_t, uint64_t> relative_selected_gap_hist;
+        map<uint32_t, uint64_t> relative_original_score_hist;
+        map<uint32_t, uint64_t> relative_selected_score_hist;
+        map<uint32_t, uint64_t> relative_actual_egress_hist;
         for (uint32_t count = 0; count <= 32; count++) {
             if (FatTreeSwitch::_nmrc_diag_better_count[count])
                 better_count_hist[count] =
                     FatTreeSwitch::_nmrc_diag_better_count[count];
+            if (FatTreeSwitch::_nmrc_diag_binary_actual_egress[count])
+                binary_actual_egress_hist[count] =
+                    FatTreeSwitch::_nmrc_diag_binary_actual_egress[count];
+            if (FatTreeSwitch::_nmrc_diag_relative_candidate_count[count])
+                relative_candidate_count_hist[count] =
+                    FatTreeSwitch::_nmrc_diag_relative_candidate_count[count];
+            if (FatTreeSwitch::_nmrc_diag_relative_actual_egress[count])
+                relative_actual_egress_hist[count] =
+                    FatTreeSwitch::_nmrc_diag_relative_actual_egress[count];
+        }
+        for (uint32_t bin = 0; bin <= 20; bin++) {
+            if (FatTreeSwitch::_nmrc_diag_relative_best_gap[bin])
+                relative_best_gap_hist[bin] =
+                    FatTreeSwitch::_nmrc_diag_relative_best_gap[bin];
+            if (FatTreeSwitch::_nmrc_diag_relative_selected_gap[bin])
+                relative_selected_gap_hist[bin] =
+                    FatTreeSwitch::_nmrc_diag_relative_selected_gap[bin];
+            if (FatTreeSwitch::_nmrc_diag_relative_original_score[bin])
+                relative_original_score_hist[bin] =
+                    FatTreeSwitch::_nmrc_diag_relative_original_score[bin];
+            if (FatTreeSwitch::_nmrc_diag_relative_selected_score[bin])
+                relative_selected_score_hist[bin] =
+                    FatTreeSwitch::_nmrc_diag_relative_selected_score[bin];
         }
         uint64_t observed_evs =
             FatTreeSwitch::nmrc_diag_observed_evs();
@@ -3820,6 +4231,100 @@ int main(int argc, char **argv) {
              << " observed_evs=" << observed_evs
              << " observed_first_hop_choices=" << observed_paths
              << " observed_first_hop_alias_ratio=" << observed_alias_ratio
+             << " all_cooling_rr_episodes="
+             << nmrc_all_cooling_rr_episodes
+             << " all_cooling_rr_selections="
+             << nmrc_all_cooling_rr_selections
+             << " all_cooling_rr_resets=" << nmrc_all_cooling_rr_resets
+             << " fastcnp_policy_ignored=" << nmrc_fastcnp_policy_ignored
+             << " trim_policy_ignored=" << nmrc_trim_policy_ignored
+             << " binary_original_safe="
+             << FatTreeSwitch::_nmrc_diag_binary_original_safe
+             << " binary_original_congested="
+             << FatTreeSwitch::_nmrc_diag_binary_original_congested
+             << " binary_no_safe="
+             << FatTreeSwitch::_nmrc_diag_binary_no_safe
+             << " binary_route_missing="
+             << FatTreeSwitch::_nmrc_diag_binary_route_missing
+             << " binary_paired_actions="
+             << FatTreeSwitch::_nmrc_diag_binary_paired_actions
+             << " binary_original_score_count="
+             << FatTreeSwitch::_nmrc_diag_binary_paired_actions
+             << " binary_original_score_sum="
+             << FatTreeSwitch::_nmrc_diag_binary_original_score_sum
+             << " binary_original_score_max="
+             << FatTreeSwitch::_nmrc_diag_binary_original_score_max
+             << " binary_selected_score_count="
+             << FatTreeSwitch::_nmrc_diag_binary_paired_actions
+             << " binary_selected_score_sum="
+             << FatTreeSwitch::_nmrc_diag_binary_selected_score_sum
+             << " binary_selected_score_max="
+             << FatTreeSwitch::_nmrc_diag_binary_selected_score_max
+             << " binary_actual_egress_hist="
+             << format_u32_u64_hist(binary_actual_egress_hist)
+             << " relative_checks="
+             << FatTreeSwitch::_nmrc_diag_relative_checks
+             << " relative_original_unknown="
+             << FatTreeSwitch::_nmrc_diag_relative_original_unknown
+             << " relative_original_unavailable="
+             << FatTreeSwitch::_nmrc_diag_relative_original_unavailable
+             << " relative_original_below_absolute="
+             << FatTreeSwitch::_nmrc_diag_relative_original_below_absolute
+             << " relative_no_safe_candidate="
+             << FatTreeSwitch::_nmrc_diag_relative_no_safe_candidate
+             << " relative_no_delta_candidate="
+             << FatTreeSwitch::_nmrc_diag_relative_no_delta_candidate
+             << " relative_reverse_path_blocked="
+             << FatTreeSwitch::_nmrc_diag_relative_reverse_path_blocked
+             << " relative_paired_actions="
+             << FatTreeSwitch::_nmrc_diag_relative_paired_actions
+             << " relative_reroutes="
+             << FatTreeSwitch::_nmrc_diag_relative_reroutes
+             << " relative_reroute_key_count="
+             << FatTreeSwitch::_nmrc_diag_relative_reroute_key_count
+             << " relative_reroute_key_sum="
+             << FatTreeSwitch::_nmrc_diag_relative_reroute_key_sum
+             << " relative_reroute_key_xor="
+             << FatTreeSwitch::_nmrc_diag_relative_reroute_key_xor
+             << " relative_generated_key_count="
+             << FatTreeSwitch::_nmrc_diag_relative_generated_key_count
+             << " relative_generated_key_sum="
+             << FatTreeSwitch::_nmrc_diag_relative_generated_key_sum
+             << " relative_generated_key_xor="
+             << FatTreeSwitch::_nmrc_diag_relative_generated_key_xor
+             << " relative_candidate_count_hist="
+             << format_u32_u64_hist(relative_candidate_count_hist)
+             << " relative_best_gap_hist="
+             << format_u32_u64_hist(relative_best_gap_hist)
+             << " relative_selected_gap_hist="
+             << format_u32_u64_hist(relative_selected_gap_hist)
+             << " relative_original_score_count="
+             << FatTreeSwitch::_nmrc_diag_relative_original_score_count
+             << " relative_original_score_sum="
+             << FatTreeSwitch::_nmrc_diag_relative_original_score_sum
+             << " relative_original_score_max="
+             << FatTreeSwitch::_nmrc_diag_relative_original_score_max
+             << " relative_original_score_hist="
+             << format_u32_u64_hist(relative_original_score_hist)
+             << " relative_selected_score_count="
+             << FatTreeSwitch::_nmrc_diag_relative_selected_score_count
+             << " relative_selected_score_sum="
+             << FatTreeSwitch::_nmrc_diag_relative_selected_score_sum
+             << " relative_selected_score_max="
+             << FatTreeSwitch::_nmrc_diag_relative_selected_score_max
+             << " relative_selected_score_hist="
+             << format_u32_u64_hist(relative_selected_score_hist)
+             << " relative_actual_egress_hist="
+             << format_u32_u64_hist(relative_actual_egress_hist)
+             << " relative_selected_gap_violations="
+             << FatTreeSwitch::_nmrc_diag_relative_selected_gap_violations
+             << " relative_decision_ce_set="
+             << FatTreeSwitch::_nmrc_diag_relative_decision_ce_set
+             << " relative_decision_ce_cleared="
+             << FatTreeSwitch::_nmrc_diag_relative_decision_ce_cleared
+             << " ecn_nominal_ce=" << nmrc_ecn_nominal_ce
+             << " ecn_detour_ce=" << nmrc_ecn_detour_ce
+             << " fastcnp_cc_mutations=" << nmrc_fastcnp_cc_mutations
              << endl;
     }
     if (queue_cv_sampler) {

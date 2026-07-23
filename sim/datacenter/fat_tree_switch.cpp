@@ -10,6 +10,7 @@
 #include "rocepacket.h"
 #include "ecn.h"
 #include <algorithm>
+#include <cmath>
 #include <limits>
 
 unordered_map<BaseQueue*,uint32_t> FatTreeSwitch::_port_flow_counts;
@@ -405,6 +406,12 @@ bool FatTreeSwitch::_nmrc_hybrid_enabled = false;
 bool FatTreeSwitch::_nmrc_fastcnp_enabled = true;
 FatTreeSwitch::NmrcReroutePolicy FatTreeSwitch::_nmrc_reroute_policy =
     FatTreeSwitch::NMRC_REROUTE_BETTER_GE3;
+FatTreeSwitch::NmrcNetworkDecisionMode
+    FatTreeSwitch::_nmrc_network_decision_mode =
+        FatTreeSwitch::NMRC_NETWORK_GRADED;
+double FatTreeSwitch::_nmrc_absolute_threshold = 0.50;
+double FatTreeSwitch::_nmrc_relative_delta = 0.25;
+const double FatTreeSwitch::NMRC_RELATIVE_EPSILON = 1e-12;
 uint64_t FatTreeSwitch::_nmrc_diag_route_checks = 0;
 uint64_t FatTreeSwitch::_nmrc_diag_reroutes = 0;
 uint64_t FatTreeSwitch::_nmrc_diag_threshold_blocked = 0;
@@ -412,6 +419,46 @@ uint64_t FatTreeSwitch::_nmrc_diag_fastcnp_generated = 0;
 uint64_t FatTreeSwitch::_nmrc_diag_fastcnp_route_missing = 0;
 uint64_t FatTreeSwitch::_nmrc_diag_better_count[33] = {0};
 uint64_t FatTreeSwitch::_nmrc_diag_level_transitions[4][4] = {{0}};
+uint64_t FatTreeSwitch::_nmrc_diag_binary_original_safe = 0;
+uint64_t FatTreeSwitch::_nmrc_diag_binary_original_congested = 0;
+uint64_t FatTreeSwitch::_nmrc_diag_binary_no_safe = 0;
+uint64_t FatTreeSwitch::_nmrc_diag_binary_route_missing = 0;
+uint64_t FatTreeSwitch::_nmrc_diag_binary_paired_actions = 0;
+double FatTreeSwitch::_nmrc_diag_binary_original_score_sum = 0.0;
+double FatTreeSwitch::_nmrc_diag_binary_original_score_max = 0.0;
+double FatTreeSwitch::_nmrc_diag_binary_selected_score_sum = 0.0;
+double FatTreeSwitch::_nmrc_diag_binary_selected_score_max = 0.0;
+uint64_t FatTreeSwitch::_nmrc_diag_binary_actual_egress[33] = {0};
+uint64_t FatTreeSwitch::_nmrc_diag_relative_checks = 0;
+uint64_t FatTreeSwitch::_nmrc_diag_relative_original_unknown = 0;
+uint64_t FatTreeSwitch::_nmrc_diag_relative_original_unavailable = 0;
+uint64_t FatTreeSwitch::_nmrc_diag_relative_original_below_absolute = 0;
+uint64_t FatTreeSwitch::_nmrc_diag_relative_no_safe_candidate = 0;
+uint64_t FatTreeSwitch::_nmrc_diag_relative_no_delta_candidate = 0;
+uint64_t FatTreeSwitch::_nmrc_diag_relative_reverse_path_blocked = 0;
+uint64_t FatTreeSwitch::_nmrc_diag_relative_paired_actions = 0;
+uint64_t FatTreeSwitch::_nmrc_diag_relative_reroutes = 0;
+uint64_t FatTreeSwitch::_nmrc_diag_relative_selected_gap_violations = 0;
+uint64_t FatTreeSwitch::_nmrc_diag_relative_decision_ce_set = 0;
+uint64_t FatTreeSwitch::_nmrc_diag_relative_decision_ce_cleared = 0;
+uint64_t FatTreeSwitch::_nmrc_diag_relative_reroute_key_count = 0;
+uint64_t FatTreeSwitch::_nmrc_diag_relative_reroute_key_sum = 0;
+uint64_t FatTreeSwitch::_nmrc_diag_relative_reroute_key_xor = 0;
+uint64_t FatTreeSwitch::_nmrc_diag_relative_generated_key_count = 0;
+uint64_t FatTreeSwitch::_nmrc_diag_relative_generated_key_sum = 0;
+uint64_t FatTreeSwitch::_nmrc_diag_relative_generated_key_xor = 0;
+uint64_t FatTreeSwitch::_nmrc_diag_relative_original_score_count = 0;
+double FatTreeSwitch::_nmrc_diag_relative_original_score_sum = 0.0;
+double FatTreeSwitch::_nmrc_diag_relative_original_score_max = 0.0;
+uint64_t FatTreeSwitch::_nmrc_diag_relative_selected_score_count = 0;
+double FatTreeSwitch::_nmrc_diag_relative_selected_score_sum = 0.0;
+double FatTreeSwitch::_nmrc_diag_relative_selected_score_max = 0.0;
+uint64_t FatTreeSwitch::_nmrc_diag_relative_candidate_count[33] = {0};
+uint64_t FatTreeSwitch::_nmrc_diag_relative_best_gap[21] = {0};
+uint64_t FatTreeSwitch::_nmrc_diag_relative_selected_gap[21] = {0};
+uint64_t FatTreeSwitch::_nmrc_diag_relative_original_score[21] = {0};
+uint64_t FatTreeSwitch::_nmrc_diag_relative_selected_score[21] = {0};
+uint64_t FatTreeSwitch::_nmrc_diag_relative_actual_egress[33] = {0};
 std::set<uint64_t> FatTreeSwitch::_nmrc_diag_observed_flow_evs;
 std::set<uint64_t> FatTreeSwitch::_nmrc_diag_observed_flow_paths;
 bool FatTreeSwitch::_netaware_enabled = false;
@@ -916,10 +963,53 @@ void FatTreeSwitch::reset_nmrc_hybrid_diag() {
     _nmrc_diag_threshold_blocked = 0;
     _nmrc_diag_fastcnp_generated = 0;
     _nmrc_diag_fastcnp_route_missing = 0;
+    _nmrc_diag_binary_original_safe = 0;
+    _nmrc_diag_binary_original_congested = 0;
+    _nmrc_diag_binary_no_safe = 0;
+    _nmrc_diag_binary_route_missing = 0;
+    _nmrc_diag_binary_paired_actions = 0;
+    _nmrc_diag_binary_original_score_sum = 0.0;
+    _nmrc_diag_binary_original_score_max = 0.0;
+    _nmrc_diag_binary_selected_score_sum = 0.0;
+    _nmrc_diag_binary_selected_score_max = 0.0;
+    _nmrc_diag_relative_checks = 0;
+    _nmrc_diag_relative_original_unknown = 0;
+    _nmrc_diag_relative_original_unavailable = 0;
+    _nmrc_diag_relative_original_below_absolute = 0;
+    _nmrc_diag_relative_no_safe_candidate = 0;
+    _nmrc_diag_relative_no_delta_candidate = 0;
+    _nmrc_diag_relative_reverse_path_blocked = 0;
+    _nmrc_diag_relative_paired_actions = 0;
+    _nmrc_diag_relative_reroutes = 0;
+    _nmrc_diag_relative_selected_gap_violations = 0;
+    _nmrc_diag_relative_decision_ce_set = 0;
+    _nmrc_diag_relative_decision_ce_cleared = 0;
+    _nmrc_diag_relative_reroute_key_count = 0;
+    _nmrc_diag_relative_reroute_key_sum = 0;
+    _nmrc_diag_relative_reroute_key_xor = 0;
+    _nmrc_diag_relative_generated_key_count = 0;
+    _nmrc_diag_relative_generated_key_sum = 0;
+    _nmrc_diag_relative_generated_key_xor = 0;
+    _nmrc_diag_relative_original_score_count = 0;
+    _nmrc_diag_relative_original_score_sum = 0.0;
+    _nmrc_diag_relative_original_score_max = 0.0;
+    _nmrc_diag_relative_selected_score_count = 0;
+    _nmrc_diag_relative_selected_score_sum = 0.0;
+    _nmrc_diag_relative_selected_score_max = 0.0;
     _nmrc_diag_observed_flow_evs.clear();
     _nmrc_diag_observed_flow_paths.clear();
-    for (uint32_t count = 0; count <= 32; count++)
+    for (uint32_t count = 0; count <= 32; count++) {
         _nmrc_diag_better_count[count] = 0;
+        _nmrc_diag_binary_actual_egress[count] = 0;
+        _nmrc_diag_relative_candidate_count[count] = 0;
+        _nmrc_diag_relative_actual_egress[count] = 0;
+    }
+    for (uint32_t bin = 0; bin <= 20; bin++) {
+        _nmrc_diag_relative_best_gap[bin] = 0;
+        _nmrc_diag_relative_selected_gap[bin] = 0;
+        _nmrc_diag_relative_original_score[bin] = 0;
+        _nmrc_diag_relative_selected_score[bin] = 0;
+    }
     for (uint32_t original = 0; original < 4; original++) {
         for (uint32_t selected = 0; selected < 4; selected++)
             _nmrc_diag_level_transitions[original][selected] = 0;
@@ -1219,7 +1309,17 @@ double FatTreeSwitch::sglb_compute_score(FibEntry* entry, uint32_t dst, uint32_t
 }
 
 double FatTreeSwitch::sglb_compute_nmrc_score(FibEntry* entry, uint32_t dst,
-                                              uint32_t depth) {
+                                              uint32_t depth,
+                                              bool* local_valid,
+                                              bool* downstream_valid,
+                                              simtime_picosec* downstream_last_update) {
+    if (local_valid)
+        *local_valid = false;
+    if (downstream_valid)
+        *downstream_valid = depth == 0;
+    if (downstream_last_update)
+        *downstream_last_update = 0;
+
     if (!sglb_entry_available(entry))
         return std::numeric_limits<double>::max();
 
@@ -1229,6 +1329,9 @@ double FatTreeSwitch::sglb_compute_nmrc_score(FibEntry* entry, uint32_t dst,
     if (!q)
         return std::numeric_limits<double>::max();
 
+    if (local_valid)
+        *local_valid = true;
+
     double local_fraction = sglb_queue_fraction(q);
     double local_pressure = sglb_nmrc_queue_pressure(local_fraction);
     double remote_pressure = 0.0;
@@ -1237,6 +1340,10 @@ double FatTreeSwitch::sglb_compute_nmrc_score(FibEntry* entry, uint32_t dst,
         if (remote) {
             _sglb_diag_remote_snapshot_used++;
             remote_pressure = remote->queue_pressure;
+            if (downstream_valid)
+                *downstream_valid = true;
+            if (downstream_last_update)
+                *downstream_last_update = remote->last_update;
         } else {
             _sglb_diag_remote_snapshot_missing++;
         }
@@ -1252,14 +1359,27 @@ FatTreeSwitch::sglb_quality_snapshot(FibEntry* entry, uint32_t dst, uint32_t dep
     if (cached.valid && _sglb_update_interval > 0 &&
         now >= cached.last_update &&
         now - cached.last_update < _sglb_update_interval) {
+        if (depth > 0 && cached.downstream_valid &&
+            _sglb_gcn_aging_interval > 0 &&
+            (now < cached.downstream_last_update ||
+             now - cached.downstream_last_update >
+                 _sglb_gcn_aging_interval)) {
+            cached.downstream_valid = false;
+        }
         return cached;
     }
 
+    cached.local_valid = false;
+    cached.downstream_valid = false;
+    cached.downstream_last_update = 0;
     if (_sglb_score_mode == SGLB_SCORE_LEGACY) {
         cached.score = sglb_compute_score(entry, dst, depth);
         cached.quality = sglb_quality(cached.score);
     } else {
-        cached.score = sglb_compute_nmrc_score(entry, dst, depth);
+        cached.score = sglb_compute_nmrc_score(
+            entry, dst, depth, &cached.local_valid,
+            &cached.downstream_valid,
+            &cached.downstream_last_update);
         cached.quality = sglb_nmrc_quantized_level(
             cached.score, _sglb_nmrc_levels);
     }
@@ -1321,6 +1441,126 @@ FatTreeSwitch::nmrc_select_better_path(
     return decision;
 }
 
+bool FatTreeSwitch::nmrc_binary_safe(double score, bool two_hop_valid) {
+    return two_hop_valid && std::isfinite(score) && score < 0.5;
+}
+
+FatTreeSwitch::NmrcBinaryClass
+FatTreeSwitch::nmrc_binary_classify(double score, bool two_hop_valid) {
+    if (!two_hop_valid || !std::isfinite(score))
+        return NMRC_BINARY_UNKNOWN;
+    return nmrc_binary_safe(score, two_hop_valid) ?
+        NMRC_BINARY_SAFE : NMRC_BINARY_CONGESTED;
+}
+
+FatTreeSwitch::NmrcRerouteDecision
+FatTreeSwitch::nmrc_select_binary_path(
+        uint32_t original_index,
+        const vector<double>& scores,
+        const vector<bool>& two_hop_valid,
+        const vector<bool>& available,
+        uint32_t selection_value) {
+    NmrcRerouteDecision decision;
+    if (original_index >= scores.size() ||
+        scores.size() != two_hop_valid.size() ||
+        scores.size() != available.size()) {
+        return decision;
+    }
+
+    if (nmrc_binary_classify(scores[original_index],
+                             two_hop_valid[original_index]) !=
+        NMRC_BINARY_CONGESTED) {
+        return decision;
+    }
+
+    decision.original_level = 1;
+    vector<uint32_t> candidates;
+    for (uint32_t i = 0; i < scores.size(); i++) {
+        if (i != original_index && available[i] &&
+            nmrc_binary_safe(scores[i], two_hop_valid[i])) {
+            candidates.push_back(i);
+        }
+    }
+
+    decision.better_count = candidates.size();
+    decision.candidate_count = candidates.size();
+    if (candidates.empty())
+        return decision;
+
+    decision.selected_index =
+        candidates[selection_value % candidates.size()];
+    decision.selected_level = 0;
+    decision.reroute = true;
+    return decision;
+}
+
+FatTreeSwitch::NmrcRelativeDecision
+FatTreeSwitch::nmrc_select_relative_delta_path(
+        uint32_t original_index,
+        const vector<double>& scores,
+        const vector<bool>& two_hop_valid,
+        const vector<bool>& available,
+        double absolute_threshold,
+        double delta,
+        uint32_t selection_value) {
+    NmrcRelativeDecision decision;
+    if (original_index >= scores.size() ||
+        scores.size() != two_hop_valid.size() ||
+        scores.size() != available.size() ||
+        !std::isfinite(absolute_threshold) ||
+        absolute_threshold <= 0.0 || absolute_threshold > 1.0 ||
+        !std::isfinite(delta) || delta <= 0.0 || delta > 1.0) {
+        return decision;
+    }
+    if (!available[original_index]) {
+        decision.reason = NMRC_RELATIVE_ORIGINAL_UNAVAILABLE;
+        return decision;
+    }
+    if (!two_hop_valid[original_index] ||
+        !std::isfinite(scores[original_index])) {
+        decision.reason = NMRC_RELATIVE_ORIGINAL_UNKNOWN;
+        return decision;
+    }
+
+    decision.original_score = scores[original_index];
+    if (decision.original_score <
+            absolute_threshold - NMRC_RELATIVE_EPSILON) {
+        decision.reason = NMRC_RELATIVE_ORIGINAL_BELOW_ABSOLUTE;
+        return decision;
+    }
+    vector<uint32_t> candidates;
+    uint32_t safe_candidates = 0;
+    for (uint32_t i = 0; i < scores.size(); i++) {
+        if (i == original_index || !available[i] ||
+            !two_hop_valid[i] || !std::isfinite(scores[i])) {
+            continue;
+        }
+        if (scores[i] >= absolute_threshold - NMRC_RELATIVE_EPSILON)
+            continue;
+        safe_candidates++;
+        double gap = scores[original_index] - scores[i];
+        decision.best_gap = std::max(decision.best_gap, gap);
+        if (gap >= delta - NMRC_RELATIVE_EPSILON)
+            candidates.push_back(i);
+    }
+    decision.candidate_count = candidates.size();
+    if (candidates.empty()) {
+        decision.reason = safe_candidates == 0
+            ? NMRC_RELATIVE_NO_SAFE_CANDIDATE
+            : NMRC_RELATIVE_NO_DELTA_CANDIDATE;
+        return decision;
+    }
+
+    decision.selected_index =
+        candidates[selection_value % candidates.size()];
+    decision.selected_score = scores[decision.selected_index];
+    decision.selected_gap =
+        scores[original_index] - decision.selected_score;
+    decision.reroute = true;
+    decision.reason = NMRC_RELATIVE_SELECTED;
+    return decision;
+}
+
 bool FatTreeSwitch::nmrc_is_source_leaf_data(
         Packet& pkt, vector<FibEntry*>* available_hops) const {
     if (!_nmrc_hybrid_enabled || _type != TOR || !_ft ||
@@ -1357,6 +1597,47 @@ bool FatTreeSwitch::nmrc_inject_fastcnp(
     return true;
 }
 
+uint64_t FatTreeSwitch::nmrc_relative_action_key(
+        uint32_t flow_id, RocePacket::seq_t psn, uint8_t attempt,
+        uint32_t original_ev, uint32_t original_egress,
+        uint32_t selected_egress) {
+    uint32_t psn_low = (uint32_t)psn;
+    uint32_t psn_high = (uint32_t)(psn >> 32);
+    uint32_t low = freeBSDHash(
+        flow_id, psn_low ^ psn_high,
+        original_ev ^ ((uint32_t)attempt << 24));
+    uint32_t high = freeBSDHash(
+        original_egress, selected_egress, low ^ psn_high);
+    return ((uint64_t)high << 32) | low;
+}
+
+bool FatTreeSwitch::nmrc_inject_relative_fastcnp(
+        RocePacket& data, uint32_t original_egress,
+        uint32_t selected_egress, double original_score,
+        double selected_score, uint64_t action_key) {
+    HostFibEntry* host = _fib->getHostRoute(data.src(), data.flow_id());
+    if (!host || !host->getEgressPort())
+        return false;
+
+    RoceFastCnp* fast_cnp = RoceFastCnp::newpkt(
+        data.flow(), *host->getEgressPort(), data.src(), data.mrc_ev(),
+        data.seqno(), original_egress, selected_egress,
+        UINT8_MAX, UINT8_MAX, _id, eventlist().now(), data.attempt_id(),
+        original_score, selected_score, original_score - selected_score,
+        action_key);
+    fast_cnp->sendOn();
+    return true;
+}
+
+uint32_t FatTreeSwitch::nmrc_relative_hist_bin(double value) {
+    if (!std::isfinite(value) || value <= 0.0)
+        return 0;
+    return std::min(
+        (uint32_t)std::floor(
+            (value + NMRC_RELATIVE_EPSILON) / 0.05),
+        20U);
+}
+
 uint32_t FatTreeSwitch::nmrc_maybe_reroute(
         Packet& pkt, vector<FibEntry*>* available_hops,
         uint32_t original_choice) {
@@ -1367,10 +1648,195 @@ uint32_t FatTreeSwitch::nmrc_maybe_reroute(
     _nmrc_diag_route_checks++;
     uint64_t flow_key = ((uint64_t)pkt.flow_id()) << 32;
     RocePacket& data = (RocePacket&)pkt;
-    data.set_nmrc_detour(false);
-    data.set_nmrc_actual_egress(original_choice);
+    if (_nmrc_network_decision_mode == NMRC_NETWORK_GRADED) {
+        data.set_nmrc_detour(false);
+        data.set_nmrc_actual_egress(original_choice);
+    }
     _nmrc_diag_observed_flow_evs.insert(flow_key | data.mrc_ev());
     _nmrc_diag_observed_flow_paths.insert(flow_key | original_choice);
+
+    if (_nmrc_network_decision_mode == NMRC_NETWORK_RELATIVE_DELTA) {
+        _nmrc_diag_relative_checks++;
+        const bool ce_before = (data.flags() & ECN_CE) != 0;
+        const auto finish_relative = [&data, ce_before](uint32_t choice) {
+            const bool ce_after = (data.flags() & ECN_CE) != 0;
+            if (!ce_before && ce_after)
+                FatTreeSwitch::_nmrc_diag_relative_decision_ce_set++;
+            if (ce_before && !ce_after)
+                FatTreeSwitch::_nmrc_diag_relative_decision_ce_cleared++;
+            return choice;
+        };
+
+        vector<double> scores(available_hops->size(),
+                              std::numeric_limits<double>::infinity());
+        vector<bool> two_hop_valid(available_hops->size(), false);
+        vector<bool> available(available_hops->size(), false);
+        for (uint32_t i = 0; i < available_hops->size(); i++) {
+            available[i] = sglb_entry_available((*available_hops)[i]);
+            const SglbQualitySnapshot& snapshot =
+                sglb_quality_snapshot((*available_hops)[i], pkt.dst(), 1);
+            scores[i] = snapshot.score;
+            two_hop_valid[i] = snapshot.two_hop_valid();
+        }
+
+        uint32_t selection_value = freeBSDHash(
+            pkt.flow_id(), data.mrc_ev(),
+            (uint32_t)data.seqno() ^ _hash_salt);
+        NmrcRelativeDecision decision = nmrc_select_relative_delta_path(
+            original_choice, scores, two_hop_valid, available,
+            _nmrc_absolute_threshold, _nmrc_relative_delta,
+            selection_value);
+        _nmrc_diag_relative_candidate_count[
+            std::min(decision.candidate_count, 32U)]++;
+
+        if (decision.reason == NMRC_RELATIVE_ORIGINAL_UNAVAILABLE) {
+            _nmrc_diag_relative_original_unavailable++;
+            return finish_relative(original_choice);
+        }
+        if (decision.reason == NMRC_RELATIVE_ORIGINAL_UNKNOWN) {
+            _nmrc_diag_relative_original_unknown++;
+            return finish_relative(original_choice);
+        }
+
+        if (std::isfinite(decision.original_score)) {
+            _nmrc_diag_relative_best_gap[
+                nmrc_relative_hist_bin(decision.best_gap)]++;
+        }
+
+        if (!decision.reroute) {
+            if (decision.reason ==
+                    NMRC_RELATIVE_ORIGINAL_BELOW_ABSOLUTE)
+                _nmrc_diag_relative_original_below_absolute++;
+            else if (decision.reason == NMRC_RELATIVE_NO_SAFE_CANDIDATE)
+                _nmrc_diag_relative_no_safe_candidate++;
+            else if (decision.reason == NMRC_RELATIVE_NO_DELTA_CANDIDATE)
+                _nmrc_diag_relative_no_delta_candidate++;
+            return finish_relative(original_choice);
+        }
+
+        if (decision.selected_gap <
+                _nmrc_relative_delta - NMRC_RELATIVE_EPSILON) {
+            _nmrc_diag_relative_selected_gap_violations++;
+            return finish_relative(original_choice);
+        }
+        if (!_nmrc_fastcnp_enabled)
+            return finish_relative(original_choice);
+
+        uint64_t action_key = nmrc_relative_action_key(
+            data.flow_id(), data.seqno(), data.attempt_id(), data.mrc_ev(),
+            original_choice, decision.selected_index);
+        if (!nmrc_inject_relative_fastcnp(
+                data, original_choice, decision.selected_index,
+                decision.original_score, decision.selected_score,
+                action_key)) {
+            _nmrc_diag_relative_reverse_path_blocked++;
+            _nmrc_diag_fastcnp_route_missing++;
+            return finish_relative(original_choice);
+        }
+
+        data.set_nmrc_detour(true);
+        data.set_nmrc_actual_egress(decision.selected_index);
+        _nmrc_diag_reroutes++;
+        _nmrc_diag_fastcnp_generated++;
+        _nmrc_diag_relative_paired_actions++;
+        _nmrc_diag_relative_reroutes++;
+        _nmrc_diag_relative_reroute_key_count++;
+        _nmrc_diag_relative_reroute_key_sum += action_key;
+        _nmrc_diag_relative_reroute_key_xor ^= action_key;
+        _nmrc_diag_relative_generated_key_count++;
+        _nmrc_diag_relative_generated_key_sum += action_key;
+        _nmrc_diag_relative_generated_key_xor ^= action_key;
+        _nmrc_diag_relative_original_score_count++;
+        _nmrc_diag_relative_original_score_sum += decision.original_score;
+        _nmrc_diag_relative_original_score_max = std::max(
+            _nmrc_diag_relative_original_score_max,
+            decision.original_score);
+        _nmrc_diag_relative_original_score[
+            nmrc_relative_hist_bin(decision.original_score)]++;
+        _nmrc_diag_relative_selected_score_count++;
+        _nmrc_diag_relative_selected_score_sum += decision.selected_score;
+        _nmrc_diag_relative_selected_score_max = std::max(
+            _nmrc_diag_relative_selected_score_max,
+            decision.selected_score);
+        _nmrc_diag_relative_selected_score[
+            nmrc_relative_hist_bin(decision.selected_score)]++;
+        _nmrc_diag_relative_selected_gap[
+            nmrc_relative_hist_bin(decision.selected_gap)]++;
+        _nmrc_diag_relative_actual_egress[
+            std::min(decision.selected_index, 32U)]++;
+        return finish_relative(decision.selected_index);
+    }
+
+    if (_nmrc_network_decision_mode == NMRC_NETWORK_BINARY_SCORE) {
+        vector<double> scores(available_hops->size(),
+                              std::numeric_limits<double>::infinity());
+        vector<bool> two_hop_valid(available_hops->size(), false);
+        vector<bool> available(available_hops->size(), false);
+        for (uint32_t i = 0; i < available_hops->size(); i++) {
+            available[i] = sglb_entry_available((*available_hops)[i]);
+            const SglbQualitySnapshot& snapshot =
+                sglb_quality_snapshot((*available_hops)[i], pkt.dst(), 1);
+            scores[i] = snapshot.score;
+            two_hop_valid[i] = snapshot.two_hop_valid();
+        }
+
+        NmrcBinaryClass original_class = nmrc_binary_classify(
+            scores[original_choice], two_hop_valid[original_choice]);
+        if (original_class == NMRC_BINARY_SAFE) {
+            _nmrc_diag_binary_original_safe++;
+            return original_choice;
+        }
+        if (original_class == NMRC_BINARY_UNKNOWN)
+            return original_choice;
+
+        _nmrc_diag_binary_original_congested++;
+        uint32_t selection_value = freeBSDHash(
+            pkt.flow_id(), data.mrc_ev(),
+            (uint32_t)data.seqno() ^ _hash_salt);
+        NmrcRerouteDecision decision = nmrc_select_binary_path(
+            original_choice, scores, two_hop_valid, available,
+            selection_value);
+        uint32_t better_bucket = std::min(decision.better_count, 32U);
+        _nmrc_diag_better_count[better_bucket]++;
+        if (!decision.reroute) {
+            _nmrc_diag_binary_no_safe++;
+            return original_choice;
+        }
+
+        if (!_nmrc_fastcnp_enabled)
+            return original_choice;
+
+        HostFibEntry* host = _fib->getHostRoute(data.src(), data.flow_id());
+        if (!host || !host->getEgressPort()) {
+            _nmrc_diag_binary_route_missing++;
+            _nmrc_diag_fastcnp_route_missing++;
+            return original_choice;
+        }
+
+        if (!nmrc_inject_fastcnp(data, original_choice,
+                                 decision.selected_index, 1, 0)) {
+            return original_choice;
+        }
+
+        data.set_nmrc_detour(true);
+        data.set_nmrc_actual_egress(decision.selected_index);
+        _nmrc_diag_reroutes++;
+        _nmrc_diag_binary_paired_actions++;
+        _nmrc_diag_level_transitions[1][0]++;
+        _nmrc_diag_binary_original_score_sum += scores[original_choice];
+        _nmrc_diag_binary_original_score_max = std::max(
+            _nmrc_diag_binary_original_score_max,
+            scores[original_choice]);
+        _nmrc_diag_binary_selected_score_sum +=
+            scores[decision.selected_index];
+        _nmrc_diag_binary_selected_score_max = std::max(
+            _nmrc_diag_binary_selected_score_max,
+            scores[decision.selected_index]);
+        _nmrc_diag_binary_actual_egress[
+            std::min(decision.selected_index, 32U)]++;
+        return decision.selected_index;
+    }
+
     vector<uint8_t> levels(available_hops->size(), STOR_LEVEL_AVOID);
     vector<bool> available(available_hops->size(), false);
     for (uint32_t i = 0; i < available_hops->size(); i++) {

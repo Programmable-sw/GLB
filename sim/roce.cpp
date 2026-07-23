@@ -3,6 +3,7 @@
 #include <cmath>
 #include <iostream>
 #include <algorithm>
+#include <cstring>
 #include "roce.h"
 #include "queue.h"
 #include <stdio.h>
@@ -86,6 +87,10 @@ RoceSrc::lb_mode_t RoceSrc::_lb_mode = RoceSrc::LB_ECMP;
 uint32_t RoceSrc::_path_entropy_size = 256;
 RoceSrc::nmrc_ev_mode_t RoceSrc::_nmrc_ev_mode = RoceSrc::NMRC_EV_ENCODED;
 uint32_t RoceSrc::_nmrc_ev_seed = 1;
+RoceSrc::nmrc_endpoint_policy_t RoceSrc::_nmrc_endpoint_policy =
+    RoceSrc::NMRC_ENDPOINT_RR_COOLDOWN;
+RoceSrc::nmrc_all_cooling_policy_t RoceSrc::_nmrc_all_cooling_policy =
+    RoceSrc::NMRC_ALL_COOLING_EARLIEST;
 uint32_t RoceSrc::_reps_buffer_size = 8;
 uint32_t RoceSrc::_reps_warmup_pkts = 0;
 uint32_t RoceSrc::_hosts_per_tor = 1;
@@ -194,6 +199,32 @@ uint32_t RoceSrc::nmrcEvSeed() {
     return _nmrc_ev_seed;
 }
 
+void RoceSrc::setNmrcEndpointPolicy(nmrc_endpoint_policy_t policy) {
+    _nmrc_endpoint_policy = policy;
+}
+
+RoceSrc::nmrc_endpoint_policy_t RoceSrc::nmrcEndpointPolicy() {
+    return _nmrc_endpoint_policy;
+}
+
+const char* RoceSrc::nmrcEndpointPolicyName() {
+    return _nmrc_endpoint_policy == NMRC_ENDPOINT_RANDOM_STATELESS ?
+        "random_stateless" : "rr_cooldown";
+}
+
+void RoceSrc::setNmrcAllCoolingPolicy(nmrc_all_cooling_policy_t policy) {
+    _nmrc_all_cooling_policy = policy;
+}
+
+RoceSrc::nmrc_all_cooling_policy_t RoceSrc::nmrcAllCoolingPolicy() {
+    return _nmrc_all_cooling_policy;
+}
+
+const char* RoceSrc::nmrcAllCoolingPolicyName() {
+    return _nmrc_all_cooling_policy == NMRC_ALL_COOLING_RR_RESET ?
+        "rr_reset" : "earliest";
+}
+
 void RoceSrc::resetPathSelectionDiag() {
     _diag_selected_total = 0;
     _diag_selected_ev_hist.clear();
@@ -288,6 +319,7 @@ RoceSrc::RoceSrc(RoceLogger* logger, TrafficLogger* pktlogger, EventList &eventl
     _nmrc_fastcnp_latency_sum = 0;
     _nmrc_fastcnp_unknown_qp = 0;
     _nmrc_fastcnp_unknown_ev = 0;
+    _nmrc_fastcnp_cc_mutations = 0;
     _nmrc_trim_non_detour = 0;
     _nmrc_trim_detour = 0;
     _nmrc_trim_nominal_cooldown_starts = 0;
@@ -319,6 +351,11 @@ RoceSrc::RoceSrc(RoceLogger* logger, TrafficLogger* pktlogger, EventList &eventl
     _nmrc_cooling_recoveries = 0;
     _nmrc_duplicate_notifications = 0;
     _nmrc_all_cooling_fallbacks = 0;
+    _nmrc_all_cooling_rr_episodes = 0;
+    _nmrc_all_cooling_rr_selections = 0;
+    _nmrc_all_cooling_rr_resets = 0;
+    _nmrc_fastcnp_policy_ignored = 0;
+    _nmrc_trim_policy_ignored = 0;
 
     _highest_sent = 0;
     _last_acked = 0;
@@ -354,6 +391,9 @@ RoceSrc::RoceSrc(RoceLogger* logger, TrafficLogger* pktlogger, EventList &eventl
     _nmrc_initialized_mode = _nmrc_ev_mode;
     _nmrc_evs_ready = false;
     _nmrc_select_ordinal = 0;
+    _nmrc_all_cooling_rr_active = false;
+    _nmrc_all_cooling_rr_episode_size = 0;
+    _nmrc_all_cooling_rr_progress = 0;
     _conweave_last_reroute = 0;
     _selector_cursor.fill(0);
     _selector_stride.fill(1);
@@ -1330,6 +1370,7 @@ void RoceSrc::processAck(const RoceAck& ack) {
     if (ackno >= _flow_size){
         cout << "Flow " << _name << " " << get_id() << " finished at " << timeAsUs(eventlist().now()) << " total bytes " << ackno << endl;
         _done = true;
+        reset_nmrc_all_cooling_rr_episode();
         _rtx_timeout = timeInf;
         if (_end_trigger) {
             _end_trigger->activate();
@@ -2064,6 +2105,12 @@ void RoceSrc::trace_netaware_decision(RocePacket::seq_t seqno, uint32_t path,
     }
 }
 
+void RoceSrc::reset_nmrc_all_cooling_rr_episode() {
+    _nmrc_all_cooling_rr_active = false;
+    _nmrc_all_cooling_rr_episode_size = 0;
+    _nmrc_all_cooling_rr_progress = 0;
+}
+
 void RoceSrc::reset_nmrc_evs() {
     _nmrc_evs.clear();
     _nmrc_cursor = 0;
@@ -2071,6 +2118,7 @@ void RoceSrc::reset_nmrc_evs() {
     _nmrc_initialized_mode = _nmrc_ev_mode;
     _nmrc_evs_ready = false;
     _nmrc_select_ordinal = 0;
+    reset_nmrc_all_cooling_rr_episode();
 }
 
 void RoceSrc::init_nmrc_evs(uint32_t path_space) {
@@ -2148,12 +2196,51 @@ uint32_t RoceSrc::nmrc_physical_path(uint32_t ev,
     return ev % path_space;
 }
 
+RoceSrc::NmrcChoice RoceSrc::choose_nmrc_all_cooling_rr() {
+    uint32_t index = _nmrc_cursor % _nmrc_all_cooling_rr_episode_size;
+    _nmrc_cursor = (index + 1) % _nmrc_all_cooling_rr_episode_size;
+    NmrcChoice choice(_nmrc_evs[index].ev,
+                      _nmrc_evs[index].physical_path);
+    _nmrc_select_ordinal++;
+    _nmrc_all_cooling_rr_progress++;
+    _nmrc_all_cooling_rr_selections++;
+    if (_nmrc_all_cooling_rr_progress ==
+            _nmrc_all_cooling_rr_episode_size) {
+        for (uint32_t i = 0; i < _nmrc_evs.size(); i++) {
+            _nmrc_evs[i].cooling = false;
+            _nmrc_evs[i].cool_until_select_count = 0;
+        }
+        _nmrc_all_cooling_rr_resets++;
+        reset_nmrc_all_cooling_rr_episode();
+    }
+    return choice;
+}
+
 RoceSrc::NmrcChoice RoceSrc::choose_nmrc_ev(uint32_t path_space) {
+    if (path_space == 0)
+        path_space = 1;
+    if (_nmrc_endpoint_policy == NMRC_ENDPOINT_RANDOM_STATELESS) {
+        uint32_t src = _srcaddr == UINT32_MAX ? _node_num : _srcaddr;
+        uint32_t dst = _dstaddr == UINT32_MAX ?
+            (_node_num ^ 0x5bd1e995) : _dstaddr;
+        uint32_t qp_key = selector_mix(src, dst, _flow.flow_id());
+        uint32_t ordinal_low = (uint32_t)_nmrc_select_ordinal;
+        uint32_t ordinal_high = (uint32_t)(_nmrc_select_ordinal >> 32);
+        uint32_t key = selector_mix(_nmrc_ev_seed, qp_key, ordinal_low);
+        uint32_t ev = selector_mix(
+            key, ordinal_high, 0x53544154) % path_space;
+        _nmrc_select_ordinal++;
+        return NmrcChoice(ev, ev);
+    }
+
     init_nmrc_evs(path_space);
     if (_nmrc_evs.empty())
         return NmrcChoice(UINT32_MAX, 0);
 
     uint32_t count = (uint32_t)_nmrc_evs.size();
+    if (_nmrc_all_cooling_rr_active)
+        return choose_nmrc_all_cooling_rr();
+
     for (uint32_t attempt = 0; attempt < count; attempt++) {
         uint32_t index = _nmrc_cursor % count;
         _nmrc_cursor = (index + 1) % count;
@@ -2170,6 +2257,15 @@ RoceSrc::NmrcChoice RoceSrc::choose_nmrc_ev(uint32_t path_space) {
         }
         _nmrc_select_ordinal++;
         return NmrcChoice(candidate.ev, candidate.physical_path);
+    }
+
+    if (_nmrc_all_cooling_policy == NMRC_ALL_COOLING_RR_RESET) {
+        _nmrc_all_cooling_fallbacks++;
+        _nmrc_all_cooling_rr_active = true;
+        _nmrc_all_cooling_rr_episode_size = count;
+        _nmrc_all_cooling_rr_progress = 0;
+        _nmrc_all_cooling_rr_episodes++;
+        return choose_nmrc_all_cooling_rr();
     }
 
     uint32_t earliest = 0;
@@ -2192,6 +2288,10 @@ bool RoceSrc::notify_nmrc_ev(uint32_t ev) {
     if (index == UINT32_MAX)
         return false;
     NmrcEv& entry = _nmrc_evs[index];
+    if (_nmrc_all_cooling_rr_active && entry.cooling) {
+        _nmrc_duplicate_notifications++;
+        return false;
+    }
     if (entry.cooling &&
         _nmrc_select_ordinal >= entry.cool_until_select_count) {
         entry.cooling = false;
@@ -2215,6 +2315,10 @@ void RoceSrc::process_nmrc_trim_feedback(const RoceNack& nack,
         return;
     if (!failure_accepted) {
         _nmrc_trim_duplicate_stale_ignored++;
+        return;
+    }
+    if (_nmrc_endpoint_policy == NMRC_ENDPOINT_RANDOM_STATELESS) {
+        _nmrc_trim_policy_ignored++;
         return;
     }
     if (!nack.nmrc_detour()) {
@@ -2280,6 +2384,11 @@ bool RoceSrc::nmrc_ev_cooling_for_test(uint32_t ev) const {
         _nmrc_select_ordinal < _nmrc_evs[index].cool_until_select_count;
 }
 
+bool RoceSrc::nmrc_ev_cooling_flag_for_test(uint32_t ev) const {
+    uint32_t index = nmrc_ev_index(ev);
+    return index != UINT32_MAX && _nmrc_evs[index].cooling;
+}
+
 uint64_t RoceSrc::nmrc_ev_cool_until_for_test(uint32_t ev) const {
     uint32_t index = nmrc_ev_index(ev);
     return index == UINT32_MAX ? 0 :
@@ -2292,6 +2401,14 @@ uint64_t RoceSrc::nmrc_selection_ordinal_for_test() const {
 
 uint64_t RoceSrc::nmrc_all_cooling_fallbacks_for_test() const {
     return _nmrc_all_cooling_fallbacks;
+}
+
+bool RoceSrc::nmrc_all_cooling_rr_active_for_test() const {
+    return _nmrc_all_cooling_rr_active;
+}
+
+uint32_t RoceSrc::nmrc_all_cooling_rr_progress_for_test() const {
+    return _nmrc_all_cooling_rr_progress;
 }
 
 uint32_t RoceSrc::nmrc_unique_physical_paths_for_diag() const {
@@ -3119,6 +3236,124 @@ void RoceSrc::update_netaware(const RoceAck& ack) {
     apply_netaware_snapshot(ack.netaware_feedback(), path_space);
 }
 
+static uint64_t fast_cnp_isolation_double_bits(double value) {
+    uint64_t bits = 0;
+    static_assert(sizeof(bits) == sizeof(value), "double must be 64 bits");
+    std::memcpy(&bits, &value, sizeof(bits));
+    return bits;
+}
+
+static uint64_t fast_cnp_isolation_mix(uint64_t hash, uint64_t value) {
+    hash ^= value;
+    hash *= 1099511628211ULL;
+    return hash;
+}
+
+std::array<uint64_t, 64> RoceSrc::fast_cnp_isolation_snapshot() const {
+    std::array<uint64_t, 64> snapshot = {{0}};
+    size_t i = 0;
+#define FASTCNP_SNAPSHOT(value)                    \
+    do {                                           \
+        assert(i < snapshot.size());               \
+        snapshot[i++] = (uint64_t)(value);         \
+    } while (0)
+    FASTCNP_SNAPSHOT(_bitrate);
+    FASTCNP_SNAPSHOT(_highest_sent);
+    FASTCNP_SNAPSHOT(_packets_sent);
+    FASTCNP_SNAPSHOT(_last_acked);
+    FASTCNP_SNAPSHOT(_new_packets_sent);
+    FASTCNP_SNAPSHOT(_rtx_packets_sent);
+    FASTCNP_SNAPSHOT(_acks_received);
+    FASTCNP_SNAPSHOT(_nacks_received);
+    FASTCNP_SNAPSHOT(_ooo_nacks_received);
+    FASTCNP_SNAPSHOT(_trim_nacks_received);
+    FASTCNP_SNAPSHOT(_loss_nacks_received);
+    FASTCNP_SNAPSHOT(_ecn_echo_acks_received);
+    FASTCNP_SNAPSHOT(_duplicate_acks_received);
+    FASTCNP_SNAPSHOT(_duplicate_ack_inflate_suppressed);
+    FASTCNP_SNAPSHOT(_bounded_inflight_pkts);
+    FASTCNP_SNAPSHOT(_bounded_unique_acks);
+    FASTCNP_SNAPSHOT(_bounded_recovery_inflight_bytes);
+    FASTCNP_SNAPSHOT(_bounded_recovery_inflight_max_bytes);
+    FASTCNP_SNAPSHOT(_bounded_stale_attempt_nacks);
+    FASTCNP_SNAPSHOT(_bounded_duplicate_failure_nacks);
+    FASTCNP_SNAPSHOT(_bounded_duplicate_confirmations_suppressed);
+    FASTCNP_SNAPSHOT(_bounded_acked_revival_rejected);
+    FASTCNP_SNAPSHOT(_bounded_attempt_wraps);
+    FASTCNP_SNAPSHOT(_bounded_exact_trim_recoveries);
+    FASTCNP_SNAPSHOT(_bounded_sack_loss_recoveries);
+    FASTCNP_SNAPSHOT(_feedback_acks_received);
+    FASTCNP_SNAPSHOT(_feedback_nacks_received);
+    FASTCNP_SNAPSHOT(_feedback_zero_bits_received);
+    FASTCNP_SNAPSHOT(_acked_packets);
+    FASTCNP_SNAPSHOT(_pathid);
+    FASTCNP_SNAPSHOT(_state_send);
+    FASTCNP_SNAPSHOT(_rtt);
+    FASTCNP_SNAPSHOT(_rto);
+    FASTCNP_SNAPSHOT(_mdev);
+    FASTCNP_SNAPSHOT(_base_rtt);
+    FASTCNP_SNAPSHOT(_packet_spacing);
+    FASTCNP_SNAPSHOT(_time_last_sent);
+    FASTCNP_SNAPSHOT(_send_event_time);
+    FASTCNP_SNAPSHOT(_rtx_timeout);
+    FASTCNP_SNAPSHOT(_send_event_pending);
+    FASTCNP_SNAPSHOT(fast_cnp_isolation_double_bits(_cc_cwnd_pkts));
+    FASTCNP_SNAPSHOT(fast_cnp_isolation_double_bits(_cc_inflate_pkts));
+    FASTCNP_SNAPSHOT(fast_cnp_isolation_double_bits(_dcqcn_alpha));
+    FASTCNP_SNAPSHOT(fast_cnp_isolation_double_bits(_dcqcn_current_rate));
+    FASTCNP_SNAPSHOT(fast_cnp_isolation_double_bits(_dcqcn_target_rate));
+    FASTCNP_SNAPSHOT(_dcqcn_bytes_since_increase);
+    FASTCNP_SNAPSHOT(_dcqcn_recovery_count);
+    FASTCNP_SNAPSHOT(_dcqcn_seen_cnp);
+    FASTCNP_SNAPSHOT(_dcqcn_marked_since_alpha);
+    FASTCNP_SNAPSHOT(_dcqcn_last_cnp);
+    FASTCNP_SNAPSHOT(_dcqcn_next_alpha_update);
+    FASTCNP_SNAPSHOT(_dcqcn_next_rate_increase);
+
+    uint64_t rtx_hash = 1469598103934665603ULL;
+    const std::set<RocePacket::seq_t>& rtx_contents = _rtx_queue.contents();
+    for (std::set<RocePacket::seq_t>::const_iterator it = rtx_contents.begin();
+         it != rtx_contents.end(); ++it) {
+        rtx_hash = fast_cnp_isolation_mix(rtx_hash, *it);
+    }
+    FASTCNP_SNAPSHOT(rtx_contents.size());
+    FASTCNP_SNAPSHOT(rtx_hash);
+
+    uint64_t bounded_hash = 1469598103934665603ULL;
+    for (std::map<RocePacket::seq_t, BoundedPacketState>::const_iterator it =
+             _bounded_packets.begin(); it != _bounded_packets.end(); ++it) {
+        bounded_hash = fast_cnp_isolation_mix(bounded_hash, it->first);
+        bounded_hash = fast_cnp_isolation_mix(bounded_hash, it->second.state);
+        bounded_hash = fast_cnp_isolation_mix(
+            bounded_hash, it->second.attempt_id);
+        bounded_hash = fast_cnp_isolation_mix(
+            bounded_hash, it->second.counted_inflight);
+        bounded_hash = fast_cnp_isolation_mix(
+            bounded_hash, it->second.uses_recovery_reserve);
+    }
+    FASTCNP_SNAPSHOT(_bounded_packets.size());
+    FASTCNP_SNAPSHOT(bounded_hash);
+
+    uint64_t mrc_seq_hash = 1469598103934665603ULL;
+    for (std::map<RocePacket::seq_t, uint32_t>::const_iterator it =
+             _mrc_seq_ev.begin(); it != _mrc_seq_ev.end(); ++it) {
+        mrc_seq_hash = fast_cnp_isolation_mix(mrc_seq_hash, it->first);
+        mrc_seq_hash = fast_cnp_isolation_mix(mrc_seq_hash, it->second);
+    }
+    FASTCNP_SNAPSHOT(_mrc_seq_ev.size());
+    FASTCNP_SNAPSHOT(mrc_seq_hash);
+    FASTCNP_SNAPSHOT(_sack_rxt_psn);
+    FASTCNP_SNAPSHOT(_sack_rxt_psn_updated);
+    FASTCNP_SNAPSHOT(_sack_rxt_psn_valid);
+#undef FASTCNP_SNAPSHOT
+    return snapshot;
+}
+
+std::array<uint64_t, 64>
+RoceSrc::fast_cnp_isolation_snapshot_for_test() const {
+    return fast_cnp_isolation_snapshot();
+}
+
 void RoceSrc::processFastCnp(const RoceFastCnp& fast_cnp) {
     _nmrc_fastcnp_arrived++;
     _nmrc_fastcnp_bytes += fast_cnp.size();
@@ -3126,22 +3361,39 @@ void RoceSrc::processFastCnp(const RoceFastCnp& fast_cnp) {
         _nmrc_fastcnp_latency_sum +=
             eventlist().now() - fast_cnp.trigger_time();
 
+    const std::array<uint64_t, 64> isolation_before =
+        fast_cnp_isolation_snapshot();
+    const auto record_cc_mutation = [this, &isolation_before]() {
+        if (fast_cnp_isolation_snapshot() != isolation_before)
+            _nmrc_fastcnp_cc_mutations++;
+    };
+
     if (_done) {
         _nmrc_fastcnp_after_done++;
+        record_cc_mutation();
         return;
     }
 
     if (_lb_mode != LB_NMRC || &fast_cnp.flow() != &_flow ||
         fast_cnp.source_host() != _srcaddr) {
         _nmrc_fastcnp_unknown_qp++;
+        record_cc_mutation();
+        return;
+    }
+
+    if (_nmrc_endpoint_policy == NMRC_ENDPOINT_RANDOM_STATELESS) {
+        _nmrc_fastcnp_policy_ignored++;
+        record_cc_mutation();
         return;
     }
 
     if (nmrc_ev_index(fast_cnp.ev()) == UINT32_MAX) {
         _nmrc_fastcnp_unknown_ev++;
+        record_cc_mutation();
         return;
     }
     notify_nmrc_ev(fast_cnp.ev());
+    record_cc_mutation();
 }
 
 void RoceSrc::processPause(const EthPausePacket& p) {
@@ -3475,6 +3727,14 @@ void RoceSrc::doNextEvent() {
 //  ROCE SINK
 ////////////////////////////////////////////////////////////////
 
+uint64_t RoceSrc::ecnNominalCeForDiag() const {
+    return _sink ? _sink->ecnNominalCe() : 0;
+}
+
+uint64_t RoceSrc::ecnDetourCeForDiag() const {
+    return _sink ? _sink->ecnDetourCe() : 0;
+}
+
 /* Only use this constructor when there is only one for to this receiver */
 RoceSink::RoceSink()
     : DataReceiver("roce_sink"), _cumulative_ack(0) , _total_received(0),
@@ -3489,6 +3749,8 @@ RoceSink::RoceSink()
     //    _log_me = true;
     _total_received = 0;
     _rx_rcvd_bytes = 0;
+    _ecn_nominal_ce = 0;
+    _ecn_detour_ce = 0;
     _ooo_first_time = 0;
     _nack_silent_until = 0;
     _ooo_nack_event_pending = false;
@@ -3518,6 +3780,8 @@ void RoceSink::connect(RoceSrc& src, Route* route)
     _ooo_packets.clear();
     _highest_seqno = 0;
     _rx_rcvd_bytes = 0;
+    _ecn_nominal_ce = 0;
+    _ecn_detour_ce = 0;
     _ooo_first_time = 0;
     _nack_silent_until = 0;
     cancel_ooo_nack_timer();
@@ -3645,6 +3909,13 @@ void RoceSink::receivePacket(Packet& pkt) {
         pkt.flow().logTraffic(pkt,*this,TrafficLogger::PKT_RCVDESTROY);
         pkt.free();
         return;
+    }
+
+    if (pkt.flags() & ECN_CE) {
+        if (p->nmrc_detour())
+            _ecn_detour_ce++;
+        else
+            _ecn_nominal_ce++;
     }
 
     int size = p->size()-RocePacket::ACKSIZE; 

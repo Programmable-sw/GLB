@@ -8,6 +8,7 @@
 #include <set>
 #include <unordered_map>
 #include <vector>
+#include <limits>
 
 class FatTreeTopology;
 class SglbGcnTimer;
@@ -123,6 +124,28 @@ public:
         NMRC_REROUTE_BETTER_GE3 = 1
     };
 
+    enum NmrcNetworkDecisionMode {
+        NMRC_NETWORK_GRADED = 0,
+        NMRC_NETWORK_BINARY_SCORE = 1,
+        NMRC_NETWORK_RELATIVE_DELTA = 2
+    };
+
+    enum NmrcRelativeDecisionReason {
+        NMRC_RELATIVE_SELECTED = 0,
+        NMRC_RELATIVE_INVALID_INPUT,
+        NMRC_RELATIVE_ORIGINAL_UNKNOWN,
+        NMRC_RELATIVE_ORIGINAL_UNAVAILABLE,
+        NMRC_RELATIVE_ORIGINAL_BELOW_ABSOLUTE,
+        NMRC_RELATIVE_NO_SAFE_CANDIDATE,
+        NMRC_RELATIVE_NO_DELTA_CANDIDATE
+    };
+
+    enum NmrcBinaryClass {
+        NMRC_BINARY_UNKNOWN = 0,
+        NMRC_BINARY_SAFE = 1,
+        NMRC_BINARY_CONGESTED = 2
+    };
+
     struct NmrcRerouteDecision {
         bool reroute;
         uint32_t selected_index;
@@ -137,6 +160,24 @@ public:
               selected_level(STOR_LEVEL_GOOD) {}
     };
 
+    struct NmrcRelativeDecision {
+        bool reroute;
+        uint32_t selected_index;
+        uint32_t candidate_count;
+        double original_score;
+        double selected_score;
+        double best_gap;
+        double selected_gap;
+        NmrcRelativeDecisionReason reason;
+
+        NmrcRelativeDecision()
+            : reroute(false), selected_index(UINT32_MAX), candidate_count(0),
+              original_score(std::numeric_limits<double>::quiet_NaN()),
+              selected_score(std::numeric_limits<double>::quiet_NaN()),
+              best_gap(0.0), selected_gap(0.0),
+              reason(NMRC_RELATIVE_INVALID_INPUT) {}
+    };
+
     static NmrcRerouteDecision nmrc_select_better_path(
         uint32_t original_index,
         const vector<uint8_t>& levels,
@@ -144,6 +185,29 @@ public:
         NmrcReroutePolicy policy,
         uint32_t min_choices,
         uint32_t selection_value);
+
+    static bool nmrc_binary_safe(double score, bool two_hop_valid);
+    static NmrcBinaryClass nmrc_binary_classify(double score,
+                                                 bool two_hop_valid);
+    static NmrcRerouteDecision nmrc_select_binary_path(
+        uint32_t original_index,
+        const vector<double>& scores,
+        const vector<bool>& two_hop_valid,
+        const vector<bool>& available,
+        uint32_t selection_value);
+    static NmrcRelativeDecision nmrc_select_relative_delta_path(
+        uint32_t original_index,
+        const vector<double>& scores,
+        const vector<bool>& two_hop_valid,
+        const vector<bool>& available,
+        double absolute_threshold,
+        double delta,
+        uint32_t selection_value);
+    static uint64_t nmrc_relative_action_key(
+        uint32_t flow_id, RocePacket::seq_t psn, uint8_t attempt,
+        uint32_t original_ev, uint32_t original_egress,
+        uint32_t selected_egress);
+    static uint32_t nmrc_relative_hist_bin(double value);
 
     struct SglbPathState {
         double score;
@@ -168,10 +232,19 @@ public:
         double score;
         uint8_t quality;
         simtime_picosec last_update;
+        simtime_picosec downstream_last_update;
         bool valid;
+        bool local_valid;
+        bool downstream_valid;
 
         SglbQualitySnapshot()
-            : score(0.0), quality(0), last_update(0), valid(false) {}
+            : score(0.0), quality(0), last_update(0),
+              downstream_last_update(0), valid(false),
+              local_valid(false), downstream_valid(false) {}
+
+        bool two_hop_valid() const {
+            return local_valid && downstream_valid;
+        }
     };
 
     enum StorSignal {
@@ -478,6 +551,10 @@ public:
     static bool _nmrc_hybrid_enabled;
     static bool _nmrc_fastcnp_enabled;
     static NmrcReroutePolicy _nmrc_reroute_policy;
+    static NmrcNetworkDecisionMode _nmrc_network_decision_mode;
+    static double _nmrc_absolute_threshold;
+    static double _nmrc_relative_delta;
+    static const double NMRC_RELATIVE_EPSILON;
     static uint64_t _nmrc_diag_route_checks;
     static uint64_t _nmrc_diag_reroutes;
     static uint64_t _nmrc_diag_threshold_blocked;
@@ -485,6 +562,46 @@ public:
     static uint64_t _nmrc_diag_fastcnp_route_missing;
     static uint64_t _nmrc_diag_better_count[33];
     static uint64_t _nmrc_diag_level_transitions[4][4];
+    static uint64_t _nmrc_diag_binary_original_safe;
+    static uint64_t _nmrc_diag_binary_original_congested;
+    static uint64_t _nmrc_diag_binary_no_safe;
+    static uint64_t _nmrc_diag_binary_route_missing;
+    static uint64_t _nmrc_diag_binary_paired_actions;
+    static double _nmrc_diag_binary_original_score_sum;
+    static double _nmrc_diag_binary_original_score_max;
+    static double _nmrc_diag_binary_selected_score_sum;
+    static double _nmrc_diag_binary_selected_score_max;
+    static uint64_t _nmrc_diag_binary_actual_egress[33];
+    static uint64_t _nmrc_diag_relative_checks;
+    static uint64_t _nmrc_diag_relative_original_unknown;
+    static uint64_t _nmrc_diag_relative_original_unavailable;
+    static uint64_t _nmrc_diag_relative_original_below_absolute;
+    static uint64_t _nmrc_diag_relative_no_safe_candidate;
+    static uint64_t _nmrc_diag_relative_no_delta_candidate;
+    static uint64_t _nmrc_diag_relative_reverse_path_blocked;
+    static uint64_t _nmrc_diag_relative_paired_actions;
+    static uint64_t _nmrc_diag_relative_reroutes;
+    static uint64_t _nmrc_diag_relative_selected_gap_violations;
+    static uint64_t _nmrc_diag_relative_decision_ce_set;
+    static uint64_t _nmrc_diag_relative_decision_ce_cleared;
+    static uint64_t _nmrc_diag_relative_reroute_key_count;
+    static uint64_t _nmrc_diag_relative_reroute_key_sum;
+    static uint64_t _nmrc_diag_relative_reroute_key_xor;
+    static uint64_t _nmrc_diag_relative_generated_key_count;
+    static uint64_t _nmrc_diag_relative_generated_key_sum;
+    static uint64_t _nmrc_diag_relative_generated_key_xor;
+    static uint64_t _nmrc_diag_relative_original_score_count;
+    static double _nmrc_diag_relative_original_score_sum;
+    static double _nmrc_diag_relative_original_score_max;
+    static uint64_t _nmrc_diag_relative_selected_score_count;
+    static double _nmrc_diag_relative_selected_score_sum;
+    static double _nmrc_diag_relative_selected_score_max;
+    static uint64_t _nmrc_diag_relative_candidate_count[33];
+    static uint64_t _nmrc_diag_relative_best_gap[21];
+    static uint64_t _nmrc_diag_relative_selected_gap[21];
+    static uint64_t _nmrc_diag_relative_original_score[21];
+    static uint64_t _nmrc_diag_relative_selected_score[21];
+    static uint64_t _nmrc_diag_relative_actual_egress[33];
     static std::set<uint64_t> _nmrc_diag_observed_flow_evs;
     static std::set<uint64_t> _nmrc_diag_observed_flow_paths;
     static void reset_nmrc_hybrid_diag();
@@ -638,7 +755,10 @@ private:
     bool sglb_entry_available(FibEntry* entry) const;
     double sglb_compute_score(FibEntry* entry, uint32_t dst, uint32_t depth);
     double sglb_compute_nmrc_score(FibEntry* entry, uint32_t dst,
-                                       uint32_t depth);
+                                   uint32_t depth,
+                                   bool* local_valid = NULL,
+                                   bool* downstream_valid = NULL,
+                                   simtime_picosec* downstream_last_update = NULL);
     const SglbQualitySnapshot& sglb_quality_snapshot(FibEntry* entry, uint32_t dst, uint32_t depth);
     uint8_t sglb_quality(double score);
     uint32_t pathid_ecmp_choice(Packet& pkt, uint32_t hop_count, packet_direction direction);
@@ -652,6 +772,10 @@ private:
                              uint32_t selected_egress,
                              uint8_t original_level,
                              uint8_t selected_level);
+    bool nmrc_inject_relative_fastcnp(
+        RocePacket& data, uint32_t original_egress,
+        uint32_t selected_egress, double original_score,
+        double selected_score, uint64_t action_key);
     void maybe_update_netaware_feedback(Packet& pkt);
     void maybe_update_stor_feedback(Packet& pkt);
     BaseQueue* netaware_local_queue_for_ev(uint32_t dst, uint32_t ev);

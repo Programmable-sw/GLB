@@ -28,7 +28,7 @@ def main():
 
     require(
         main_roce,
-        "adaptive-routing|sglb|drill|reps|avail|grade|mrc|netaware|n-mrc",
+        "adaptive-routing|sglb|drill|reps|avail|grade|mrc|netaware|n-mrc|n-mrc-allcool-rr-reset|n-mrc1|n-mrc2|n-mrc4",
         "load-balancing usage",
     )
     require(main_roce, 'argv[i+1], "netaware"', "NetAware parser")
@@ -37,6 +37,8 @@ def main():
     require(main_roce, 'argv[i+1], "n-mrc"', "hybrid n-MRC parser")
     require(main_roce, 'roce_lb_mode = RoceSrc::LB_NMRC;', "hybrid n-MRC mode")
     require(main_roce, 'lb_scheme_name = "n-mrc";', "hybrid n-MRC runtime name")
+    for preset in ("n-mrc-allcool-rr-reset", "n-mrc1", "n-mrc2", "n-mrc4"):
+        require(main_roce, f'argv[i+1], "{preset}"', f"{preset} parser")
 
     require(roce_h, "LB_NETAWARE", "separate NetAware endpoint mode")
     require(roce_h, "LB_NMRC", "separate hybrid n-MRC endpoint mode")
@@ -60,6 +62,23 @@ def main():
         "hybrid reroute CLI",
     )
     require(main_roce, "-nmrc_fastcnp on|off", "hybrid FastCNP CLI")
+    require(
+        main_roce,
+        "-nmrc_endpoint_policy rr_cooldown|random_stateless",
+        "hybrid endpoint-policy CLI",
+    )
+    require(
+        main_roce,
+        "-nmrc_all_cooling_policy earliest|rr_reset",
+        "hybrid all-cooling-policy CLI",
+    )
+    require(
+        main_roce,
+        "-nmrc_network_decision graded|binary_score",
+        "hybrid network-decision CLI",
+    )
+    require(main_roce, "-nmrc_binary_threshold 0.5", "binary threshold CLI")
+    require(main_roce, "-nmrc_relative_delta VALUE", "relative delta CLI")
     require(main_roce, "trim_cooldown=actual_path", "default actual-path TRIM policy")
     reject(main_roce, "-nmrc_trim_cooldown", "removed TRIM policy CLI")
     reject(main_roce, "nominal_only", "removed nominal-only policy")
@@ -76,6 +95,11 @@ def main():
         "cooling_recoveries=",
         "duplicate_notifications=",
         "all_cooling_fallbacks=",
+        "all_cooling_rr_episodes=",
+        "all_cooling_rr_selections=",
+        "all_cooling_rr_resets=",
+        "fastcnp_policy_ignored=",
+        "trim_policy_ignored=",
         "trim_non_detour=",
         "trim_detour=",
         "trim_nominal_cooldown_starts=",
@@ -83,8 +107,46 @@ def main():
         "trim_duplicate_stale_ignored=",
         "trim_actual_unresolved=",
         "observed_first_hop_alias_ratio=",
+        "binary_original_safe=",
+        "binary_original_congested=",
+        "binary_no_safe=",
+        "binary_route_missing=",
+        "binary_paired_actions=",
+        "binary_original_score_count=",
+        "binary_original_score_sum=",
+        "binary_original_score_max=",
+        "binary_selected_score_count=",
+        "binary_selected_score_sum=",
+        "binary_selected_score_max=",
+        "binary_actual_egress_hist=",
     ):
         require(main_roce, field, "hybrid concise diagnostics")
+
+    for field in (
+        "preset=",
+        "endpoint_policy=",
+        "all_cooling_policy=",
+        "network_decision=",
+        "binary_threshold=",
+        "relative_delta=",
+    ):
+        require(main_roce, field, "hybrid resolved policy fields")
+
+    require(
+        main_roce,
+        "RoceSrc::setNmrcEndpointPolicy",
+        "resolved endpoint-policy wiring",
+    )
+    require(
+        main_roce,
+        "RoceSrc::setNmrcAllCoolingPolicy",
+        "resolved all-cooling-policy wiring",
+    )
+    require(
+        main_roce,
+        "FatTreeSwitch::_nmrc_network_decision_mode",
+        "resolved network-decision wiring",
+    )
 
     require(
         main_roce,

@@ -48,6 +48,16 @@ public:
         RoceFastCnp& fast = (RoceFastCnp&)pkt;
         evs.push_back(fast.ev());
         latencies.push_back(EventList::now() - fast.trigger_time());
+        original_egresses.push_back(fast.original_egress());
+        selected_egresses.push_back(fast.selected_egress());
+        original_levels.push_back(fast.original_level());
+        selected_levels.push_back(fast.selected_level());
+        psns.push_back(fast.psn());
+        attempts.push_back(fast.attempt_id());
+        original_scores.push_back(fast.original_score());
+        selected_scores.push_back(fast.selected_score());
+        selected_gaps.push_back(fast.selected_gap());
+        action_keys.push_back(fast.action_key());
         pkt.free();
     }
 
@@ -56,6 +66,16 @@ public:
     string _name;
     vector<uint32_t> evs;
     vector<simtime_picosec> latencies;
+    vector<uint32_t> original_egresses;
+    vector<uint32_t> selected_egresses;
+    vector<uint8_t> original_levels;
+    vector<uint8_t> selected_levels;
+    vector<RocePacket::seq_t> psns;
+    vector<uint8_t> attempts;
+    vector<double> original_scores;
+    vector<double> selected_scores;
+    vector<double> selected_gaps;
+    vector<uint64_t> action_keys;
 };
 
 class AckCapture : public PacketSink {
@@ -130,6 +150,119 @@ static void expect_near(double actual, double expected, double tolerance,
     }
 }
 
+static void test_nmrc_relative_delta_selector() {
+    std::vector<double> scores{0.70, 0.40, 0.20, 0.60};
+    std::vector<bool> valid(4, true);
+    std::vector<bool> available(4, true);
+
+    FatTreeSwitch::NmrcRelativeDecision d =
+        FatTreeSwitch::nmrc_select_relative_delta_path(
+            0, scores, valid, available, 0.50, 0.30, 1);
+    expect(d.reroute && d.candidate_count == 2,
+           "delta selector must admit every path at least Delta better");
+    expect((d.selected_index == 1 || d.selected_index == 2) &&
+               d.selected_index != 0,
+           "delta selector must hash inside the eligible set");
+    expect(d.original_score == 0.70 && d.selected_gap >= 0.30 - 1e-12,
+           "delta selector must expose the committed score gap");
+
+    scores[1] = 0.4000000000005;
+    d = FatTreeSwitch::nmrc_select_relative_delta_path(
+        0, scores, valid, available, 0.50, 0.30, 0);
+    expect(d.reroute,
+           "the documented epsilon must admit a representational boundary");
+
+    valid[0] = false;
+    d = FatTreeSwitch::nmrc_select_relative_delta_path(
+        0, scores, valid, available, 0.50, 0.30, 0);
+    expect(!d.reroute &&
+               d.reason == FatTreeSwitch::NMRC_RELATIVE_ORIGINAL_UNKNOWN,
+           "an unknown original must not trigger a relative action");
+
+    valid[0] = true;
+    available[1] = false;
+    available[2] = false;
+    scores[3] = 0.45;
+    d = FatTreeSwitch::nmrc_select_relative_delta_path(
+        0, scores, valid, available, 0.50, 0.30, 0);
+    expect(!d.reroute &&
+               d.reason == FatTreeSwitch::NMRC_RELATIVE_NO_DELTA_CANDIDATE,
+           "unavailable and insufficient-gap paths must not qualify");
+
+    scores = {0.95, 0.60};
+    valid.assign(2, true);
+    available.assign(2, true);
+    d = FatTreeSwitch::nmrc_select_relative_delta_path(
+        0, scores, valid, available, 0.50, 0.30, 0);
+    expect(!d.reroute &&
+               d.reason == FatTreeSwitch::NMRC_RELATIVE_NO_SAFE_CANDIDATE,
+           "absolute gate must reject a replacement that is also congested");
+
+    scores = {0.49, 0.10};
+    d = FatTreeSwitch::nmrc_select_relative_delta_path(
+        0, scores, valid, available, 0.50, 0.30, 0);
+    expect(!d.reroute &&
+               d.reason ==
+                   FatTreeSwitch::NMRC_RELATIVE_ORIGINAL_BELOW_ABSOLUTE,
+           "absolute gate must leave a non-congested original path alone");
+
+    scores = {0.70, 0.45};
+    d = FatTreeSwitch::nmrc_select_relative_delta_path(
+        0, scores, valid, available, 0.50, 0.30, 0);
+    expect(!d.reroute &&
+               d.reason == FatTreeSwitch::NMRC_RELATIVE_NO_DELTA_CANDIDATE,
+           "safe replacements must still satisfy the relative delta");
+
+    d = FatTreeSwitch::nmrc_select_relative_delta_path(
+        0, scores, valid, available,
+        std::numeric_limits<double>::quiet_NaN(), 0.30, 0);
+    expect(!d.reroute &&
+               d.reason == FatTreeSwitch::NMRC_RELATIVE_INVALID_INPUT,
+           "a non-finite absolute threshold must fail closed");
+}
+
+static void test_nmrc_relative_action_identity_and_histogram_boundaries() {
+    const uint32_t flow_id = 1601;
+    const RocePacket::seq_t psn = 0x123456789abcdef0ULL;
+    const uint8_t attempt = 3;
+    const uint32_t original_ev = 17;
+    const uint32_t original_egress = 1;
+    const uint32_t selected_egress = 3;
+    const uint64_t key = FatTreeSwitch::nmrc_relative_action_key(
+        flow_id, psn, attempt, original_ev,
+        original_egress, selected_egress);
+    expect(key == FatTreeSwitch::nmrc_relative_action_key(
+                      flow_id, psn, attempt, original_ev,
+                      original_egress, selected_egress),
+           "relative action key must be stable for an identical tuple");
+    expect(key != FatTreeSwitch::nmrc_relative_action_key(
+                      flow_id + 1, psn, attempt, original_ev,
+                      original_egress, selected_egress) &&
+               key != FatTreeSwitch::nmrc_relative_action_key(
+                      flow_id, psn + 1, attempt, original_ev,
+                      original_egress, selected_egress) &&
+               key != FatTreeSwitch::nmrc_relative_action_key(
+                      flow_id, psn + (1ULL << 32), attempt, original_ev,
+                      original_egress, selected_egress) &&
+               key != FatTreeSwitch::nmrc_relative_action_key(
+                      flow_id, psn, attempt + 1, original_ev,
+                      original_egress, selected_egress) &&
+               key != FatTreeSwitch::nmrc_relative_action_key(
+                      flow_id, psn, attempt, original_ev + 1,
+                      original_egress, selected_egress) &&
+               key != FatTreeSwitch::nmrc_relative_action_key(
+                      flow_id, psn, attempt, original_ev,
+                      original_egress + 1, selected_egress) &&
+               key != FatTreeSwitch::nmrc_relative_action_key(
+                      flow_id, psn, attempt, original_ev,
+                      original_egress, selected_egress + 1),
+           "all six tuple fields must contribute to the relative action key");
+    expect(FatTreeSwitch::nmrc_relative_hist_bin(0.30) == 6 &&
+               FatTreeSwitch::nmrc_relative_hist_bin(
+                   0.30 - FatTreeSwitch::NMRC_RELATIVE_EPSILON / 2.0) == 6,
+           "relative histogram boundaries must use the selector epsilon");
+}
+
 int main() {
     EventList eventlist;
 
@@ -146,6 +279,27 @@ int main() {
     expect(FatTreeSwitch::_nmrc_reroute_policy ==
                FatTreeSwitch::NMRC_REROUTE_BETTER_GE3,
            "library and CLI hybrid n-MRC defaults must use better-ge3");
+    expect(FatTreeSwitch::_nmrc_network_decision_mode ==
+               FatTreeSwitch::NMRC_NETWORK_GRADED,
+           "legacy graded n-MRC decision mode should remain the default");
+
+    expect(FatTreeSwitch::nmrc_binary_classify(0.499999, true) ==
+               FatTreeSwitch::NMRC_BINARY_SAFE,
+           "binary n-MRC should classify a finite complete score below 0.5 as SAFE");
+    expect(FatTreeSwitch::nmrc_binary_classify(0.5, true) ==
+               FatTreeSwitch::NMRC_BINARY_CONGESTED,
+           "binary n-MRC should classify the 0.5 boundary as CONGESTED");
+    expect(FatTreeSwitch::nmrc_binary_classify(
+               std::numeric_limits<double>::infinity(), true) ==
+               FatTreeSwitch::NMRC_BINARY_UNKNOWN,
+           "binary n-MRC should classify positive infinity as UNKNOWN");
+    expect(FatTreeSwitch::nmrc_binary_classify(
+               std::numeric_limits<double>::quiet_NaN(), true) ==
+               FatTreeSwitch::NMRC_BINARY_UNKNOWN,
+           "binary n-MRC should classify NaN as UNKNOWN");
+    expect(FatTreeSwitch::nmrc_binary_classify(0.1, false) ==
+               FatTreeSwitch::NMRC_BINARY_UNKNOWN,
+           "binary n-MRC should classify incomplete two-hop telemetry as UNKNOWN");
 
     expect_near(FatTreeSwitch::sglb_nmrc_queue_pressure(0.20), 0.0, 1e-12,
                 "n-MRC grade pressure should start at the ECN minimum");
@@ -187,6 +341,55 @@ int main() {
            "eight-level quantizer should preserve the 0.60 boundary");
     expect(FatTreeSwitch::sglb_nmrc_quantized_level(0.80, 8) == 7,
            "eight-level quantizer should split the original AVOID level");
+
+    {
+        vector<double> scores;
+        scores.push_back(0.499999);
+        scores.push_back(0.1);
+        vector<bool> complete(2, true);
+        vector<bool> available(2, true);
+        FatTreeSwitch::NmrcRerouteDecision safe_original =
+            FatTreeSwitch::nmrc_select_binary_path(
+                0, scores, complete, available, 0);
+        expect(!safe_original.reroute,
+               "a SAFE binary original must never reroute");
+
+        scores[0] = 0.5;
+        scores[1] = 0.499999;
+        FatTreeSwitch::NmrcRerouteDecision boundary =
+            FatTreeSwitch::nmrc_select_binary_path(
+                0, scores, complete, available, 0);
+        expect(boundary.reroute && boundary.selected_index == 1 &&
+                   boundary.original_level == 1 &&
+                   boundary.selected_level == 0,
+               "a CONGESTED binary original should select an available SAFE path with transition 1 to 0");
+
+        available[1] = false;
+        FatTreeSwitch::NmrcRerouteDecision unavailable_safe =
+            FatTreeSwitch::nmrc_select_binary_path(
+                0, scores, complete, available, 0);
+        expect(!unavailable_safe.reroute,
+               "an unavailable SAFE binary candidate must not receive reroute");
+
+        available[1] = true;
+        complete[1] = false;
+        FatTreeSwitch::NmrcRerouteDecision unknown_candidate =
+            FatTreeSwitch::nmrc_select_binary_path(
+                0, scores, complete, available, 0);
+        expect(!unknown_candidate.reroute,
+               "an UNKNOWN binary candidate must not receive reroute");
+
+        complete[0] = false;
+        complete[1] = true;
+        FatTreeSwitch::NmrcRerouteDecision unknown_original =
+            FatTreeSwitch::nmrc_select_binary_path(
+                0, scores, complete, available, 0);
+        expect(!unknown_original.reroute,
+               "an UNKNOWN binary original must not trigger reroute");
+    }
+
+    test_nmrc_relative_delta_selector();
+    test_nmrc_relative_action_identity_and_histogram_boundaries();
 
     {
         for (uint32_t better = 1; better <= 3; better++) {
@@ -443,6 +646,8 @@ int main() {
         FatTreeSwitch::_sglb_update_interval = 0;
         FatTreeSwitch::_nmrc_reroute_policy =
             FatTreeSwitch::NMRC_REROUTE_ANY_BETTER;
+        FatTreeSwitch::_nmrc_network_decision_mode =
+            FatTreeSwitch::NMRC_NETWORK_GRADED;
         FatTreeSwitch::_nmrc_hybrid_enabled = false;
 
         RocePacket* probe = RocePacket::newpkt(
@@ -547,6 +752,430 @@ int main() {
                "FastCNP must incur switch, queue, and link delivery latency");
         expect(ack_capture.ecn_echoes == 3,
                "hybrid rerouting must not clear CE or suppress receiver ECN echo");
+
+        FatTreeSwitch::_nmrc_network_decision_mode =
+            FatTreeSwitch::NMRC_NETWORK_BINARY_SCORE;
+        FatTreeSwitch::_nmrc_reroute_policy =
+            FatTreeSwitch::NMRC_REROUTE_BETTER_GE3;
+        FatTreeSwitch::_sglb_update_interval = 0;
+        FatTreeSwitch::_sglb_gcn_aging_interval = timeFromUs(5.0);
+        FatTreeSwitch::_nmrc_hybrid_enabled = false;
+        FatTreeSwitch::_nmrc_fastcnp_enabled = true;
+
+        std::set<Route*> source_routes;
+        for (uint32_t ev = 0; ev < 16; ev++) {
+            RocePacket* warm_probe = RocePacket::newpkt(
+                source._flow, 1, Packet::data_packet_size(),
+                false, false, 2);
+            warm_probe->set_src(0);
+            warm_probe->set_pathid(ev);
+            warm_probe->set_mrc_ev(ev);
+            Route* source_route = source_leaf->getNextHop(*warm_probe, NULL);
+            expect(source_route != NULL && source_route->size() > 2,
+                   "binary telemetry warmup needs a two-hop source route");
+            source_routes.insert(source_route);
+            FatTreeSwitch* downstream =
+                dynamic_cast<FatTreeSwitch*>(source_route->at(2));
+            expect(downstream != NULL,
+                   "binary telemetry warmup must reach the downstream switch");
+            FatTreeSwitch::_nmrc_hybrid_enabled = true;
+            expect(downstream->getNextHop(*warm_probe, NULL) != NULL,
+                   "binary telemetry warmup must resolve the downstream egress");
+            FatTreeSwitch::_nmrc_hybrid_enabled = false;
+            warm_probe->free();
+        }
+        expect(source_routes.size() > 1,
+               "binary paired-action integration needs multiple physical egresses");
+
+        probe = RocePacket::newpkt(
+            source._flow, 1, Packet::data_packet_size(), false, false, 2);
+        probe->set_src(0);
+        probe->set_pathid(0);
+        probe->set_mrc_ev(0);
+        original_route = source_leaf->getNextHop(*probe, NULL);
+        original_queue =
+            dynamic_cast<BaseQueue*>(original_route->at(0));
+        expect(original_queue != NULL,
+               "binary paired-action original route must start with a queue");
+        probe->free();
+
+        for (uint32_t i = 0; i < 15; i++) {
+            TcpPacket* background = TcpPacket::newpkt(
+                background_flow, background_route, 100 + i, 4096);
+            original_queue->receivePacket(*background);
+        }
+
+        missing_reverse = RocePacket::newpkt(
+            missing_reverse_flow, 1, Packet::data_packet_size(),
+            false, false, 2);
+        missing_reverse->set_src(0);
+        missing_reverse->set_pathid(0);
+        missing_reverse->set_mrc_ev(0);
+        missing_reverse->set_nmrc_detour(true);
+        missing_reverse->set_nmrc_actual_egress(31);
+        FatTreeSwitch::reset_nmrc_hybrid_diag();
+        FatTreeSwitch::_nmrc_hybrid_enabled = true;
+        missing_selected = source_leaf->getNextHop(
+            *missing_reverse, NULL);
+        expect(missing_selected == original_route,
+               "binary reroute must not commit without a reverse control route");
+        expect(missing_reverse->nmrc_detour() &&
+                   missing_reverse->nmrc_actual_egress() == 31,
+               "missing reverse control route must leave packet detour metadata unchanged");
+        expect(FatTreeSwitch::_nmrc_diag_binary_route_missing == 1 &&
+                   FatTreeSwitch::_nmrc_diag_reroutes == 0 &&
+                   FatTreeSwitch::_nmrc_diag_binary_paired_actions == 0 &&
+                   FatTreeSwitch::_nmrc_diag_fastcnp_generated == 0,
+               "missing reverse control route must leave all committed counters unchanged");
+        missing_reverse->free();
+
+        RocePacket* binary_data = RocePacket::newpkt(
+            source._flow, 1, Packet::data_packet_size(), false, false, 2);
+        binary_data->set_src(0);
+        binary_data->set_pathid(0);
+        binary_data->set_mrc_ev(0);
+        FatTreeSwitch::reset_nmrc_hybrid_diag();
+        Route* selected_route = source_leaf->getNextHop(*binary_data, NULL);
+        FatTreeSwitch::_sglb_update_interval = timeFromUs(20.0);
+        expect(selected_route != original_route && binary_data->nmrc_detour() &&
+                   binary_data->has_nmrc_actual_egress(),
+               "successful binary action must set actual egress and detour metadata");
+        uint32_t selected_egress = binary_data->nmrc_actual_egress();
+        expect(FatTreeSwitch::_nmrc_diag_reroutes == 1 &&
+                   FatTreeSwitch::_nmrc_diag_binary_paired_actions == 1 &&
+                   FatTreeSwitch::_nmrc_diag_fastcnp_generated == 1,
+               "binary committed reroutes, paired actions, and generated FastCNP must remain equal");
+        expect(FatTreeSwitch::_nmrc_diag_level_transitions[1][0] == 1,
+               "successful binary action must record transition 1 to 0");
+        expect(FatTreeSwitch::_nmrc_diag_binary_actual_egress[selected_egress] == 1,
+               "successful binary action must update the committed actual-egress histogram");
+        expect(FatTreeSwitch::_nmrc_diag_binary_original_score_sum >= 0.5 &&
+                   FatTreeSwitch::_nmrc_diag_binary_original_score_max >= 0.5 &&
+                   FatTreeSwitch::_nmrc_diag_binary_selected_score_sum < 0.5 &&
+                   FatTreeSwitch::_nmrc_diag_binary_selected_score_max < 0.5,
+               "successful binary action must expose original and selected score diagnostics");
+
+        size_t capture_index = fast_capture.evs.size();
+        deadline = EventList::now() + timeFromUs(50.0);
+        while (fast_capture.evs.size() == capture_index &&
+               EventList::now() < deadline &&
+               eventlist.doNextEvent()) {}
+        expect(fast_capture.evs.size() == capture_index + 1 &&
+                   fast_capture.original_egresses[capture_index] == 0 &&
+                   fast_capture.selected_egresses[capture_index] == selected_egress &&
+                   fast_capture.original_levels[capture_index] == 1 &&
+                   fast_capture.selected_levels[capture_index] == 0,
+               "paired FastCNP must match original and selected egress with transition 1 to 0");
+        binary_data->free();
+
+        FatTreeSwitch::_sglb_update_interval = 0;
+        FatTreeSwitch::_nmrc_hybrid_enabled = false;
+        for (uint32_t ev = 0; ev < 16; ev++) {
+            RocePacket* warm_probe = RocePacket::newpkt(
+                source._flow, 20000, Packet::data_packet_size(),
+                false, false, 2);
+            warm_probe->set_src(0);
+            warm_probe->set_pathid(ev);
+            warm_probe->set_mrc_ev(ev);
+            Route* source_route = source_leaf->getNextHop(*warm_probe, NULL);
+            FatTreeSwitch* downstream =
+                dynamic_cast<FatTreeSwitch*>(source_route->at(2));
+            expect(downstream != NULL,
+                   "relative telemetry refresh must reach the downstream switch");
+            FatTreeSwitch::_nmrc_hybrid_enabled = true;
+            expect(downstream->getNextHop(*warm_probe, NULL) != NULL,
+                   "relative telemetry refresh must resolve downstream egress");
+            FatTreeSwitch::_nmrc_hybrid_enabled = false;
+            warm_probe->free();
+        }
+        FatTreeSwitch::_nmrc_hybrid_enabled = true;
+        for (uint32_t i = 0; i < 5; i++) {
+            TcpPacket* background = TcpPacket::newpkt(
+                background_flow, background_route, 180 + i, 4096);
+            original_queue->receivePacket(*background);
+        }
+        FatTreeSwitch::_nmrc_network_decision_mode =
+            FatTreeSwitch::NMRC_NETWORK_RELATIVE_DELTA;
+        FatTreeSwitch::_nmrc_absolute_threshold = 0.50;
+        FatTreeSwitch::_nmrc_relative_delta = 0.30;
+        RocePacket* relative_data = RocePacket::newpkt(
+            source._flow, 20001, Packet::data_packet_size(),
+            false, false, 2);
+        relative_data->set_src(0);
+        relative_data->set_pathid(0);
+        relative_data->set_mrc_ev(0);
+        relative_data->set_attempt_id(3);
+        relative_data->set_flags(ECN_CE);
+        FatTreeSwitch::reset_nmrc_hybrid_diag();
+        capture_index = fast_capture.evs.size();
+        Route* relative_selected = source_leaf->getNextHop(
+            *relative_data, NULL);
+        expect(relative_selected != original_route &&
+                   relative_data->nmrc_detour() &&
+                   relative_data->has_nmrc_actual_egress(),
+               "relative delta must reroute to a sufficiently better path");
+        uint32_t relative_egress = relative_data->nmrc_actual_egress();
+        expect(FatTreeSwitch::_nmrc_diag_relative_paired_actions == 1 &&
+                   FatTreeSwitch::_nmrc_diag_relative_reroutes == 1 &&
+                   FatTreeSwitch::_nmrc_diag_fastcnp_generated == 1,
+               "relative reroute and FastCNP must commit atomically");
+        expect(FatTreeSwitch::_nmrc_diag_relative_reroute_key_count == 1 &&
+                   FatTreeSwitch::_nmrc_diag_relative_generated_key_count == 1 &&
+                   FatTreeSwitch::_nmrc_diag_relative_reroute_key_sum ==
+                       FatTreeSwitch::_nmrc_diag_relative_generated_key_sum &&
+                   FatTreeSwitch::_nmrc_diag_relative_reroute_key_xor ==
+                       FatTreeSwitch::_nmrc_diag_relative_generated_key_xor,
+               "paired action tuple checksums must match");
+        expect(FatTreeSwitch::_nmrc_diag_relative_decision_ce_set == 0 &&
+                   FatTreeSwitch::_nmrc_diag_relative_decision_ce_cleared == 0 &&
+                   (relative_data->flags() & ECN_CE),
+               "relative decision must not mutate CE");
+
+        deadline = EventList::now() + timeFromUs(50.0);
+        while (fast_capture.evs.size() == capture_index &&
+               EventList::now() < deadline && eventlist.doNextEvent()) {}
+        expect(fast_capture.evs.size() == capture_index + 1 &&
+                   fast_capture.evs[capture_index] == 0 &&
+                   fast_capture.psns[capture_index] == 20001 &&
+                   fast_capture.attempts[capture_index] == 3 &&
+                   fast_capture.original_egresses[capture_index] == 0 &&
+                   fast_capture.selected_egresses[capture_index] == relative_egress &&
+                   fast_capture.original_levels[capture_index] == UINT8_MAX &&
+                   fast_capture.selected_levels[capture_index] == UINT8_MAX &&
+                   fast_capture.original_scores[capture_index] -
+                       fast_capture.selected_scores[capture_index] >= 0.30 - 1e-12 &&
+                   fast_capture.selected_gaps[capture_index] >= 0.30 - 1e-12 &&
+                   fast_capture.action_keys[capture_index] != 0 &&
+                   fast_capture.action_keys[capture_index] ==
+                       FatTreeSwitch::_nmrc_diag_relative_reroute_key_sum &&
+                   fast_capture.action_keys[capture_index] ==
+                       FatTreeSwitch::_nmrc_diag_relative_generated_key_sum,
+               "relative FastCNP must carry its six-field identity and scores");
+        relative_data->free();
+
+        for (uint32_t i = 0; i < 5; i++) {
+            TcpPacket* background = TcpPacket::newpkt(
+                background_flow, background_route, 190 + i, 4096);
+            original_queue->receivePacket(*background);
+        }
+
+        RocePacket* relative_blocked = RocePacket::newpkt(
+            missing_reverse_flow, 20002, Packet::data_packet_size(),
+            false, false, 2);
+        relative_blocked->set_src(0);
+        relative_blocked->set_pathid(0);
+        relative_blocked->set_mrc_ev(0);
+        relative_blocked->set_attempt_id(4);
+        relative_blocked->set_nmrc_detour(true);
+        relative_blocked->set_nmrc_actual_egress(31);
+        FatTreeSwitch::reset_nmrc_hybrid_diag();
+        size_t captures_before_block = fast_capture.evs.size();
+        Route* relative_blocked_selected = source_leaf->getNextHop(
+            *relative_blocked, NULL);
+        expect(relative_blocked_selected == original_route &&
+                   relative_blocked->nmrc_detour() &&
+                   relative_blocked->nmrc_actual_egress() == 31,
+               "relative action must not commit without a reverse control route");
+        expect(FatTreeSwitch::_nmrc_diag_relative_reverse_path_blocked == 1 &&
+                   FatTreeSwitch::_nmrc_diag_relative_reroutes == 0 &&
+                   FatTreeSwitch::_nmrc_diag_relative_paired_actions == 0 &&
+                   FatTreeSwitch::_nmrc_diag_fastcnp_generated == 0 &&
+                   FatTreeSwitch::_nmrc_diag_relative_original_score_count == 0 &&
+                   FatTreeSwitch::_nmrc_diag_relative_selected_score_count == 0 &&
+                   fast_capture.evs.size() == captures_before_block,
+               "blocked relative action must commit neither reroute nor FastCNP");
+        relative_blocked->free();
+
+        FatTreeSwitch::_nmrc_network_decision_mode =
+            FatTreeSwitch::NMRC_NETWORK_BINARY_SCORE;
+
+        NoopTimer downstream_ttl_timer(eventlist);
+        simtime_picosec downstream_ttl_deadline =
+            EventList::now() + timeFromUs(6.0);
+        eventlist.sourceIsPendingRel(downstream_ttl_timer, timeFromUs(6.0));
+        while (EventList::now() < downstream_ttl_deadline &&
+               eventlist.doNextEvent()) {}
+        RocePacket* stale_downstream = RocePacket::newpkt(
+            source._flow, 2, Packet::data_packet_size(), false, false, 2);
+        stale_downstream->set_src(0);
+        stale_downstream->set_pathid(0);
+        stale_downstream->set_mrc_ev(0);
+        FatTreeSwitch::reset_nmrc_hybrid_diag();
+        Route* stale_selected = source_leaf->getNextHop(
+            *stale_downstream, NULL);
+        expect(stale_selected == original_route &&
+                   !stale_downstream->nmrc_detour() &&
+                   !stale_downstream->has_nmrc_actual_egress() &&
+                   FatTreeSwitch::_nmrc_diag_reroutes == 0 &&
+                   FatTreeSwitch::_nmrc_diag_fastcnp_generated == 0,
+               "a cached path must become UNKNOWN when downstream telemetry expires inside the local cache interval");
+        stale_downstream->free();
+        FatTreeSwitch::_sglb_update_interval = 0;
+        FatTreeSwitch::_sglb_gcn_aging_interval = timeFromUs(30.0);
+
+        for (uint32_t i = 0; i < 15; i++) {
+            TcpPacket* background = TcpPacket::newpkt(
+                background_flow, background_route, 150 + i, 4096);
+            original_queue->receivePacket(*background);
+        }
+        FatTreeSwitch::_sglb_score_mode =
+            FatTreeSwitch::SGLB_SCORE_NMRC_QUANTIZED_TOPK;
+        FatTreeSwitch::_nmrc_fastcnp_enabled = false;
+        RocePacket* provenance_prime = RocePacket::newpkt(
+            source._flow, 3, Packet::data_packet_size(), false, false, 2);
+        provenance_prime->set_src(0);
+        provenance_prime->set_pathid(0);
+        provenance_prime->set_mrc_ev(0);
+        source_leaf->getNextHop(*provenance_prime, NULL);
+        provenance_prime->free();
+
+        FatTreeSwitch::_sglb_score_mode = FatTreeSwitch::SGLB_SCORE_LEGACY;
+        FatTreeSwitch::_nmrc_fastcnp_enabled = true;
+        RocePacket* legacy_provenance = RocePacket::newpkt(
+            source._flow, 4, Packet::data_packet_size(), false, false, 2);
+        legacy_provenance->set_src(0);
+        legacy_provenance->set_pathid(0);
+        legacy_provenance->set_mrc_ev(0);
+        FatTreeSwitch::reset_nmrc_hybrid_diag();
+        Route* legacy_provenance_selected = source_leaf->getNextHop(
+            *legacy_provenance, NULL);
+        expect(legacy_provenance_selected == original_route &&
+                   !legacy_provenance->nmrc_detour() &&
+                   !legacy_provenance->has_nmrc_actual_egress() &&
+                   FatTreeSwitch::_nmrc_diag_reroutes == 0 &&
+                   FatTreeSwitch::_nmrc_diag_fastcnp_generated == 0,
+               "a legacy additive recomputation must clear N-MRC completeness provenance");
+        legacy_provenance->free();
+        FatTreeSwitch::_sglb_score_mode =
+            FatTreeSwitch::SGLB_SCORE_NMRC_QUANTIZED_TOPK;
+
+        uint32_t route_number = 0;
+        for (std::set<Route*>::iterator route = source_routes.begin();
+             route != source_routes.end(); ++route, ++route_number) {
+            BaseQueue* queue = dynamic_cast<BaseQueue*>((*route)->at(0));
+            expect(queue != NULL,
+                   "binary no-safe integration needs queue-backed egresses");
+            for (uint32_t i = 0; i < 15; i++) {
+                TcpPacket* background = TcpPacket::newpkt(
+                    background_flow, background_route,
+                    200 + route_number * 20 + i, 4096);
+                queue->receivePacket(*background);
+            }
+        }
+        RocePacket* no_safe = RocePacket::newpkt(
+            source._flow, 2, Packet::data_packet_size(), false, false, 2);
+        no_safe->set_src(0);
+        no_safe->set_pathid(0);
+        no_safe->set_mrc_ev(0);
+        FatTreeSwitch::reset_nmrc_hybrid_diag();
+        Route* no_safe_selected = source_leaf->getNextHop(*no_safe, NULL);
+        expect(no_safe_selected == original_route &&
+                   FatTreeSwitch::_nmrc_diag_binary_no_safe == 1 &&
+                   FatTreeSwitch::_nmrc_diag_reroutes == 0 &&
+                   FatTreeSwitch::_nmrc_diag_binary_paired_actions == 0 &&
+                   FatTreeSwitch::_nmrc_diag_fastcnp_generated == 0,
+               "no SAFE binary candidate must commit neither reroute nor FastCNP");
+        no_safe->free();
+    }
+
+    {
+        FatTreeSwitch::_nmrc_diag_binary_original_safe = 9;
+        FatTreeSwitch::_nmrc_diag_binary_original_congested = 9;
+        FatTreeSwitch::_nmrc_diag_binary_no_safe = 9;
+        FatTreeSwitch::_nmrc_diag_binary_route_missing = 9;
+        FatTreeSwitch::_nmrc_diag_binary_paired_actions = 9;
+        FatTreeSwitch::_nmrc_diag_binary_original_score_sum = 9.0;
+        FatTreeSwitch::_nmrc_diag_binary_original_score_max = 9.0;
+        FatTreeSwitch::_nmrc_diag_binary_selected_score_sum = 9.0;
+        FatTreeSwitch::_nmrc_diag_binary_selected_score_max = 9.0;
+        FatTreeSwitch::_nmrc_diag_binary_actual_egress[0] = 9;
+        FatTreeSwitch::_nmrc_diag_binary_actual_egress[32] = 9;
+        FatTreeSwitch::_nmrc_diag_relative_checks = 9;
+        FatTreeSwitch::_nmrc_diag_relative_original_unknown = 9;
+        FatTreeSwitch::_nmrc_diag_relative_original_unavailable = 9;
+        FatTreeSwitch::_nmrc_diag_relative_original_below_absolute = 9;
+        FatTreeSwitch::_nmrc_diag_relative_no_safe_candidate = 9;
+        FatTreeSwitch::_nmrc_diag_relative_no_delta_candidate = 9;
+        FatTreeSwitch::_nmrc_diag_relative_reverse_path_blocked = 9;
+        FatTreeSwitch::_nmrc_diag_relative_paired_actions = 9;
+        FatTreeSwitch::_nmrc_diag_relative_reroutes = 9;
+        FatTreeSwitch::_nmrc_diag_relative_selected_gap_violations = 9;
+        FatTreeSwitch::_nmrc_diag_relative_decision_ce_set = 9;
+        FatTreeSwitch::_nmrc_diag_relative_decision_ce_cleared = 9;
+        FatTreeSwitch::_nmrc_diag_relative_reroute_key_count = 9;
+        FatTreeSwitch::_nmrc_diag_relative_reroute_key_sum = 9;
+        FatTreeSwitch::_nmrc_diag_relative_reroute_key_xor = 9;
+        FatTreeSwitch::_nmrc_diag_relative_generated_key_count = 9;
+        FatTreeSwitch::_nmrc_diag_relative_generated_key_sum = 9;
+        FatTreeSwitch::_nmrc_diag_relative_generated_key_xor = 9;
+        FatTreeSwitch::_nmrc_diag_relative_original_score_count = 9;
+        FatTreeSwitch::_nmrc_diag_relative_original_score_sum = 9.0;
+        FatTreeSwitch::_nmrc_diag_relative_original_score_max = 9.0;
+        FatTreeSwitch::_nmrc_diag_relative_selected_score_count = 9;
+        FatTreeSwitch::_nmrc_diag_relative_selected_score_sum = 9.0;
+        FatTreeSwitch::_nmrc_diag_relative_selected_score_max = 9.0;
+        FatTreeSwitch::_nmrc_diag_relative_candidate_count[0] = 9;
+        FatTreeSwitch::_nmrc_diag_relative_candidate_count[32] = 9;
+        FatTreeSwitch::_nmrc_diag_relative_best_gap[0] = 9;
+        FatTreeSwitch::_nmrc_diag_relative_best_gap[20] = 9;
+        FatTreeSwitch::_nmrc_diag_relative_selected_gap[0] = 9;
+        FatTreeSwitch::_nmrc_diag_relative_selected_gap[20] = 9;
+        FatTreeSwitch::_nmrc_diag_relative_original_score[0] = 9;
+        FatTreeSwitch::_nmrc_diag_relative_original_score[20] = 9;
+        FatTreeSwitch::_nmrc_diag_relative_selected_score[0] = 9;
+        FatTreeSwitch::_nmrc_diag_relative_selected_score[20] = 9;
+        FatTreeSwitch::_nmrc_diag_relative_actual_egress[0] = 9;
+        FatTreeSwitch::_nmrc_diag_relative_actual_egress[32] = 9;
+        FatTreeSwitch::reset_nmrc_hybrid_diag();
+        expect(FatTreeSwitch::_nmrc_diag_binary_original_safe == 0 &&
+                   FatTreeSwitch::_nmrc_diag_binary_original_congested == 0 &&
+                   FatTreeSwitch::_nmrc_diag_binary_no_safe == 0 &&
+                   FatTreeSwitch::_nmrc_diag_binary_route_missing == 0 &&
+                   FatTreeSwitch::_nmrc_diag_binary_paired_actions == 0 &&
+                   FatTreeSwitch::_nmrc_diag_binary_original_score_sum == 0.0 &&
+                   FatTreeSwitch::_nmrc_diag_binary_original_score_max == 0.0 &&
+                   FatTreeSwitch::_nmrc_diag_binary_selected_score_sum == 0.0 &&
+                   FatTreeSwitch::_nmrc_diag_binary_selected_score_max == 0.0 &&
+                   FatTreeSwitch::_nmrc_diag_binary_actual_egress[0] == 0 &&
+                   FatTreeSwitch::_nmrc_diag_binary_actual_egress[32] == 0,
+               "reset must clear every binary n-MRC diagnostic");
+        expect(FatTreeSwitch::_nmrc_diag_relative_checks == 0 &&
+                   FatTreeSwitch::_nmrc_diag_relative_original_unknown == 0 &&
+                   FatTreeSwitch::_nmrc_diag_relative_original_unavailable == 0 &&
+                   FatTreeSwitch::_nmrc_diag_relative_original_below_absolute == 0 &&
+                   FatTreeSwitch::_nmrc_diag_relative_no_safe_candidate == 0 &&
+                   FatTreeSwitch::_nmrc_diag_relative_no_delta_candidate == 0 &&
+                   FatTreeSwitch::_nmrc_diag_relative_reverse_path_blocked == 0 &&
+                   FatTreeSwitch::_nmrc_diag_relative_paired_actions == 0 &&
+                   FatTreeSwitch::_nmrc_diag_relative_reroutes == 0 &&
+                   FatTreeSwitch::_nmrc_diag_relative_selected_gap_violations == 0 &&
+                   FatTreeSwitch::_nmrc_diag_relative_decision_ce_set == 0 &&
+                   FatTreeSwitch::_nmrc_diag_relative_decision_ce_cleared == 0 &&
+                   FatTreeSwitch::_nmrc_diag_relative_reroute_key_count == 0 &&
+                   FatTreeSwitch::_nmrc_diag_relative_reroute_key_sum == 0 &&
+                   FatTreeSwitch::_nmrc_diag_relative_reroute_key_xor == 0 &&
+                   FatTreeSwitch::_nmrc_diag_relative_generated_key_count == 0 &&
+                   FatTreeSwitch::_nmrc_diag_relative_generated_key_sum == 0 &&
+                   FatTreeSwitch::_nmrc_diag_relative_generated_key_xor == 0 &&
+                   FatTreeSwitch::_nmrc_diag_relative_original_score_count == 0 &&
+                   FatTreeSwitch::_nmrc_diag_relative_original_score_sum == 0.0 &&
+                   FatTreeSwitch::_nmrc_diag_relative_original_score_max == 0.0 &&
+                   FatTreeSwitch::_nmrc_diag_relative_selected_score_count == 0 &&
+                   FatTreeSwitch::_nmrc_diag_relative_selected_score_sum == 0.0 &&
+                   FatTreeSwitch::_nmrc_diag_relative_selected_score_max == 0.0 &&
+                   FatTreeSwitch::_nmrc_diag_relative_candidate_count[0] == 0 &&
+                   FatTreeSwitch::_nmrc_diag_relative_candidate_count[32] == 0 &&
+                   FatTreeSwitch::_nmrc_diag_relative_best_gap[0] == 0 &&
+                   FatTreeSwitch::_nmrc_diag_relative_best_gap[20] == 0 &&
+                   FatTreeSwitch::_nmrc_diag_relative_selected_gap[0] == 0 &&
+                   FatTreeSwitch::_nmrc_diag_relative_selected_gap[20] == 0 &&
+                   FatTreeSwitch::_nmrc_diag_relative_original_score[0] == 0 &&
+                   FatTreeSwitch::_nmrc_diag_relative_original_score[20] == 0 &&
+                   FatTreeSwitch::_nmrc_diag_relative_selected_score[0] == 0 &&
+                   FatTreeSwitch::_nmrc_diag_relative_selected_score[20] == 0 &&
+                   FatTreeSwitch::_nmrc_diag_relative_actual_egress[0] == 0 &&
+                   FatTreeSwitch::_nmrc_diag_relative_actual_egress[32] == 0,
+               "reset must clear every relative-delta n-MRC diagnostic");
     }
     return 0;
 }

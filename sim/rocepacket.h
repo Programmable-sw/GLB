@@ -3,6 +3,7 @@
 #define ROCEPACKET_H
 
 #include <list>
+#include <limits>
 #include <vector>
 #include "network.h"
 
@@ -367,7 +368,12 @@ public:
             uint32_t source_host, uint32_t ev, seq_t psn,
             uint32_t original_egress, uint32_t selected_egress,
             uint8_t original_level, uint8_t selected_level,
-            uint32_t trigger_switch, simtime_picosec trigger_time) {
+            uint32_t trigger_switch, simtime_picosec trigger_time,
+            uint8_t attempt_id = 0,
+            double original_score = std::numeric_limits<double>::quiet_NaN(),
+            double selected_score = std::numeric_limits<double>::quiet_NaN(),
+            double selected_gap = std::numeric_limits<double>::quiet_NaN(),
+            uint64_t action_key = 0) {
         assert(ev <= 0xffffU);
         RoceFastCnp* p = _packetdb.allocPacket();
         p->set_route(flow, route, RocePacket::ACKSIZE, (packetid_t)psn);
@@ -384,6 +390,11 @@ public:
         p->_selected_level = selected_level;
         p->_trigger_switch = trigger_switch;
         p->_trigger_time = trigger_time;
+        p->_attempt_id = attempt_id;
+        p->_original_score = original_score;
+        p->_selected_score = selected_score;
+        p->_selected_gap = selected_gap;
+        p->_action_key = action_key;
         p->set_dst(source_host);
         p->set_pathid(UINT32_MAX);
         p->set_flags(0);
@@ -400,6 +411,11 @@ public:
     inline uint8_t selected_level() const {return _selected_level;}
     inline uint32_t trigger_switch() const {return _trigger_switch;}
     inline simtime_picosec trigger_time() const {return _trigger_time;}
+    inline uint8_t attempt_id() const {return _attempt_id;}
+    inline double original_score() const {return _original_score;}
+    inline double selected_score() const {return _selected_score;}
+    inline double selected_gap() const {return _selected_gap;}
+    inline uint64_t action_key() const {return _action_key;}
     virtual PktPriority priority() const {return Packet::PRIO_HI;}
     virtual ~RoceFastCnp() {}
 
@@ -413,6 +429,11 @@ protected:
     uint8_t _selected_level;
     uint32_t _trigger_switch;
     simtime_picosec _trigger_time;
+    uint8_t _attempt_id;
+    double _original_score;
+    double _selected_score;
+    double _selected_gap;
+    uint64_t _action_key;
     static PacketDB<RoceFastCnp> _packetdb;
 };
 

@@ -81,6 +81,14 @@ public:
         NMRC_EV_RANDOM_MATCHED = 1,
         NMRC_EV_RANDOM32 = 2
     } nmrc_ev_mode_t;
+    typedef enum {
+        NMRC_ENDPOINT_RR_COOLDOWN = 0,
+        NMRC_ENDPOINT_RANDOM_STATELESS = 1
+    } nmrc_endpoint_policy_t;
+    typedef enum {
+        NMRC_ALL_COOLING_EARLIEST = 0,
+        NMRC_ALL_COOLING_RR_RESET = 1
+    } nmrc_all_cooling_policy_t;
     enum {
         WEIGHTED_SHUFFLED_BUCKET_PATH_MULTIPLIER = 4
     };
@@ -132,6 +140,12 @@ public:
     static nmrc_ev_mode_t nmrcEvMode();
     static void setNmrcEvSeed(uint32_t seed);
     static uint32_t nmrcEvSeed();
+    static void setNmrcEndpointPolicy(nmrc_endpoint_policy_t policy);
+    static nmrc_endpoint_policy_t nmrcEndpointPolicy();
+    static const char* nmrcEndpointPolicyName();
+    static void setNmrcAllCoolingPolicy(nmrc_all_cooling_policy_t policy);
+    static nmrc_all_cooling_policy_t nmrcAllCoolingPolicy();
+    static const char* nmrcAllCoolingPolicyName();
     static void setRepsBufferSize(uint32_t size) {_reps_buffer_size = size ? size : 1;}
     static void setRepsWarmupPkts(uint32_t pkts) {_reps_warmup_pkts = pkts;}
     static void setHostsPerTor(uint32_t hosts) {_hosts_per_tor = hosts ? hosts : 1;}
@@ -295,9 +309,12 @@ public:
     uint32_t choose_nmrc_ev_for_test(uint32_t path_space);
     bool notify_nmrc_ev_for_test(uint32_t ev);
     bool nmrc_ev_cooling_for_test(uint32_t ev) const;
+    bool nmrc_ev_cooling_flag_for_test(uint32_t ev) const;
     uint64_t nmrc_ev_cool_until_for_test(uint32_t ev) const;
     uint64_t nmrc_selection_ordinal_for_test() const;
     uint64_t nmrc_all_cooling_fallbacks_for_test() const;
+    bool nmrc_all_cooling_rr_active_for_test() const;
+    uint32_t nmrc_all_cooling_rr_progress_for_test() const;
     uint32_t nmrc_ev_set_size_for_diag() const {
         return (uint32_t)_nmrc_evs.size();
     }
@@ -317,6 +334,27 @@ public:
     uint64_t nmrc_all_cooling_fallbacks_for_diag() const {
         return _nmrc_all_cooling_fallbacks;
     }
+    uint64_t nmrc_all_cooling_rr_episodes_for_diag() const {
+        return _nmrc_all_cooling_rr_episodes;
+    }
+    uint64_t nmrc_all_cooling_rr_selections_for_diag() const {
+        return _nmrc_all_cooling_rr_selections;
+    }
+    uint64_t nmrc_all_cooling_rr_resets_for_diag() const {
+        return _nmrc_all_cooling_rr_resets;
+    }
+    uint64_t nmrc_fastcnp_policy_ignored_for_diag() const {
+        return _nmrc_fastcnp_policy_ignored;
+    }
+    uint64_t nmrc_trim_policy_ignored_for_diag() const {
+        return _nmrc_trim_policy_ignored;
+    }
+    uint64_t nmrcFastCnpCcMutations() const {
+        return _nmrc_fastcnp_cc_mutations;
+    }
+    std::array<uint64_t, 64> fast_cnp_isolation_snapshot_for_test() const;
+    uint64_t ecnNominalCeForDiag() const;
+    uint64_t ecnDetourCeForDiag() const;
     std::array<uint32_t, 5> mrc_state_counts_for_diag() const;
     std::array<uint32_t, 5> mrc_state_physical_counts_for_diag() const;
     uint32_t mrc_backup_remaining_for_diag() const;
@@ -403,6 +441,7 @@ public:
     uint64_t _nmrc_fastcnp_latency_sum;
     uint64_t _nmrc_fastcnp_unknown_qp;
     uint64_t _nmrc_fastcnp_unknown_ev;
+    uint64_t _nmrc_fastcnp_cc_mutations;
     uint64_t _nmrc_trim_non_detour;
     uint64_t _nmrc_trim_detour;
     uint64_t _nmrc_trim_nominal_cooldown_starts;
@@ -474,6 +513,8 @@ public:
     static uint32_t _path_entropy_size;
     static nmrc_ev_mode_t _nmrc_ev_mode;
     static uint32_t _nmrc_ev_seed;
+    static nmrc_endpoint_policy_t _nmrc_endpoint_policy;
+    static nmrc_all_cooling_policy_t _nmrc_all_cooling_policy;
     static uint32_t _reps_buffer_size;
     static uint32_t _reps_warmup_pkts;
     static uint32_t _hosts_per_tor;
@@ -586,6 +627,7 @@ private:
     void update_conweave(const RoceAck& ack, simtime_picosec rtt);
     void update_netaware(const RoceAck& ack);
     void processFastCnp(const RoceFastCnp& fast_cnp);
+    std::array<uint64_t, 64> fast_cnp_isolation_snapshot() const;
     void update_stor(const RoceAck& ack);
     void update_stor(const RoceNack& nack);
     void reset_mrc_paths();
@@ -636,8 +678,10 @@ private:
             : ev(value), physical_path(physical) {}
     };
     void reset_nmrc_evs();
+    void reset_nmrc_all_cooling_rr_episode();
     void init_nmrc_evs(uint32_t path_space);
     NmrcChoice choose_nmrc_ev(uint32_t path_space);
+    NmrcChoice choose_nmrc_all_cooling_rr();
     bool notify_nmrc_ev(uint32_t ev);
     void process_nmrc_trim_feedback(const RoceNack& nack,
                                     bool failure_accepted);
@@ -718,6 +762,7 @@ private:
                       uint64_t flow_size,
                       RocePacket::seq_t& seq);
         size_t size() const;
+        const std::set<RocePacket::seq_t>& contents() const { return _seqs; }
     private:
         std::set<RocePacket::seq_t> _seqs;
     };
@@ -788,11 +833,19 @@ private:
     nmrc_ev_mode_t _nmrc_initialized_mode;
     bool _nmrc_evs_ready;
     uint64_t _nmrc_select_ordinal;
+    bool _nmrc_all_cooling_rr_active;
+    uint32_t _nmrc_all_cooling_rr_episode_size;
+    uint32_t _nmrc_all_cooling_rr_progress;
     uint64_t _nmrc_cooldown_starts;
     uint64_t _nmrc_cooling_skips;
     uint64_t _nmrc_cooling_recoveries;
     uint64_t _nmrc_duplicate_notifications;
     uint64_t _nmrc_all_cooling_fallbacks;
+    uint64_t _nmrc_all_cooling_rr_episodes;
+    uint64_t _nmrc_all_cooling_rr_selections;
+    uint64_t _nmrc_all_cooling_rr_resets;
+    uint64_t _nmrc_fastcnp_policy_ignored;
+    uint64_t _nmrc_trim_policy_ignored;
     simtime_picosec _conweave_last_reroute;
     std::array<uint32_t, 3> _selector_cursor;
     std::array<uint32_t, 3> _selector_stride;
@@ -823,6 +876,8 @@ public:
     uint64_t total_received() const { return _cumulative_ack;}
     uint64_t rx_rcvd_bytes() const { return _rx_rcvd_bytes;}
     uint32_t drops(){ return _src->_drops;}
+    uint64_t ecnNominalCe() const { return _ecn_nominal_ce; }
+    uint64_t ecnDetourCe() const { return _ecn_detour_ce; }
     virtual const string& nodename() { return _nodename; }
 
     void set_src(uint32_t s) {_srcaddr = s;}
@@ -861,6 +916,8 @@ private:
     //packet in the connection (or 0 if not known)
     uint64_t _total_received;
     uint64_t _rx_rcvd_bytes;
+    uint64_t _ecn_nominal_ce;
+    uint64_t _ecn_detour_ce;
     RocePacket::seq_t _highest_seqno;
     struct OooPacketInfo {
         OooPacketInfo() : size(0), path_id(0), mrc_ev(UINT32_MAX) {}

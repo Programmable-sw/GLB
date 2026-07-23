@@ -28,6 +28,13 @@ def main():
     switch_cpp = read("sim/datacenter/fat_tree_switch.cpp")
     experiment_readme = read("experiments/n-mrc/README.md")
 
+    assert_contains(main_roce, "-nmrc_absolute_threshold VALUE", "N-MRC4 absolute threshold CLI")
+    assert_contains(main_roce, "nmrc_absolute_threshold_user_set", "N-MRC4 absolute threshold single-use state")
+    assert_contains(main_roce, "-nmrc_absolute_threshold requires -lb n-mrc4", "N-MRC4-only absolute threshold validation")
+    assert_contains(main_roce, "_nmrc_absolute_threshold = nmrc_absolute_threshold", "N-MRC4 absolute threshold assignment")
+    assert_contains(main_roce, "absolute_threshold=", "N-MRC4 resolved absolute threshold")
+    assert_contains(main_roce, "double nmrc_relative_delta = 0.25", "N-MRC4 relative delta default")
+
     assert_contains(main_roce, "netaware", "main_roce NetAware CLI")
     assert_contains(main_roce, "LB_NETAWARE", "main_roce NetAware mode")
     assert_contains(main_roce, "NetAware default queue_type composite_ecn_lb", "NetAware queue default")
