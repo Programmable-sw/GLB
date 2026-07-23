@@ -28,14 +28,12 @@ def main():
     switch_cpp = read("sim/datacenter/fat_tree_switch.cpp")
     experiment_readme = read("experiments/n-mrc/README.md")
 
-    assert_contains(main_roce, "-nmrc_absolute_threshold VALUE", "N-MRC4 absolute threshold CLI")
-    assert_contains(main_roce, "nmrc_absolute_threshold_user_set", "N-MRC4 absolute threshold single-use state")
-    assert_contains(main_roce, "-nmrc_absolute_threshold requires -lb n-mrc4", "N-MRC4-only absolute threshold validation")
-    assert_contains(main_roce, "_nmrc_absolute_threshold = nmrc_absolute_threshold", "N-MRC4 absolute threshold assignment")
-    assert_contains(main_roce, "absolute_threshold=", "N-MRC4 resolved absolute threshold")
-    assert_contains(main_roce, "double nmrc_relative_delta = 0.25", "N-MRC4 relative delta default")
-    assert_contains(main_roce, '"n-mrc5"', "piecewise N-MRC preset")
-    assert_contains(main_roce, "NMRC_NETWORK_PIECEWISE_DELTA", "piecewise N-MRC decision mode")
+    assert_contains(main_roce, '"n-mrc-fixed0.5"', "fixed-threshold N-MRC preset")
+    assert_contains(main_roce, '"n-mrc-delta"', "pure-delta N-MRC preset")
+    assert_contains(main_roce, "-nmrc_absolute_threshold requires -lb n-mrc-fixed0.5", "fixed-only absolute threshold validation")
+    assert_contains(main_roce, "double nmrc_relative_delta = 0.25", "N-MRC delta default")
+    assert_contains(main_roce, "NMRC_NETWORK_FIXED_THRESHOLD", "fixed-threshold decision mode")
+    assert_contains(main_roce, "NMRC_NETWORK_DELTA", "pure-delta decision mode")
     assert_contains(switch_cpp, "_nmrc_piecewise_delta_below = 0.25", "piecewise lower-score delta")
     assert_contains(switch_cpp, "_nmrc_piecewise_delta_above = 0.15", "piecewise higher-score delta")
 
@@ -56,7 +54,8 @@ def main():
     assert_contains(main_roce, "-netaware_score_weights w_lq w_rq w_lu w_ru", "NetAware SGLB-style score weights CLI")
     assert_contains(main_roce, "-netaware_score_level_thresholds degraded bad avoid", "NetAware score quantization thresholds CLI")
     assert_contains(main_roce, "-netaware_level_weights good degraded bad avoid", "NetAware endpoint level weights CLI")
-    assert_contains(main_roce, "-netaware_wrr_mode shuffled_bucket|bucket|direct", "NetAware WRR mode CLI")
+    assert_contains(main_roce, "-netaware_wrr_mode shuffled_bucket|bucket|direct|topk", "NetAware WRR mode CLI")
+    assert_contains(main_roce, "-netaware_topk k", "NetAware hard top-k size CLI")
     assert_contains(main_roce, "-netaware_weight_adaptation off|good_share_cap", "consolidated NetAware weight adaptation CLI")
     assert_absent(main_roce, "-netaware_max_path_share_multiplier", "removed ShareCap parameter")
     assert_absent(main_roce, "-netaware_soft_weight_beta_min", "removed ProfileSoft parameter")
@@ -76,7 +75,7 @@ def main():
     assert_contains(main_roce, "_netaware_enabled = roce_lb_mode == RoceSrc::LB_NETAWARE", "NetAware switch enable")
 
     assert_contains(roce_h, "LB_NETAWARE", "RoceSrc lb enum")
-    assert_contains(roce_cpp, "if (_lb_mode == LB_NETAWARE)", "NetAware endpoint level path")
+    assert_contains(roce_cpp, "if (_flow_lb_mode == LB_NETAWARE", "NetAware endpoint level path")
     assert_contains(roce_cpp, "choose_netaware_path(priority, path_space)", "NetAware endpoint selector call")
     assert_contains(roce_cpp, "void RoceSrc::update_netaware", "NetAware endpoint feedback update")
     assert_contains(roce_cpp, "_lb_mode != LB_NETAWARE || !ack.has_netaware_feedback()", "NetAware endpoint feedback update")
@@ -129,13 +128,14 @@ def main():
             assert_absent(text, obsolete, path)
     assert_contains(roce_cpp, "choose_netaware_direct_path", "NetAware direct per-path WRR")
     assert_contains(roce_cpp, "choose_netaware_virtual_bucket_path", "NetAware virtual shuffled bucket WRR")
+    assert_contains(roce_cpp, "choose_netaware_topk_path", "NetAware hard top-k selector")
     assert_contains(roce_h, "weightedShuffledBucketSize", "dynamic K=4P shuffled bucket size")
     assert_contains(roce_cpp, "_netaware_level_weights[level] * (uint64_t)level_counts[level]", "NetAware count-weighted buckets")
     assert_contains(roce_h, "netawareLevelWeight", "NetAware level weight access")
     assert_contains(main_roce, "RoceSrc::setNetawareLevelWeights", "main_roce NetAware level weight parser")
     for forbidden in ("_netaware_shuffled_bucket", "_netaware_shuffled_tickets",
                       "_dtor_path_bitmap", "_stor_levels", "_netaware_levels",
-                      "NETAWARE_WRR_TOPK", "_netaware_latched_profiles",
+                      "_netaware_latched_profiles",
                       "NetawareProfilePtr"):
         if forbidden in roce_h:
             raise AssertionError(

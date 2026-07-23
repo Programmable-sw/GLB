@@ -270,49 +270,41 @@ NetAware 的 feedback cadence 固定在运行时实现中，不再保留反馈�
 
 ## `n-mrc`
 
-新的 `n-mrc` 不再接收 5us full snapshot。每个 QP 建立自己的 EV set，按确定性打乱后的顺序逐包轮询；收到 PATH_REROUTE 通知后只把该 EV 跳过一个完整轮次。重复的在途通知不延长当前冷却，冷却结束后若下一次使用仍被源 Leaf 换路，会产生新的通知和新一轮冷却。
+`n-mrc` 保留原版四级判定，是默认 N-MRC。源 Leaf 将当前路径与候选路径量化为 GOOD/DEGRADED/BAD/AVOID；满足原有严格升档条件时，换路与 FastCNP 成对发生。FastCNP 的 `PATH_REROUTE` 只通知源端冷却原 EV，不触发 DCQCN 降速；普通 ECN/ECN_ECHO 仍独立承担拥塞控制。
 
-支持三种 EV 构造：
+默认配置为 `encoded + better_ge3 + FastCNP on + rr_cooldown`。端侧按确定性打乱的 EV 顺序逐包轮询，收到换路通知后跳过原 EV 一个完整轮次。
 
-- `encoded`：使用 `min(P,32)` 个路径唯一编码。`P <= 32` 时各 QP 成员相同但顺序独立打乱；`P > 32` 时各 QP 独立抽取 32 条路径。
-- `random_matched`：生成 `min(P,32)` 个互异的 16-bit EV，再由 flow+EV hash 映射到物理路径，允许多 EV 映到同一路径。
-- `random32`：固定生成 32 个互异的 16-bit EV。它只在 `P < 32` 时与 `random_matched` 有区别。
+## `n-mrc-fixed0.5`
 
-源主机发出的 data packet 到达第一跳 Leaf 后，Leaf 复用 SGLB 的周期队列状态与四级量化。若原 EV 路径存在严格更高等级候选，则按配置执行：
+该分支是原 `n-mrc4` 的直接改名，保留已完成实验的实际语义。只有以下三个条件同时满足时才执行 reroute + FastCNP：
 
-- `any_better`：只要存在一条严格更优路径就换路；
-- `better_ge3`：严格更优路径至少有 3 条才换路。
-
-当前默认是 `encoded + better_ge3 + FastCNP on`。P=8、seeds 13/29/47 的六负载缩减矩阵中，`better_ge3` 相比 `any_better` 降低热点 p99 并显著减少路径通知；其它模式继续作为显式对比入口。
-
-实际换路后，第一跳 Leaf 生成 64-byte、高优先级的 FastCNP 格式控制包，经交换机 pipe、host-facing 控制队列和反向链路到达源端。它的 cause 固定为 `PATH_REROUTE`，携带原 EV、PSN、原/新 egress、原/新等级、触发交换机和时间。端侧走独立的路径通知入口，只冷却 EV，不调用 DCQCN，也不更改 ACK、RTT、RTO、重传或窗口状态。后续交换机仍可正常 CE 标记，接收端仍按原端到端环路回送 `ECN_ECHO`。
-
-运行接口：
-
-```bash
--lb n-mrc
--nmrc_ev_mode encoded|random_matched|random32
--nmrc_reroute_policy any_better|better_ge3
--nmrc_fastcnp on|off
+```text
+original_score >= 0.5
+candidate_score < 0.5
+original_score - candidate_score >= 0.25
 ```
 
-`-nmrc_fastcnp off` 只关闭真实控制包与端侧冷却，网侧严格升档换路仍保留，便于做消融。完整对比 runner 覆盖六类 workload、六个内部组合和 SGLB/AR/NetAware/MRC/REPS baseline；MRC 显式固定 one-cycle/earliest，REPS 显式固定 8-entry buffer。其中受控 path-hotspot 留两条干净路径，使坏路径恰有两个严格更优候选，能够直接区分两种换路门槛：
+默认 `absolute_threshold=0.5`、`relative_delta=0.25`。可用 `-nmrc_absolute_threshold` 和 `-nmrc_relative_delta` 显式调整；候选路径仍必须低于绝对阈值。
 
-```bash
-python3 experiments/n-mrc/run_hybrid_nmrc_compare.py --dry-run --quick
-python3 experiments/n-mrc/run_hybrid_nmrc_compare.py --quick --nodes 128 \
-  --seeds 13,29,47 --out experiments/n-mrc/output/hybrid_nmrc_compare_p8_3seed
-python3 experiments/n-mrc/run_hybrid_nmrc_compare.py --quick --nodes 2048 \
-  --seeds 13 --scenarios healthy_permutation,path_hotspot \
-  --out experiments/n-mrc/output/hybrid_nmrc_compare_p32_reduced_seed13
+## `n-mrc-delta`
+
+该分支只比较相对路径质量，不设绝对 0.5 门槛：
+
+```text
+original_score - candidate_score >= delta
+→ reroute + FastCNP
 ```
 
-输出目录包含 `commands.tsv`、`summary.csv`、逐 case raw log 和 `hybrid_nmrc_compare_for_gpt.md`。同一 scenario/seed 内固定 traffic SHA-256 和全部 transport/CC/queue 参数；当 `P >= 32` 时 runner 自动去掉等价的 `random32` case。
+默认 `delta=0.25`，用 `-nmrc_relative_delta` 调整。换路和 FastCNP 是同一配对动作；若 FastCNP 无法沿反向路径注入，则当前包不执行该次换路。
 
-已纳入仓库的历史审计证据（扩入 MRC/REPS baseline 前）：
+公开 N-MRC 入口只保留 `n-mrc`、`n-mrc-fixed0.5` 和 `n-mrc-delta`。旧实验名 `n-mrc-allcool-rr-reset`、`n-mrc1/2/4/5/6/7` 不再是可运行方案。
 
-- P=8、3 seeds、162 个 case：[`report`](output/hybrid_nmrc_compare_p8_3seed/hybrid_nmrc_compare_for_gpt.md)、[`summary.csv`](output/hybrid_nmrc_compare_p8_3seed/summary.csv)、[`commands.tsv`](output/hybrid_nmrc_compare_p8_3seed/commands.tsv)；
-- P=32、1 seed、14 个缩放 case：[`report`](output/hybrid_nmrc_compare_p32_reduced_seed13/hybrid_nmrc_compare_for_gpt.md)、[`summary.csv`](output/hybrid_nmrc_compare_p32_reduced_seed13/summary.csv)、[`commands.tsv`](output/hybrid_nmrc_compare_p32_reduced_seed13/commands.tsv)。
+### 后续考虑方向
+
+以下仅记录机制方向，当前不提供 `-lb` 入口：
+
+1. **分段 delta**：以 0.5 为分界，在 0.5 前后使用不同 delta，以较小的高拥塞区 delta 加快绕路，同时用较大的低拥塞区 delta 抑制瞬时抖动。
+2. **换路与冷却分级**：原路径绝对分数超过 0.5 即可换路，但只有相对分差达到更高阈值时，FastCNP 才携带 `cooldown 标志位`；无该标志的 FastCNP 只记录换路，不让端侧冷却 EV。
 
 ## `mrc`
 

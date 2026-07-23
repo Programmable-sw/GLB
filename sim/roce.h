@@ -70,7 +70,8 @@ public:
     typedef enum {
         NETAWARE_WRR_BUCKET = 0,
         NETAWARE_WRR_DIRECT = 1,
-        NETAWARE_WRR_SHUFFLED_BUCKET = 2
+        NETAWARE_WRR_SHUFFLED_BUCKET = 2,
+        NETAWARE_WRR_TOPK = 3
     } netaware_wrr_mode_t;
     typedef enum {
         NETAWARE_WEIGHT_ADAPTATION_OFF = 0,
@@ -110,6 +111,13 @@ public:
     void setRate(linkspeed_bps r) {_bitrate = r; update_packet_spacing(); doNextEvent();}
 
     inline void set_flowid(flowid_t flow_id) { _flow.set_flowid(flow_id);}
+    inline void set_flow_ecmp_override(bool enabled) {
+        _flow_lb_mode = enabled ? LB_ECMP : _lb_mode;
+        _flow.set_background_traffic(enabled);
+    }
+    inline bool background_traffic() const {
+        return _flow.background_traffic();
+    }
 
 
     static void setMinRTO(uint32_t min_rto_in_us) {_min_rto = timeFromUs((uint32_t)min_rto_in_us);}
@@ -178,6 +186,8 @@ public:
     static void setNetawareWrrMode(netaware_wrr_mode_t mode) {_netaware_wrr_mode = mode;}
     static netaware_wrr_mode_t netawareWrrMode() {return _netaware_wrr_mode;}
     static const char* netawareWrrModeName();
+    static void setNetawareTopK(uint32_t k) {_netaware_topk = k ? k : 1;}
+    static uint32_t netawareTopK() {return _netaware_topk;}
     static void setNetawareWeightAdaptation(netaware_weight_adaptation_t mode);
     static netaware_weight_adaptation_t netawareWeightAdaptation();
     static const char* netawareWeightAdaptationName();
@@ -510,6 +520,7 @@ public:
     static uint32_t _ooo_window_pkts;
     static simtime_picosec _nack_interval;
     static lb_mode_t _lb_mode;
+    lb_mode_t _flow_lb_mode;
     static uint32_t _path_entropy_size;
     static nmrc_ev_mode_t _nmrc_ev_mode;
     static uint32_t _nmrc_ev_seed;
@@ -695,6 +706,7 @@ private:
     uint32_t choose_netaware_direct_path(uint32_t prio, uint32_t path_space);
     uint32_t choose_netaware_bucket_path(uint32_t prio, uint32_t path_space);
     uint32_t choose_netaware_virtual_bucket_path(uint32_t prio, uint32_t path_space);
+    uint32_t choose_netaware_topk_path(uint32_t prio, uint32_t path_space);
     uint32_t choose_virtual_binary_path(uint32_t prio, uint32_t path_space,
                                         const StorFeedbackLevels& levels,
                                         uint64_t profile_version,
@@ -807,6 +819,7 @@ private:
     static std::array<uint32_t, 4> _stor_level_weights;
     static std::array<uint32_t, 4> _netaware_level_weights;
     static netaware_wrr_mode_t _netaware_wrr_mode;
+    static uint32_t _netaware_topk;
     static netaware_weight_adaptation_t _netaware_weight_adaptation;
     static bool _stor_binary_selector;
     static std::ostream* _netaware_decision_trace;

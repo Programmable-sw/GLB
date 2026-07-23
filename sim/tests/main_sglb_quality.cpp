@@ -156,7 +156,7 @@ static void test_nmrc_relative_delta_selector() {
     std::vector<bool> available(4, true);
 
     FatTreeSwitch::NmrcRelativeDecision d =
-        FatTreeSwitch::nmrc_select_relative_delta_path(
+        FatTreeSwitch::nmrc_select_fixed_threshold_path(
             0, scores, valid, available, 0.50, 0.30, 1);
     expect(d.reroute && d.candidate_count == 2,
            "delta selector must admit every path at least Delta better");
@@ -167,13 +167,13 @@ static void test_nmrc_relative_delta_selector() {
            "delta selector must expose the committed score gap");
 
     scores[1] = 0.4000000000005;
-    d = FatTreeSwitch::nmrc_select_relative_delta_path(
+    d = FatTreeSwitch::nmrc_select_fixed_threshold_path(
         0, scores, valid, available, 0.50, 0.30, 0);
     expect(d.reroute,
            "the documented epsilon must admit a representational boundary");
 
     valid[0] = false;
-    d = FatTreeSwitch::nmrc_select_relative_delta_path(
+    d = FatTreeSwitch::nmrc_select_fixed_threshold_path(
         0, scores, valid, available, 0.50, 0.30, 0);
     expect(!d.reroute &&
                d.reason == FatTreeSwitch::NMRC_RELATIVE_ORIGINAL_UNKNOWN,
@@ -183,7 +183,7 @@ static void test_nmrc_relative_delta_selector() {
     available[1] = false;
     available[2] = false;
     scores[3] = 0.45;
-    d = FatTreeSwitch::nmrc_select_relative_delta_path(
+    d = FatTreeSwitch::nmrc_select_fixed_threshold_path(
         0, scores, valid, available, 0.50, 0.30, 0);
     expect(!d.reroute &&
                d.reason == FatTreeSwitch::NMRC_RELATIVE_NO_DELTA_CANDIDATE,
@@ -192,14 +192,14 @@ static void test_nmrc_relative_delta_selector() {
     scores = {0.95, 0.60};
     valid.assign(2, true);
     available.assign(2, true);
-    d = FatTreeSwitch::nmrc_select_relative_delta_path(
+    d = FatTreeSwitch::nmrc_select_fixed_threshold_path(
         0, scores, valid, available, 0.50, 0.30, 0);
     expect(!d.reroute &&
                d.reason == FatTreeSwitch::NMRC_RELATIVE_NO_SAFE_CANDIDATE,
            "absolute gate must reject a replacement that is also congested");
 
     scores = {0.49, 0.10};
-    d = FatTreeSwitch::nmrc_select_relative_delta_path(
+    d = FatTreeSwitch::nmrc_select_fixed_threshold_path(
         0, scores, valid, available, 0.50, 0.30, 0);
     expect(!d.reroute &&
                d.reason ==
@@ -207,13 +207,13 @@ static void test_nmrc_relative_delta_selector() {
            "absolute gate must leave a non-congested original path alone");
 
     scores = {0.70, 0.45};
-    d = FatTreeSwitch::nmrc_select_relative_delta_path(
+    d = FatTreeSwitch::nmrc_select_fixed_threshold_path(
         0, scores, valid, available, 0.50, 0.30, 0);
     expect(!d.reroute &&
                d.reason == FatTreeSwitch::NMRC_RELATIVE_NO_DELTA_CANDIDATE,
            "safe replacements must still satisfy the relative delta");
 
-    d = FatTreeSwitch::nmrc_select_relative_delta_path(
+    d = FatTreeSwitch::nmrc_select_fixed_threshold_path(
         0, scores, valid, available,
         std::numeric_limits<double>::quiet_NaN(), 0.30, 0);
     expect(!d.reroute &&
@@ -969,7 +969,7 @@ int main() {
             original_queue->receivePacket(*background);
         }
         FatTreeSwitch::_nmrc_network_decision_mode =
-            FatTreeSwitch::NMRC_NETWORK_RELATIVE_DELTA;
+            FatTreeSwitch::NMRC_NETWORK_FIXED_THRESHOLD;
         FatTreeSwitch::_nmrc_absolute_threshold = 0.50;
         FatTreeSwitch::_nmrc_relative_delta = 0.30;
         RocePacket* relative_data = RocePacket::newpkt(

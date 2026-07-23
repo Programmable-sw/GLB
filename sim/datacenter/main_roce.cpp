@@ -748,8 +748,10 @@ const char* nmrc_network_decision_name(
         return "graded";
     case FatTreeSwitch::NMRC_NETWORK_BINARY_SCORE:
         return "binary_score";
-    case FatTreeSwitch::NMRC_NETWORK_RELATIVE_DELTA:
-        return "relative_delta";
+    case FatTreeSwitch::NMRC_NETWORK_FIXED_THRESHOLD:
+        return "fixed_threshold";
+    case FatTreeSwitch::NMRC_NETWORK_DELTA:
+        return "delta";
     case FatTreeSwitch::NMRC_NETWORK_PIECEWISE_DELTA:
         return "piecewise_delta";
     case FatTreeSwitch::NMRC_NETWORK_TWO_STAGE_DELTA:
@@ -761,12 +763,8 @@ const char* nmrc_network_decision_name(
 }
 
 void exit_error(char* progr) {
-    cout << "Usage " << progr << " [-nodes N]\n\t[-conns C]\n\t[-q queue_size]\n\t[-queue_type composite|composite_ecn|composite_ecn_lb|lossless|lossless_input|lossless_input_ecn]\n\t[-tm traffic_matrix_file]\n\t[-lb ecmp|ecmp_rr|adaptive-routing|sglb|drill|reps|avail|grade|mrc|netaware|n-mrc|n-mrc-allcool-rr-reset|n-mrc1|n-mrc2|n-mrc4|rr|ops|conweave|ndp]\n\t[-cc none|dcqcn|dcqcn_variant|mprdma]\n\t[-cc_iw_pkts pkts]\n\t[-cc_min_cwnd_pkts pkts]\n\t[-cc_max_cwnd_pkts pkts]\n\t[-dcqcn_g x]\n\t[-dcqcn_initial_alpha x]\n\t[-dcqcn_ai_mbps x]\n\t[-dcqcn_min_rate_mbps x]\n\t[-dcqcn_alpha_us x]\n\t[-dcqcn_rate_us x]\n\t[-dcqcn_cnp_us x]\n\t[-dcqcn_byte_counter bytes]\n\t[-dcqcn_fast_recovery_steps N]\n\t[-roce_rx_mode gbn|sp]\n\t[-roce_ooo_us x]\n\t[-roce_loss_trace_window_pkts N]\n\t[-roce_ooo_window_pkts N]\n\t[-roce_bdp_bytes bytes]\n\t[-roce_nack_interval_us x]\n\t[-roce_rto_us x]\n\t[-roce_rto_high_us x]\n\t[-seed random_seed]\n\t[-end end_time_in_usec]\n\t[-mtu MTU]\n\t[-linkspeed Mbps]\n\t[-hop_latency us]\n\t[-switch_latency us]\n\t[-slow_tor_uplinks N]\n\t[-slow_tor_uplink_divisor N]\n\t[-slow_tor_uplink_select spaced|random-sparse]\n\t[-ecn_thresh kmax_fraction]\n\t[-mrc_cooldown_mode cwnd_scaled|one_cycle]\n\t[-mrc_cooldown_reference_pkts N]\n\t[-mrc_all_cooling_fallback earliest|round_robin]\n\t[-mrc_failed_retry_us x]\n\t[-mrc_probe_interval_pkts N]\n\t[-conweave_rtt_us x]\n\t[-ndp_cwnd pkts]\n\t[-pfc_thresholds low high]" << endl;
+    cout << "Usage " << progr << " [-nodes N] [-conns C] [-q queue_size] [-tm traffic_matrix_file]\\n\\t[-lb ecmp|ecmp_rr|adaptive-routing|sglb|drill|reps|avail|grade|mrc|netaware|n-mrc|n-mrc-fixed0.5|n-mrc-delta|rr|ops|conweave|ndp]\\n\\t[-cc none|dcqcn|dcqcn_variant|mprdma]" << endl;
     cout << "\t[-roce_sack_bitmap_bits 64|128]" << endl;
-    cout << "\tAdditional LB preset: n-mrc5 (piecewise delta 0.25/0.15)"
-         << endl;
-    cout << "\tAdditional LB preset: n-mrc6 (two-stage delta)" << endl;
-    cout << "\tAdditional LB preset: n-mrc7 (absolute reroute, delta cooldown)" << endl;
     cout << "\t[-roce_transport_semantics legacy|mrc_exact_bounded]" << endl;
     cout << "\t[-roce_trim_recovery cumulative|exact]" << endl;
     cout << "\t[-cc dcqcn_variant_nodup_old]" << endl;
@@ -804,7 +802,8 @@ void exit_error(char* progr) {
     cout << "\t[-netaware_score_weights w_lq w_rq w_lu w_ru]" << endl;
     cout << "\t[-netaware_score_level_thresholds degraded bad avoid]" << endl;
     cout << "\t[-netaware_level_weights good degraded bad avoid]" << endl;
-    cout << "\t[-netaware_wrr_mode shuffled_bucket|bucket|direct]" << endl;
+    cout << "\t[-netaware_wrr_mode shuffled_bucket|bucket|direct|topk]" << endl;
+    cout << "\t[-netaware_topk k]" << endl;
     cout << "\t[-netaware_weight_adaptation off|good_share_cap]" << endl;
     cout << "\t[-netaware_trace_prefix prefix] [-netaware_trace_period_us x]" << endl;
     cout << "\t[-nmrc_ev_mode encoded|random_matched|random32]" << endl;
@@ -812,12 +811,13 @@ void exit_error(char* progr) {
     cout << "\t[-nmrc_fastcnp on|off]" << endl;
     cout << "\t[-nmrc_endpoint_policy rr_cooldown|random_stateless]" << endl;
     cout << "\t[-nmrc_all_cooling_policy earliest|rr_reset]" << endl;
-    cout << "\t[-nmrc_network_decision graded|binary_score|relative_delta]" << endl;
+    cout << "\t[-nmrc_network_decision graded|fixed_threshold|delta]" << endl;
     cout << "\t[-nmrc_binary_threshold 0.5]" << endl;
     cout << "\t[-nmrc_absolute_threshold VALUE]" << endl;
     cout << "\t[-nmrc_relative_delta VALUE]" << endl;
     cout << "\t[-nmrc_route_delta VALUE] [-nmrc_cooldown_delta VALUE]" << endl;
     cout << "\t[-queue_cv_sample_us x]" << endl;
+    cout << "\t[-mixed_lb_traffic]" << endl;
     exit(1);
 }
 
@@ -882,6 +882,7 @@ int main(int argc, char **argv) {
     uint32_t slow_tor_uplink_divisor = 2;
     bool slow_tor_uplink_random_sparse = false;
     bool sglb_background = false;
+    bool mixed_lb_traffic = false;
     double sglb_bg_rate_gbps = 350.0;
     double sglb_bg_on_us = 200.0;
     double sglb_bg_off_us = 200.0;
@@ -1066,6 +1067,9 @@ int main(int argc, char **argv) {
             }
             cout << "host queue_type "<< snd_type << endl;
             i++;
+        } else if (!strcmp(argv[i],"-mixed_lb_traffic")){
+            mixed_lb_traffic = true;
+            cout << "Mixed LB traffic enabled" << endl;
         } else if (!strcmp(argv[i],"-log")){
             if (!strcmp(argv[i+1], "sink")) {
                 log_sink = true;
@@ -1154,41 +1158,16 @@ int main(int argc, char **argv) {
                 FatTreeSwitch::set_strategy(FatTreeSwitch::ECMP);
                 roce_lb_mode = RoceSrc::LB_NMRC;
                 lb_scheme_name = "n-mrc";
-            } else if (!strcmp(argv[i+1], "n-mrc-allcool-rr-reset")) {
+            } else if (!strcmp(argv[i+1], "n-mrc-fixed0.5")) {
                 route_strategy = ECMP_FIB;
                 FatTreeSwitch::set_strategy(FatTreeSwitch::ECMP);
                 roce_lb_mode = RoceSrc::LB_NMRC;
-                lb_scheme_name = "n-mrc-allcool-rr-reset";
-            } else if (!strcmp(argv[i+1], "n-mrc1")) {
+                lb_scheme_name = "n-mrc-fixed0.5";
+            } else if (!strcmp(argv[i+1], "n-mrc-delta")) {
                 route_strategy = ECMP_FIB;
                 FatTreeSwitch::set_strategy(FatTreeSwitch::ECMP);
                 roce_lb_mode = RoceSrc::LB_NMRC;
-                lb_scheme_name = "n-mrc1";
-            } else if (!strcmp(argv[i+1], "n-mrc2")) {
-                route_strategy = ECMP_FIB;
-                FatTreeSwitch::set_strategy(FatTreeSwitch::ECMP);
-                roce_lb_mode = RoceSrc::LB_NMRC;
-                lb_scheme_name = "n-mrc2";
-            } else if (!strcmp(argv[i+1], "n-mrc4")) {
-                route_strategy = ECMP_FIB;
-                FatTreeSwitch::set_strategy(FatTreeSwitch::ECMP);
-                roce_lb_mode = RoceSrc::LB_NMRC;
-                lb_scheme_name = "n-mrc4";
-            } else if (!strcmp(argv[i+1], "n-mrc5")) {
-                route_strategy = ECMP_FIB;
-                FatTreeSwitch::set_strategy(FatTreeSwitch::ECMP);
-                roce_lb_mode = RoceSrc::LB_NMRC;
-                lb_scheme_name = "n-mrc5";
-            } else if (!strcmp(argv[i+1], "n-mrc6")) {
-                route_strategy = ECMP_FIB;
-                FatTreeSwitch::set_strategy(FatTreeSwitch::ECMP);
-                roce_lb_mode = RoceSrc::LB_NMRC;
-                lb_scheme_name = "n-mrc6";
-            } else if (!strcmp(argv[i+1], "n-mrc7")) {
-                route_strategy = ECMP_FIB;
-                FatTreeSwitch::set_strategy(FatTreeSwitch::ECMP);
-                roce_lb_mode = RoceSrc::LB_NMRC;
-                lb_scheme_name = "n-mrc7";
+                lb_scheme_name = "n-mrc-delta";
             } else if (!strcmp(argv[i+1], "mrc")) {
                 route_strategy = ECMP_FIB;
                 FatTreeSwitch::set_strategy(FatTreeSwitch::ECMP);
@@ -2044,11 +2023,19 @@ int main(int argc, char **argv) {
             } else if (!strcmp(argv[i+1], "direct")) {
                 RoceSrc::setNetawareWrrMode(RoceSrc::NETAWARE_WRR_DIRECT);
                 cout << "netaware WRR mode direct" << endl;
+            } else if (!strcmp(argv[i+1], "topk")) {
+                RoceSrc::setNetawareWrrMode(RoceSrc::NETAWARE_WRR_TOPK);
+                cout << "netaware WRR mode topk" << endl;
             } else {
                 cerr << "Invalid netaware WRR mode " << argv[i+1]
-                     << "; expected shuffled_bucket, bucket, or direct" << endl;
+                     << "; expected shuffled_bucket, bucket, direct, or topk" << endl;
                 exit(1);
             }
+            i++;
+        } else if (!strcmp(argv[i],"-netaware_topk")){
+            uint32_t k = atoi(argv[i+1]);
+            RoceSrc::setNetawareTopK(k);
+            cout << "netaware top-k size " << RoceSrc::netawareTopK() << endl;
             i++;
         } else if (!strcmp(argv[i],"-netaware_weight_adaptation")){
             if (i + 1 >= argc) {
@@ -2172,15 +2159,14 @@ int main(int argc, char **argv) {
             }
             if (!strcmp(argv[i+1], "graded"))
                 nmrc_network_decision = FatTreeSwitch::NMRC_NETWORK_GRADED;
-            else if (!strcmp(argv[i+1], "binary_score"))
+            else if (!strcmp(argv[i+1], "fixed_threshold"))
                 nmrc_network_decision =
-                    FatTreeSwitch::NMRC_NETWORK_BINARY_SCORE;
-            else if (!strcmp(argv[i+1], "relative_delta"))
-                nmrc_network_decision =
-                    FatTreeSwitch::NMRC_NETWORK_RELATIVE_DELTA;
+                    FatTreeSwitch::NMRC_NETWORK_FIXED_THRESHOLD;
+            else if (!strcmp(argv[i+1], "delta"))
+                nmrc_network_decision = FatTreeSwitch::NMRC_NETWORK_DELTA;
             else {
                 cerr << "invalid n-MRC network decision " << argv[i+1]
-                     << "; expected graded, binary_score, or relative_delta"
+                     << "; expected graded, fixed_threshold, or delta"
                      << endl;
                 exit(1);
             }
@@ -2514,26 +2500,19 @@ int main(int argc, char **argv) {
         cerr << "MRC cooldown reference override requires -lb mrc" << endl;
         exit(1);
     }
-    if (nmrc_relative_delta_user_set && lb_scheme_name != "n-mrc4") {
-        cerr << "-nmrc_relative_delta requires -lb n-mrc4" << endl;
+    if (nmrc_relative_delta_user_set &&
+        lb_scheme_name != "n-mrc-fixed0.5" &&
+        lb_scheme_name != "n-mrc-delta") {
+        cerr << "-nmrc_relative_delta requires -lb n-mrc-fixed0.5 or n-mrc-delta" << endl;
         exit(1);
     }
-    if (nmrc_absolute_threshold_user_set && lb_scheme_name != "n-mrc4") {
-        cerr << "-nmrc_absolute_threshold requires -lb n-mrc4" << endl;
+    if (nmrc_absolute_threshold_user_set &&
+        lb_scheme_name != "n-mrc-fixed0.5") {
+        cerr << "-nmrc_absolute_threshold requires -lb n-mrc-fixed0.5" << endl;
         exit(1);
     }
-    if (nmrc_route_delta_user_set && lb_scheme_name != "n-mrc6") {
-        cerr << "-nmrc_route_delta requires -lb n-mrc6" << endl;
-        exit(1);
-    }
-    if (nmrc_cooldown_delta_user_set && lb_scheme_name != "n-mrc6" &&
-        lb_scheme_name != "n-mrc7") {
-        cerr << "-nmrc_cooldown_delta requires -lb n-mrc6 or n-mrc7" << endl;
-        exit(1);
-    }
-    if (lb_scheme_name == "n-mrc6" &&
-        nmrc_route_delta > nmrc_cooldown_delta) {
-        cerr << "n-mrc6 requires route_delta <= cooldown_delta" << endl;
+    if (nmrc_route_delta_user_set || nmrc_cooldown_delta_user_set) {
+        cerr << "-nmrc_route_delta and -nmrc_cooldown_delta are reserved for future work" << endl;
         exit(1);
     }
     if (nmrc_option_user_set && roce_lb_mode != RoceSrc::LB_NMRC) {
@@ -2549,22 +2528,10 @@ int main(int argc, char **argv) {
             FatTreeSwitch::NMRC_NETWORK_GRADED;
         bool required_fastcnp = true;
 
-        if (lb_scheme_name == "n-mrc-allcool-rr-reset") {
-            required_all_cooling = RoceSrc::NMRC_ALL_COOLING_RR_RESET;
-        } else if (lb_scheme_name == "n-mrc1") {
-            required_endpoint = RoceSrc::NMRC_ENDPOINT_RANDOM_STATELESS;
-            required_fastcnp = false;
-        } else if (lb_scheme_name == "n-mrc2") {
-            required_network = FatTreeSwitch::NMRC_NETWORK_BINARY_SCORE;
-        } else if (lb_scheme_name == "n-mrc4") {
-            required_network = FatTreeSwitch::NMRC_NETWORK_RELATIVE_DELTA;
-        } else if (lb_scheme_name == "n-mrc5") {
-            required_network = FatTreeSwitch::NMRC_NETWORK_PIECEWISE_DELTA;
-        } else if (lb_scheme_name == "n-mrc6") {
-            required_network = FatTreeSwitch::NMRC_NETWORK_TWO_STAGE_DELTA;
-        } else if (lb_scheme_name == "n-mrc7") {
-            required_network = FatTreeSwitch::NMRC_NETWORK_ABSOLUTE_REROUTE;
-        }
+        if (lb_scheme_name == "n-mrc-fixed0.5")
+            required_network = FatTreeSwitch::NMRC_NETWORK_FIXED_THRESHOLD;
+        else if (lb_scheme_name == "n-mrc-delta")
+            required_network = FatTreeSwitch::NMRC_NETWORK_DELTA;
 
         const char* ev_mode_name =
             nmrc_ev_mode == RoceSrc::NMRC_EV_ENCODED ? "encoded" :
@@ -2597,8 +2564,8 @@ int main(int argc, char **argv) {
                  << "; requires encoded" << endl;
             exit(1);
         }
-        if ((lb_scheme_name == "n-mrc4" || lb_scheme_name == "n-mrc5" ||
-             lb_scheme_name == "n-mrc6" || lb_scheme_name == "n-mrc7") &&
+        if ((lb_scheme_name == "n-mrc-fixed0.5" ||
+             lb_scheme_name == "n-mrc-delta") &&
             nmrc_reroute_policy_user_set) {
             cerr << "n-MRC preset " << lb_scheme_name
                  << " does not allow -nmrc_reroute_policy" << endl;
@@ -2642,8 +2609,8 @@ int main(int argc, char **argv) {
                  << required_network_name << endl;
             exit(1);
         }
-        if ((lb_scheme_name == "n-mrc4" || lb_scheme_name == "n-mrc5" ||
-             lb_scheme_name == "n-mrc6" || lb_scheme_name == "n-mrc7") &&
+        if ((lb_scheme_name == "n-mrc-fixed0.5" ||
+             lb_scheme_name == "n-mrc-delta") &&
             nmrc_binary_threshold_user_set) {
             cerr << "n-MRC preset " << lb_scheme_name
                  << " does not allow -nmrc_binary_threshold" << endl;
@@ -3375,22 +3342,8 @@ int main(int argc, char **argv) {
             32 : min(path_space, 32U);
         const char* network_decision_name =
             nmrc_network_decision_name(nmrc_network_decision);
-        if (lb_scheme_name == "n-mrc6" || lb_scheme_name == "n-mrc7") {
-            cout << "HybridNmrcConfig ev_mode=" << ev_mode_name
-                 << " preset=" << lb_scheme_name
-                 << " endpoint_policy=" << RoceSrc::nmrcEndpointPolicyName()
-                 << " all_cooling_policy="
-                 << RoceSrc::nmrcAllCoolingPolicyName()
-                 << " network_decision=" << network_decision_name
-                 << " absolute_threshold=" << nmrc_absolute_threshold
-                 << " route_delta=" << nmrc_route_delta
-                 << " cooldown_delta=" << nmrc_cooldown_delta
-                 << " fastcnp=" << (nmrc_fastcnp ? "on" : "off")
-                 << " reroute_policy=n/a trim_cooldown=actual_path"
-                 << " paths=" << path_space
-                 << " ev_set_size=" << ev_set_size
-                 << " ev_mapping=path_unique" << endl;
-        } else if (lb_scheme_name == "n-mrc4" || lb_scheme_name == "n-mrc5") {
+        if (lb_scheme_name == "n-mrc-fixed0.5" ||
+            lb_scheme_name == "n-mrc-delta") {
             cout << "HybridNmrcConfig ev_mode=" << ev_mode_name
                  << " preset=" << lb_scheme_name
                  << " endpoint_policy=" << RoceSrc::nmrcEndpointPolicyName()
@@ -3399,10 +3352,6 @@ int main(int argc, char **argv) {
                  << " network_decision=" << network_decision_name
                  << " absolute_threshold=" << nmrc_absolute_threshold
                  << " relative_delta=" << nmrc_relative_delta
-                 << " delta_below="
-                 << FatTreeSwitch::_nmrc_piecewise_delta_below
-                 << " delta_above="
-                 << FatTreeSwitch::_nmrc_piecewise_delta_above
                  << " fastcnp=" << (nmrc_fastcnp ? "on" : "off")
                  << " reroute_policy=n/a"
                  << " trim_cooldown=actual_path"
@@ -3656,6 +3605,9 @@ int main(int argc, char **argv) {
             flowmap[crt->flowid] = roceSrc;
         }
 
+        if (mixed_lb_traffic)
+            roceSrc->set_flow_ecmp_override(c % 10 == 0);
+
         if (crt->trigger) {
             Trigger* trig = conns->getTrigger(crt->trigger, eventlist);
             trig->add_target(*roceSrc);
@@ -3744,6 +3696,13 @@ int main(int argc, char **argv) {
         if (log_sink) {
             sinkLogger.monitorSink(roceSnk);
         }
+    }
+
+    if (mixed_lb_traffic) {
+        size_t background_flows = (all_conns->size() + 9) / 10;
+        cout << "MixedLbDiag enabled=on total_flows=" << all_conns->size()
+             << " main_flows=" << all_conns->size() - background_flows
+             << " ecmp_background_flows=" << background_flows << endl;
     }
 
     for (size_t ix = 0; ix < no_of_nodes; ix++) {

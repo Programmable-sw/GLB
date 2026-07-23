@@ -253,7 +253,8 @@ flowid_t PacketFlow::_max_flow_id = FLOW_ID_DYNAMIC_BASE;
 
 PacketFlow::PacketFlow(TrafficLogger* logger)
     : Logged("PacketFlow"),
-      _logger(logger)
+      _logger(logger),
+      _background_traffic(false)
 {
     _flow_id = _max_flow_id++;
 }

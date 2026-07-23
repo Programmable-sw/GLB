@@ -127,6 +127,7 @@ std::map<std::pair<uint32_t, uint32_t>, RoceSrc::SharedWeightedProfile>
 std::array<uint32_t, 4> RoceSrc::_stor_level_weights = {{4, 2, 1, 0}};
 std::array<uint32_t, 4> RoceSrc::_netaware_level_weights = {{4, 2, 1, 0}};
 RoceSrc::netaware_wrr_mode_t RoceSrc::_netaware_wrr_mode = NETAWARE_WRR_SHUFFLED_BUCKET;
+uint32_t RoceSrc::_netaware_topk = 4;
 RoceSrc::netaware_weight_adaptation_t RoceSrc::_netaware_weight_adaptation =
     NETAWARE_WEIGHT_ADAPTATION_GOOD_SHARE_CAP;
 bool RoceSrc::_stor_binary_selector = false;
@@ -159,6 +160,8 @@ void RoceSrc::printDcqcnConfiguration(std::ostream& out) {
 }
 
 const char* RoceSrc::netawareWrrModeName() {
+    if (_netaware_wrr_mode == NETAWARE_WRR_TOPK)
+        return "topk";
     if (_netaware_wrr_mode == NETAWARE_WRR_DIRECT)
         return "direct";
     if (_netaware_wrr_mode == NETAWARE_WRR_SHUFFLED_BUCKET)
@@ -235,6 +238,7 @@ void RoceSrc::resetPathSelectionDiag() {
 RoceSrc::RoceSrc(RoceLogger* logger, TrafficLogger* pktlogger, EventList &eventlist, linkspeed_bps rate)
     : BaseQueue(rate,eventlist,NULL), _flow(pktlogger), _logger(logger)
 {
+    _flow_lb_mode = _lb_mode;
     _mss = Packet::data_packet_size();
     _end_trigger = NULL;
 
@@ -1029,13 +1033,13 @@ void RoceSrc::startflow(){
     _packets_sent = 0;
     _done = false;
     reset_congestion_control();
-    if (_lb_mode == LB_REPS)
+    if (_flow_lb_mode == LB_REPS)
         reset_reps_buffer();
-    if (_lb_mode == LB_MRC)
+    if (_flow_lb_mode == LB_MRC)
         reset_mrc_paths();
-    if (_lb_mode == LB_NMRC)
+    if (_flow_lb_mode == LB_NMRC)
         reset_nmrc_evs();
-    if (_lb_mode == LB_NDP) {
+    if (_flow_lb_mode == LB_NDP) {
         _ndp_pull_credit = _ndp_initial_window;
         _ndp_paths_ready = false;
     }
@@ -1259,12 +1263,12 @@ void RoceSrc::processNack(const RoceNack& nack){
     update_stor(nack);
     update_mrc_on_nack(nack);
     reset_rtx_timeout();
-    if (_lb_mode == LB_NDP) {
+    if (_flow_lb_mode == LB_NDP) {
         grant_ndp_credit();
         if (_state_send == READY)
             schedule_send_now();
     }
-    if (_lb_mode != LB_NDP && _state_send == READY &&
+    if (_flow_lb_mode != LB_NDP && _state_send == READY &&
         (has_retransmit_work() || congestion_window_allows_send()))
         schedule_send_now();
     trace_cc_state("nack_post", ackno, (int)nack.reason());
@@ -1339,7 +1343,7 @@ void RoceSrc::processAck(const RoceAck& ack) {
     if (has_feedback_ack) {
         _feedback_acks_received++;
     }
-    if (_lb_mode == LB_NETAWARE && ack.has_netaware_feedback()) {
+    if (_flow_lb_mode == LB_NETAWARE && ack.has_netaware_feedback()) {
         const NetawareFeedbackLevels& levels = ack.netaware_feedback();
         for (uint32_t i = 0; i < levels.size(); i++) {
             if (levels[i] >= STOR_LEVEL_BAD)
@@ -1356,19 +1360,22 @@ void RoceSrc::processAck(const RoceAck& ack) {
     update_stor(ack);
     update_netaware(ack);
     update_mrc_on_ack(ack);
-    if (_lb_mode == LB_NDP && !_done) {
+    if (_flow_lb_mode == LB_NDP && !_done) {
         grant_ndp_credit();
         if (_state_send == READY)
             schedule_send_now();
     }
-    if (_lb_mode != LB_NDP && !_done && _state_send == READY &&
+    if (_flow_lb_mode != LB_NDP && !_done && _state_send == READY &&
         (has_retransmit_work() || congestion_window_allows_send()))
         schedule_send_now();
 
     if (_log_me)
         cout << "Src " << get_id() << " ackno " << ackno << endl;
     if (ackno >= _flow_size){
-        cout << "Flow " << _name << " " << get_id() << " finished at " << timeAsUs(eventlist().now()) << " total bytes " << ackno << endl;
+        cout << "Flow " << _name << " " << get_id() << " finished at "
+             << timeAsUs(eventlist().now()) << " total bytes " << ackno
+             << " bg traffic " << (background_traffic() ? 1 : 0)
+             << " flowid " << flow_id() << endl;
         _done = true;
         reset_nmrc_all_cooling_rr_episode();
         _rtx_timeout = timeInf;
@@ -1838,7 +1845,7 @@ uint32_t RoceSrc::virtual_selector_key(uint32_t prio,
 }
 
 void RoceSrc::update_stor(const RoceAck& ack) {
-    if (_lb_mode != LB_STOR || !ack.has_stor_feedback())
+    if (_flow_lb_mode != LB_STOR || !ack.has_stor_feedback())
         return;
 
     uint32_t path_space = _path_entropy_size ? _path_entropy_size : 1;
@@ -1846,7 +1853,7 @@ void RoceSrc::update_stor(const RoceAck& ack) {
 }
 
 void RoceSrc::update_stor(const RoceNack& nack) {
-    if (_lb_mode != LB_STOR || !nack.has_stor_feedback())
+    if (_flow_lb_mode != LB_STOR || !nack.has_stor_feedback())
         return;
 
     uint32_t path_space = _path_entropy_size ? _path_entropy_size : 1;
@@ -1938,7 +1945,7 @@ uint32_t RoceSrc::choose_netaware_bucket_path(uint32_t prio, uint32_t path_space
 
 uint32_t RoceSrc::choose_netaware_virtual_bucket_path(uint32_t prio,
                                                   uint32_t path_space) {
-    bool stor_mode = _lb_mode == LB_STOR;
+    bool stor_mode = _flow_lb_mode == LB_STOR;
     SharedWeightedProfile& profile = stor_mode ?
         shared_stor_profile(path_space) : shared_netaware_profile(path_space);
     const StorFeedbackLevels& levels = profile.levels;
@@ -1966,6 +1973,34 @@ uint32_t RoceSrc::choose_netaware_virtual_bucket_path(uint32_t prio,
     return choose_virtual_binary_path(prio, path_space, levels,
                                       profile.version,
                                       stor_mode ? 0x53544642 : 0x4e4d4642);
+}
+
+uint32_t RoceSrc::choose_netaware_topk_path(uint32_t prio,
+                                             uint32_t path_space) {
+    SharedWeightedProfile& profile = shared_netaware_profile(path_space);
+    const StorFeedbackLevels& levels = profile.levels;
+    std::vector<std::pair<uint8_t, uint32_t> > ranked;
+    ranked.reserve(path_space);
+    for (uint32_t ev = 0; ev < path_space; ev++) {
+        uint8_t level = ev < levels.size() ? levels[ev] : STOR_LEVEL_GOOD;
+        if (level > STOR_LEVEL_AVOID)
+            level = STOR_LEVEL_GOOD;
+        ranked.push_back(std::make_pair(level, ev));
+    }
+    std::sort(ranked.begin(), ranked.end());
+    uint32_t k = std::min(_netaware_topk, path_space);
+    if (k == 0)
+        k = 1;
+    uint64_t ordinal = _virtual_selector_counter[prio]++;
+    uint64_t epoch = ordinal / k;
+    uint32_t position = (uint32_t)(ordinal % k);
+    uint32_t key = virtual_selector_key(prio, profile.version, epoch,
+                                        0x544f504b);
+    uint32_t index = virtual_shuffle_index(key, epoch, position, k);
+    uint32_t candidate = ranked[index].second;
+    _selector_cursor[prio] = candidate;
+    record_netaware_selected_level(ranked[index].first);
+    return candidate;
 }
 
 uint32_t RoceSrc::choose_virtual_binary_path(
@@ -2048,6 +2083,9 @@ uint32_t RoceSrc::choose_netaware_path(Packet::PktPriority priority, uint32_t pa
     uint32_t prio = selector_priority_index(priority);
     shared_netaware_profile(path_space);
 
+    if (_netaware_wrr_mode == NETAWARE_WRR_TOPK)
+        return choose_netaware_topk_path(prio, path_space);
+
     if (_netaware_wrr_mode == NETAWARE_WRR_DIRECT) {
         init_selector_priority(priority, path_space);
         return choose_netaware_direct_path(prio, path_space);
@@ -2061,7 +2099,7 @@ uint32_t RoceSrc::choose_netaware_path(Packet::PktPriority priority, uint32_t pa
 
 void RoceSrc::trace_netaware_decision(RocePacket::seq_t seqno, uint32_t path,
                                   Packet::PktPriority priority) {
-    if (!_netaware_decision_trace || _lb_mode != LB_NETAWARE)
+    if (!_netaware_decision_trace || _flow_lb_mode != LB_NETAWARE)
         return;
 
     uint32_t path_space = _path_entropy_size ? _path_entropy_size : 1;
@@ -2098,6 +2136,25 @@ void RoceSrc::trace_netaware_decision(RocePacket::seq_t seqno, uint32_t path,
             if (i)
                 (*_netaware_decision_trace) << "/";
             (*_netaware_decision_trace) << profile.tickets[i];
+        }
+        (*_netaware_decision_trace) << "\n";
+    } else if (_netaware_wrr_mode == NETAWARE_WRR_TOPK) {
+        std::vector<std::pair<uint8_t, uint32_t> > ranked;
+        for (uint32_t candidate = 0; candidate < path_space; candidate++) {
+            uint8_t candidate_level = candidate < levels.size() ?
+                levels[candidate] : STOR_LEVEL_GOOD;
+            ranked.push_back(std::make_pair(candidate_level, candidate));
+        }
+        std::sort(ranked.begin(), ranked.end());
+        uint32_t k = std::min(_netaware_topk, path_space);
+        (*_netaware_decision_trace) << "0," << profile.version << ",1,";
+        for (uint32_t candidate = 0; candidate < path_space; candidate++) {
+            if (candidate)
+                (*_netaware_decision_trace) << "/";
+            bool selected = false;
+            for (uint32_t rank = 0; rank < k; rank++)
+                selected = selected || ranked[rank].second == candidate;
+            (*_netaware_decision_trace) << (selected ? 1 : 0);
         }
         (*_netaware_decision_trace) << "\n";
     } else {
@@ -2311,7 +2368,7 @@ bool RoceSrc::notify_nmrc_ev(uint32_t ev) {
 
 void RoceSrc::process_nmrc_trim_feedback(const RoceNack& nack,
                                          bool failure_accepted) {
-    if (_lb_mode != LB_NMRC || nack.reason() != RoceNack::TRIM)
+    if (_flow_lb_mode != LB_NMRC || nack.reason() != RoceNack::TRIM)
         return;
     if (!failure_accepted) {
         _nmrc_trim_duplicate_stale_ignored++;
@@ -2882,7 +2939,7 @@ RoceSrc::MrcChoice RoceSrc::choose_mrc_retx_ev(uint32_t path_space,
 }
 
 void RoceSrc::note_mrc_packet_ev(RocePacket::seq_t seqno, uint32_t logical_ev) {
-    if (_lb_mode != LB_MRC)
+    if (_flow_lb_mode != LB_MRC)
         return;
     if (logical_ev == UINT32_MAX)
         return;
@@ -2890,7 +2947,7 @@ void RoceSrc::note_mrc_packet_ev(RocePacket::seq_t seqno, uint32_t logical_ev) {
 }
 
 void RoceSrc::clean_mrc_seq_evs() {
-    if (_lb_mode != LB_MRC)
+    if (_flow_lb_mode != LB_MRC)
         return;
     while (!_mrc_seq_ev.empty()) {
         map<RocePacket::seq_t, uint32_t>::iterator it = _mrc_seq_ev.begin();
@@ -2963,7 +3020,7 @@ uint32_t RoceSrc::mrc_resolve_encoded_feedback_ev(
 }
 
 void RoceSrc::update_mrc_on_ack(const RoceAck& ack) {
-    if (_lb_mode != LB_MRC)
+    if (_flow_lb_mode != LB_MRC)
         return;
 
     uint32_t path_space = _path_entropy_size ? _path_entropy_size : 1;
@@ -2987,7 +3044,7 @@ void RoceSrc::update_mrc_on_ack(const RoceAck& ack) {
 }
 
 void RoceSrc::update_mrc_on_nack(const RoceNack& nack) {
-    if (_lb_mode != LB_MRC)
+    if (_flow_lb_mode != LB_MRC)
         return;
 
     uint32_t path_space = _path_entropy_size ? _path_entropy_size : 1;
@@ -3034,7 +3091,7 @@ void RoceSrc::update_mrc_on_nack(const RoceNack& nack) {
 }
 
 void RoceSrc::update_mrc_on_rto() {
-    if (_lb_mode != LB_MRC)
+    if (_flow_lb_mode != LB_MRC)
         return;
 
     uint32_t path_space = _path_entropy_size ? _path_entropy_size : 1;
@@ -3091,7 +3148,7 @@ uint32_t RoceSrc::choose_path(Packet::PktPriority priority, bool retransmitted) 
     if (path_space == 0)
         path_space = 1;
 
-    if (_lb_mode == LB_REPS) {
+    if (_flow_lb_mode == LB_REPS) {
         ensure_reps_buffer();
         if (!retransmitted && _reps_explore_remaining > 0) {
             _reps_explore_remaining--;
@@ -3120,31 +3177,31 @@ uint32_t RoceSrc::choose_path(Packet::PktPriority priority, bool retransmitted) 
         return path;
     }
 
-    if (_lb_mode == LB_NETAWARE) {
+    if (_flow_lb_mode == LB_NETAWARE) {
         uint32_t path = choose_netaware_path(priority, path_space);
         record_path_selection(path, path);
         return path;
     }
 
-    if (_lb_mode == LB_STOR) {
+    if (_flow_lb_mode == LB_STOR) {
         uint32_t path = choose_stor_path(priority, path_space);
         record_path_selection(path, path);
         return path;
     }
 
-    if (_lb_mode == LB_MRC) {
+    if (_flow_lb_mode == LB_MRC) {
         MrcChoice choice = choose_mrc_ev(path_space);
         record_path_selection(choice.logical_ev, choice.physical_path);
         return choice.physical_path;
     }
 
-    if (_lb_mode == LB_NMRC) {
+    if (_flow_lb_mode == LB_NMRC) {
         NmrcChoice choice = choose_nmrc_ev(path_space);
         record_path_selection(choice.ev, choice.physical_path);
         return choice.ev;
     }
 
-    if (_lb_mode == LB_RR) {
+    if (_flow_lb_mode == LB_RR) {
         uint32_t prio = selector_priority_index(priority);
         init_selector_priority(priority, path_space);
         uint32_t candidate = (_selector_cursor[prio] + _selector_stride[prio]) % path_space;
@@ -3153,13 +3210,13 @@ uint32_t RoceSrc::choose_path(Packet::PktPriority priority, bool retransmitted) 
         return candidate;
     }
 
-    if (_lb_mode == LB_OPS) {
+    if (_flow_lb_mode == LB_OPS) {
         uint32_t path = random() % path_space;
         record_path_selection(path, path);
         return path;
     }
 
-    if (_lb_mode == LB_NDP) {
+    if (_flow_lb_mode == LB_NDP) {
         uint32_t path = choose_ndp_path(path_space);
         record_path_selection(path, path);
         return path;
@@ -3188,7 +3245,7 @@ void RoceSrc::reset_reps_buffer() {
 }
 
 void RoceSrc::update_reps(const RoceAck& ack) {
-    if (_lb_mode != LB_REPS)
+    if (_flow_lb_mode != LB_REPS)
         return;
     if (ack.flags() & ECN_ECHO) {
         _reps_ecn_ack_discarded++;
@@ -3208,7 +3265,7 @@ void RoceSrc::update_reps(const RoceAck& ack) {
 }
 
 void RoceSrc::update_conweave(const RoceAck& ack, simtime_picosec rtt) {
-    if (_lb_mode != LB_CONWEAVE)
+    if (_flow_lb_mode != LB_CONWEAVE)
         return;
 
     uint32_t path_space = _path_entropy_size ? _path_entropy_size : 1;
@@ -3229,7 +3286,7 @@ void RoceSrc::update_conweave(const RoceAck& ack, simtime_picosec rtt) {
 }
 
 void RoceSrc::update_netaware(const RoceAck& ack) {
-    if (_lb_mode != LB_NETAWARE || !ack.has_netaware_feedback())
+    if (_flow_lb_mode != LB_NETAWARE || !ack.has_netaware_feedback())
         return;
 
     uint32_t path_space = _path_entropy_size ? _path_entropy_size : 1;
@@ -3374,7 +3431,7 @@ void RoceSrc::processFastCnp(const RoceFastCnp& fast_cnp) {
         return;
     }
 
-    if (_lb_mode != LB_NMRC || &fast_cnp.flow() != &_flow ||
+    if (_flow_lb_mode != LB_NMRC || &fast_cnp.flow() != &_flow ||
         fast_cnp.source_host() != _srcaddr) {
         _nmrc_fastcnp_unknown_qp++;
         record_cc_mutation();
@@ -3526,7 +3583,7 @@ bool RoceSrc::send_packet() {
     }
     uint32_t path = 0;
     uint32_t logical_ev = UINT32_MAX;
-    if (_lb_mode == LB_MRC) {
+    if (_flow_lb_mode == LB_MRC) {
         uint32_t path_space = _path_entropy_size ? _path_entropy_size : 1;
         uint32_t original_physical = UINT32_MAX;
         uint32_t original_logical = UINT32_MAX;
@@ -3561,7 +3618,7 @@ bool RoceSrc::send_packet() {
             }
         }
         record_path_selection(logical_ev, path);
-    } else if (_lb_mode == LB_NMRC) {
+    } else if (_flow_lb_mode == LB_NMRC) {
         uint32_t path_space = _path_entropy_size ? _path_entropy_size : 1;
         NmrcChoice choice = choose_nmrc_ev(path_space);
         path = choice.ev;
@@ -3661,7 +3718,7 @@ void RoceSrc::rtx_timer_hook(simtime_picosec now, simtime_picosec period) {
     }
     reset_rtx_timeout();
 
-    if (_lb_mode == LB_NDP)
+    if (_flow_lb_mode == LB_NDP)
         grant_ndp_credit();
     if (_state_send == READY &&
         (has_retransmit_work() || congestion_window_allows_send()))
@@ -3690,7 +3747,7 @@ void RoceSrc::doNextEvent() {
         return;
     }
 
-    if (_lb_mode == LB_NDP && _ndp_pull_credit == 0)
+    if (_flow_lb_mode == LB_NDP && _ndp_pull_credit == 0)
         return;
 
     clean_retransmit_queue();
@@ -3707,7 +3764,7 @@ void RoceSrc::doNextEvent() {
     }
 
     if (_time_last_sent==0 || eventlist().now() - _time_last_sent >= _packet_spacing){
-        if (_lb_mode == LB_NDP && _ndp_pull_credit > 0)
+        if (_flow_lb_mode == LB_NDP && _ndp_pull_credit > 0)
             _ndp_pull_credit--;
         if (send_packet())
             _time_last_sent = eventlist().now();

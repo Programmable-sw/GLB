@@ -127,10 +127,11 @@ public:
     enum NmrcNetworkDecisionMode {
         NMRC_NETWORK_GRADED = 0,
         NMRC_NETWORK_BINARY_SCORE = 1,
-        NMRC_NETWORK_RELATIVE_DELTA = 2,
+        NMRC_NETWORK_FIXED_THRESHOLD = 2,
         NMRC_NETWORK_PIECEWISE_DELTA = 3,
         NMRC_NETWORK_TWO_STAGE_DELTA = 4,
-        NMRC_NETWORK_ABSOLUTE_REROUTE = 5
+        NMRC_NETWORK_ABSOLUTE_REROUTE = 5,
+        NMRC_NETWORK_DELTA = 6
     };
 
     enum NmrcRelativeDecisionReason {
@@ -199,12 +200,19 @@ public:
         const vector<bool>& two_hop_valid,
         const vector<bool>& available,
         uint32_t selection_value);
-    static NmrcRelativeDecision nmrc_select_relative_delta_path(
+    static NmrcRelativeDecision nmrc_select_fixed_threshold_path(
         uint32_t original_index,
         const vector<double>& scores,
         const vector<bool>& two_hop_valid,
         const vector<bool>& available,
         double absolute_threshold,
+        double delta,
+        uint32_t selection_value);
+    static NmrcRelativeDecision nmrc_select_delta_path(
+        uint32_t original_index,
+        const vector<double>& scores,
+        const vector<bool>& two_hop_valid,
+        const vector<bool>& available,
         double delta,
         uint32_t selection_value);
     static NmrcRelativeDecision nmrc_select_piecewise_delta_path(

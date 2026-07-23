@@ -34,11 +34,16 @@ class PacketFlow : public Logged {
     void logTraffic(Packet& pkt, Logged& location, TrafficLogger::TrafficEvent ev);
     void set_flowid(flowid_t id);
     inline flowid_t flow_id() const {return _flow_id;}
+    inline void set_background_traffic(bool background) {
+        _background_traffic = background;
+    }
+    inline bool background_traffic() const {return _background_traffic;}
     bool log_me() const {return _logger != NULL;}
  protected:
     static packetid_t _max_flow_id;
     flowid_t _flow_id;
     TrafficLogger* _logger;
+    bool _background_traffic;
 };
 
 
