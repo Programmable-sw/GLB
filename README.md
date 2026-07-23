@@ -40,7 +40,9 @@ grade 是一个 source-ToR monitoring and feedback 分支。端侧按预选 EV s
 | `avail` | source ToR 根据 ACK ECN 或 TRIM NACK 生成 ToR-pair 共享的 1-bit recent-bad EV bitmap；每 QP 只用 selection counter 虚拟打乱路径下标并跳过 bad EV。默认 ECN 与 TRIM 都会在同一短反馈窗口内把精确路径标为暂时不可用；`-avail_ecn_only` 仅用于恢复旧 ECN-only 语义的消融实验。 |
 | `grade` | source ToR 用默认 4-bit simple scorer（clean `+1`，ECN/TRIM `-4`，阈值 `12/7/3`）量化共享 EV 状态；NIC 按 4/2/1/0、`K=4*path_count` 的共享 base bucket 和 per-QP 虚拟 permutation 加权选路。原 balanced 三字段评分仅由 `-grade_complex_score` 启用。 |
 | `netaware` | source leaf 组合 1us 本地端口 snapshot 与 5us spine 下游 export snapshot，生成完整 ToR-pair 四级 profile；NIC 默认用 GoodCap 对共享 4/2/1/0 分布做 GOOD-share 限流，再映射到 `K=4*path_count` bucket。 |
-| `n-mrc` | 每 QP 轮询 encoded 或 16-bit random EV set；源侧第一跳 Leaf 在存在足量严格更优四级路径时用 SGLB 换路，并以 FastCNP 格式通知端侧冷却原 EV 一轮。后续 ECN 仍完整端到端 echo。 |
+| `n-mrc` | 默认 N-MRC。每 QP 轮询 encoded 或 16-bit random EV set；源侧第一跳 Leaf 使用原四级质量判定，在存在足量严格更优路径时换路，并以 FastCNP 格式通知端侧冷却原 EV 一轮。后续 ECN 仍完整端到端 echo。 |
+| `n-mrc-fixed0.5` | 原实验方案 `n-mrc4` 的正式名称。默认要求原路径分数不低于 `0.5`、候选路径低于 `0.5`，且质量差至少为 `0.25`，满足时将当前包换路和 FastCNP cooldown 通知作为配对动作。 |
+| `n-mrc-delta` | 不设置绝对拥塞门槛，只在候选路径比原路径至少好 `delta=0.25` 时，将当前包换路并配对发送 FastCNP cooldown 通知。 |
 | `mrc` | 每个 QP 将 EV 与单平面物理 path-id 一一编码，按确定性排列循环使用不超过 32 个 active EV。ECN 与 TRIM 使用相同处罚：默认进入 one-cycle soft skip，冷却期间后续拥塞反馈会续期，反馈排空后自然恢复；显式 `-mrc_cooldown_mode cwnd_scaled` 保留按拓扑 BDP 取整的固定长 cooldown 诊断。全部 EV 冷却时使用最早到期 EV 保活，不清除状态或 deadline。OOO 只进入 SP/SACK 选择重传，LOSS/RTO 标记 failed 并换入剩余唯一路径。 |
 | `conweave` | RTT 超过阈值后切换 pathid，减少持续走拥塞路径的概率。 |
 | `adaptive-routing` | 交换机按本地队列拥塞情况在可用下一跳中选择端口。 |
@@ -48,6 +50,13 @@ grade 是一个 source-ToR monitoring and feedback 分支。端侧按预选 EV s
 | `sglb` | 交换机默认将 1us 本地队列压力与 next-hop 每 5us 导出的下游队列压力按 noisy-or 合成，量化为四档后按 SGLB top-K 整档扩展候选；LSN 钩子可硬屏蔽故障邻居。原五因子评分和八档量化分别由显式 flag 启用。 |
 
 从粒度上看，`ops`、`rr`、`reps`、`avail`、`grade`、`n-mrc` 和 `mrc` 都是源端逐包选择 EV/pathid；`ecmp` 使用固定 pathid，`conweave` 只在 RTT 触发时切换 pathid，不做逐包 spraying。`ecmp_rr`、`drill`、`sglb` 和当前 `adaptive-routing` 默认都属于交换机侧逐包/逐跳选择 next-hop；`adaptive-routing` 仍可通过 `-ar_granularity flowlet` 切到 flowlet sticky。
+
+### N-MRC 后续考虑方向
+
+以下两项目前仅作为后续设计方向记录，不是可运行方案：
+
+- 分离换路和端侧冷却：绝对分数超过 `0.5` 时，网络侧可以为当前包换路；只有质量差进一步超过独立的 cooldown 阈值时，FastCNP 才设置 `cooldown` 标志位，要求端侧暂时停用原 EV。这样可以让轻度失衡只影响当前包，避免过多 EV 因小幅评分差同时进入冷却。
+- 使用分段相对阈值：在绝对分数 `0.5` 前后使用不同 delta。低于 `0.5` 时使用较大的 delta，减少健康路径间的无效切换；高于 `0.5` 时使用较小的 delta，更快绕开已经明显拥塞的路径。
 
 全局 RoCE 传输默认使用 `mrc_exact_bounded`：SP/SACK、exact-PSN TRIM recovery、`awnd=cwnd-inflight` 和每 QP 最多 1 MTU 的 bounded recovery reserve。复现此前 Natural+Cumulative 数据时必须显式使用：
 
