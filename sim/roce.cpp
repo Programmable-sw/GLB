@@ -444,6 +444,9 @@ RoceSrc::RoceSrc(RoceLogger* logger, TrafficLogger* pktlogger, EventList &eventl
     _ndp_cursor = 0;
     _ndp_pull_credit = 0;
     _ndp_paths_ready = false;
+    _rr_cursor = 0;
+    _rr_path_space = 0;
+    _rr_paths_ready = false;
     _mrc_active_cursor = 0;
     _mrc_backup_cursor = 0;
     _mrc_path_space = 0;
@@ -1093,6 +1096,8 @@ void RoceSrc::startflow(){
     reset_congestion_control();
     if (_flow_lb_mode == LB_REPS)
         reset_reps_buffer();
+    if (_flow_lb_mode == LB_RR)
+        reset_rr_paths();
     if (_flow_lb_mode == LB_MRC)
         reset_mrc_paths();
     if (_flow_lb_mode == LB_NMRC)
@@ -2540,6 +2545,53 @@ uint32_t RoceSrc::nmrc_unique_physical_paths_for_diag() const {
     return paths.size();
 }
 
+std::vector<uint32_t> RoceSrc::build_mrc_ev_order(
+        uint32_t path_space) const {
+    if (path_space == 0)
+        path_space = 1;
+    std::vector<uint32_t> ids(path_space);
+    for (uint32_t i = 0; i < path_space; i++)
+        ids[i] = i;
+
+    uint32_t src = _srcaddr == UINT32_MAX ? _node_num : _srcaddr;
+    uint32_t dst = _dstaddr == UINT32_MAX ?
+        (_node_num ^ 0x5bd1e995) : _dstaddr;
+    uint32_t seed =
+        selector_mix(src, dst, _flow.flow_id() ^ 0x4d524300);
+    for (uint32_t i = 0; i < path_space; i++) {
+        uint32_t remaining = path_space - i;
+        uint32_t ix = i +
+            (selector_mix(seed, i, _flow.flow_id()) % remaining);
+        std::swap(ids[i], ids[ix]);
+    }
+    return ids;
+}
+
+void RoceSrc::reset_rr_paths() {
+    _rr_evs.clear();
+    _rr_cursor = 0;
+    _rr_path_space = 0;
+    _rr_paths_ready = false;
+}
+
+void RoceSrc::init_rr_paths(uint32_t path_space) {
+    if (path_space == 0)
+        path_space = 1;
+    if (_rr_paths_ready && _rr_path_space == path_space)
+        return;
+    _rr_evs = build_mrc_ev_order(path_space);
+    _rr_cursor = 0;
+    _rr_path_space = path_space;
+    _rr_paths_ready = true;
+}
+
+uint32_t RoceSrc::choose_rr_path(uint32_t path_space) {
+    init_rr_paths(path_space);
+    uint32_t selected = _rr_evs[_rr_cursor];
+    _rr_cursor = (_rr_cursor + 1) % _rr_evs.size();
+    return selected % path_space;
+}
+
 void RoceSrc::reset_mrc_paths() {
     _mrc_evs.clear();
     _mrc_active.clear();
@@ -2585,20 +2637,7 @@ void RoceSrc::init_mrc_paths(uint32_t path_space) {
     _mrc_backup_cursor = 0;
     _mrc_seq_ev.clear();
 
-    vector<uint32_t> ids(logical_count);
-    for (uint32_t i = 0; i < logical_count; i++)
-        ids[i] = i;
-
-    uint32_t src = _srcaddr == UINT32_MAX ? _node_num : _srcaddr;
-    uint32_t dst = _dstaddr == UINT32_MAX ? (_node_num ^ 0x5bd1e995) : _dstaddr;
-    uint32_t seed = selector_mix(src, dst, _flow.flow_id() ^ 0x4d524300);
-    for (uint32_t i = 0; i < logical_count; i++) {
-        uint32_t remaining = logical_count - i;
-        uint32_t ix = i + (selector_mix(seed, i, _flow.flow_id()) % remaining);
-        uint32_t tmp = ids[i];
-        ids[i] = ids[ix];
-        ids[ix] = tmp;
-    }
+    vector<uint32_t> ids = build_mrc_ev_order(logical_count);
 
     uint32_t desired_active = mrc_desired_active_paths(path_space);
     uint32_t desired_backup = logical_count - desired_active;
@@ -3268,12 +3307,9 @@ uint32_t RoceSrc::choose_path(Packet::PktPriority priority, bool retransmitted) 
     }
 
     if (_flow_lb_mode == LB_RR) {
-        uint32_t prio = selector_priority_index(priority);
-        init_selector_priority(priority, path_space);
-        uint32_t candidate = (_selector_cursor[prio] + _selector_stride[prio]) % path_space;
-        _selector_cursor[prio] = candidate;
-        record_path_selection(candidate, candidate);
-        return candidate;
+        uint32_t path = choose_rr_path(path_space);
+        record_path_selection(path, path);
+        return path;
     }
 
     if (_flow_lb_mode == LB_OPS) {

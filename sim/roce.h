@@ -645,6 +645,10 @@ private:
     std::array<uint64_t, 64> fast_cnp_isolation_snapshot() const;
     void update_stor(const RoceAck& ack);
     void update_stor(const RoceNack& nack);
+    std::vector<uint32_t> build_mrc_ev_order(uint32_t path_space) const;
+    void reset_rr_paths();
+    void init_rr_paths(uint32_t path_space);
+    uint32_t choose_rr_path(uint32_t path_space);
     void reset_mrc_paths();
     void init_mrc_paths(uint32_t path_space);
     uint32_t choose_mrc_path(uint32_t path_space);
@@ -842,6 +846,10 @@ private:
     uint32_t _ndp_cursor;
     uint32_t _ndp_pull_credit;
     bool _ndp_paths_ready;
+    std::vector<uint32_t> _rr_evs;
+    uint32_t _rr_cursor;
+    uint32_t _rr_path_space;
+    bool _rr_paths_ready;
     std::vector<MrcEv> _mrc_evs;
     std::vector<uint32_t> _mrc_active;
     std::vector<uint32_t> _mrc_backup;
