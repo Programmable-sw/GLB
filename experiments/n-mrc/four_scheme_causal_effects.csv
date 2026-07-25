@@ -1,0 +1,13 @@
+scenario,variant,baseline,primary_metric,paired_primary_ratio_gm,paired_effect_percent,seed_ratios
+asymmetric_permutation_16mib,netaware_uniform,netaware_default,p99_fct_us,1.688218174624194,68.8218174624194,13:1.657959;29:1.743464;47:1.664558
+asymmetric_permutation_16mib,nmrc_never,nmrc_default,p99_fct_us,1.7484000189663722,74.84000189663722,13:1.582876;29:1.841311;47:1.833785
+asymmetric_permutation_16mib,nmrc_any,nmrc_default,p99_fct_us,0.998378090471513,-0.16219095284869534,13:0.995142;29:1.000000;47:1.000000
+standard_websearch_proxy_80pct,nmrc_never,nmrc_default,p99_fct_us,0.9556192704589687,-4.438072954103134,13:0.920893;29:0.963333;47:0.983714
+standard_websearch_proxy_80pct,nmrc_fastcnp_off,nmrc_default,p99_fct_us,0.9943433455168591,-0.5656654483140899,13:1.017531;29:0.981532;47:0.984367
+standard_websearch_proxy_80pct,nmrc_any,nmrc_default,p99_fct_us,1.0238789004481488,2.3878900448148777,13:1.047786;29:0.998911;47:1.025525
+full_global_p16_256mib_background_off,grade_equal,grade_default,all_to_all_cct_us,0.9630484742324698,-3.6951525767530247,13:0.949214;29:0.956290;47:0.983990
+full_global_p16_256mib_background_off,netaware_off,netaware_default,all_to_all_cct_us,0.9450012800766916,-5.49987199233084,13:0.932650;29:1.000834;47:0.904100
+full_global_p16_256mib_background_off,netaware_uniform,netaware_default,all_to_all_cct_us,0.9546844158194386,-4.531558418056136,13:0.873132;29:1.025689;47:0.971592
+full_global_p4_64mib_background_off,avail_hybrid,avail_default,all_to_all_cct_us,0.9091726908192947,-9.082730918070524,13:0.854176;29:0.862359;47:1.020244
+full_global_p4_64mib_background_off,avail_ecn_only,avail_default,all_to_all_cct_us,1.024639508264346,2.463950826434602,13:0.970246;29:0.859162;47:1.290496
+full_global_p4_64mib_background_off,grade_equal,grade_default,all_to_all_cct_us,0.9611858751957832,-3.8814124804216754,13:0.953089;29:0.981277;47:0.949504

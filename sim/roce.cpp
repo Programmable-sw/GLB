@@ -137,6 +137,11 @@ uint64_t RoceSrc::_diag_selected_total = 0;
 std::map<uint32_t, uint64_t> RoceSrc::_diag_selected_ev_hist;
 std::map<uint32_t, uint64_t> RoceSrc::_diag_selected_physical_hist;
 std::vector<uint32_t> RoceSrc::_diag_first_selected_evs;
+std::ostream* RoceSrc::_path_selection_timeline = NULL;
+uint64_t RoceSrc::_path_selection_timeline_every = 0;
+uint64_t RoceSrc::_path_selection_timeline_next = 0;
+uint64_t RoceSrc::_path_selection_timeline_last = 0;
+simtime_picosec RoceSrc::_path_selection_last_event_time = 0;
 
 void RoceSrc::printDcqcnConfiguration(std::ostream& out) {
     const char* nack_reaction = "cnp";
@@ -233,6 +238,58 @@ void RoceSrc::resetPathSelectionDiag() {
     _diag_selected_ev_hist.clear();
     _diag_selected_physical_hist.clear();
     _diag_first_selected_evs.clear();
+    _path_selection_timeline_next = _path_selection_timeline_every;
+    _path_selection_timeline_last = 0;
+    _path_selection_last_event_time = 0;
+}
+
+void RoceSrc::configurePathSelectionTimeline(std::ostream* trace,
+                                             uint64_t every) {
+    _path_selection_timeline = trace;
+    _path_selection_timeline_every = every ? every : 1;
+    _path_selection_timeline_next = _path_selection_timeline_every;
+    _path_selection_timeline_last = 0;
+    if (!_path_selection_timeline)
+        return;
+    (*_path_selection_timeline) << "time_us,selected_total";
+    for (uint32_t path = 0; path < _diag_physical_path_space; path++)
+        (*_path_selection_timeline) << ",path_" << path;
+    (*_path_selection_timeline) << ",cumulative_cv\n";
+}
+
+void RoceSrc::writePathSelectionTimeline(simtime_picosec now) {
+    if (!_path_selection_timeline || _diag_selected_total == 0 ||
+        _diag_selected_total == _path_selection_timeline_last)
+        return;
+    double mean = (double)_diag_selected_total /
+        (double)_diag_physical_path_space;
+    double variance = 0.0;
+    for (uint32_t path = 0; path < _diag_physical_path_space; path++) {
+        std::map<uint32_t, uint64_t>::const_iterator found =
+            _diag_selected_physical_hist.find(path);
+        double count = found == _diag_selected_physical_hist.end() ?
+            0.0 : (double)found->second;
+        double delta = count - mean;
+        variance += delta * delta;
+    }
+    variance /= (double)_diag_physical_path_space;
+    (*_path_selection_timeline) << timeAsUs(now)
+        << "," << _diag_selected_total;
+    for (uint32_t path = 0; path < _diag_physical_path_space; path++) {
+        std::map<uint32_t, uint64_t>::const_iterator found =
+            _diag_selected_physical_hist.find(path);
+        (*_path_selection_timeline) << ","
+            << (found == _diag_selected_physical_hist.end() ? 0 : found->second);
+    }
+    (*_path_selection_timeline) << ","
+        << (mean > 0.0 ? sqrt(variance) / mean : 0.0) << "\n";
+    _path_selection_timeline_last = _diag_selected_total;
+}
+
+void RoceSrc::flushPathSelectionTimeline() {
+    writePathSelectionTimeline(_path_selection_last_event_time);
+    if (_path_selection_timeline)
+        _path_selection_timeline->flush();
 }
 
 RoceSrc::RoceSrc(RoceLogger* logger, TrafficLogger* pktlogger, EventList &eventlist, linkspeed_bps rate)
@@ -1523,8 +1580,15 @@ void RoceSrc::record_path_selection(uint32_t selected_ev, uint32_t physical_path
     uint32_t physical_space = _diag_physical_path_space ?
         _diag_physical_path_space : 1;
     _diag_selected_physical_hist[physical_path % physical_space]++;
+    _path_selection_last_event_time = eventlist().now();
     if (_diag_first_selected_evs.size() < 128)
         _diag_first_selected_evs.push_back(selected_ev);
+    if (_path_selection_timeline && _diag_selected_total >=
+        _path_selection_timeline_next) {
+        writePathSelectionTimeline(eventlist().now());
+        _path_selection_timeline_next =
+            _diag_selected_total + _path_selection_timeline_every;
+    }
 }
 
 void RoceSrc::sample_reps_buffer_occupancy() {
