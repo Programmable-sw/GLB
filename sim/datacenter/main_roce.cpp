@@ -4307,6 +4307,10 @@ int main(int argc, char **argv) {
              << " all_cooling_rr_resets=" << nmrc_all_cooling_rr_resets
              << " fastcnp_policy_ignored=" << nmrc_fastcnp_policy_ignored
              << " trim_policy_ignored=" << nmrc_trim_policy_ignored
+             << " graded_cooldown_requested="
+             << FatTreeSwitch::_nmrc_diag_graded_cooldown_requested
+             << " graded_cooldown_suppressed="
+             << FatTreeSwitch::_nmrc_diag_graded_cooldown_suppressed
              << " binary_original_safe="
              << FatTreeSwitch::_nmrc_diag_binary_original_safe
              << " binary_original_congested="

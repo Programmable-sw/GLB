@@ -3,6 +3,7 @@
 #include <cmath>
 #include <cstring>
 #include <iostream>
+#include <limits>
 #include <set>
 #include "eventlist.h"
 #include "network.h"
@@ -58,6 +59,7 @@ public:
         selected_scores.push_back(fast.selected_score());
         selected_gaps.push_back(fast.selected_gap());
         action_keys.push_back(fast.action_key());
+        cooldown_requests.push_back(fast.need_endpoint_cooldown());
         pkt.free();
     }
 
@@ -76,6 +78,7 @@ public:
     vector<double> selected_scores;
     vector<double> selected_gaps;
     vector<uint64_t> action_keys;
+    vector<bool> cooldown_requests;
 };
 
 class AckCapture : public PacketSink {
@@ -148,6 +151,21 @@ static void expect_near(double actual, double expected, double tolerance,
                   << ", got " << actual << std::endl;
         std::exit(1);
     }
+}
+
+static void test_nmrc_graded_selective_cooldown() {
+    expect(!FatTreeSwitch::nmrc_graded_requests_cooldown(
+               0.401, 0.399, 0.25),
+           "a tiny cross-bucket gap must not cool");
+    expect(FatTreeSwitch::nmrc_graded_requests_cooldown(
+               0.65, 0.40, 0.25),
+           "the cooldown threshold must be inclusive");
+    expect(FatTreeSwitch::nmrc_graded_requests_cooldown(
+               0.80, 0.40, 0.25),
+           "a large improvement must cool");
+    expect(!FatTreeSwitch::nmrc_graded_requests_cooldown(
+               std::numeric_limits<double>::quiet_NaN(), 0.10, 0.25),
+           "invalid scores must not cool");
 }
 
 static void test_nmrc_relative_delta_selector() {
@@ -459,6 +477,7 @@ int main() {
                "an UNKNOWN binary original must not trigger reroute");
     }
 
+    test_nmrc_graded_selective_cooldown();
     test_nmrc_relative_delta_selector();
     test_nmrc_two_stage_delta_selector();
     test_nmrc_absolute_reroute_selector();
@@ -824,6 +843,12 @@ int main() {
         expect(fast_capture.latencies[0] > 0 &&
                    fast_capture.latencies[1] > 0,
                "FastCNP must incur switch, queue, and link delivery latency");
+        expect(!std::isfinite(fast_capture.original_scores[0]) &&
+                   !fast_capture.cooldown_requests[0],
+               "graded FastCNP must suppress cooldown without valid two-hop scores");
+        expect(FatTreeSwitch::_nmrc_diag_graded_cooldown_requested == 0 &&
+                   FatTreeSwitch::_nmrc_diag_graded_cooldown_suppressed == 2,
+               "invalid-score graded reroutes must be reported without cooldown");
         expect(ack_capture.ecn_echoes == 3,
                "hybrid rerouting must not clear CE or suppress receiver ECN echo");
 
@@ -968,6 +993,7 @@ int main() {
                 background_flow, background_route, 180 + i, 4096);
             original_queue->receivePacket(*background);
         }
+
         FatTreeSwitch::_nmrc_network_decision_mode =
             FatTreeSwitch::NMRC_NETWORK_FIXED_THRESHOLD;
         FatTreeSwitch::_nmrc_absolute_threshold = 0.50;

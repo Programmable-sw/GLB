@@ -421,6 +421,8 @@ uint64_t FatTreeSwitch::_nmrc_diag_reroutes = 0;
 uint64_t FatTreeSwitch::_nmrc_diag_threshold_blocked = 0;
 uint64_t FatTreeSwitch::_nmrc_diag_fastcnp_generated = 0;
 uint64_t FatTreeSwitch::_nmrc_diag_fastcnp_route_missing = 0;
+uint64_t FatTreeSwitch::_nmrc_diag_graded_cooldown_requested = 0;
+uint64_t FatTreeSwitch::_nmrc_diag_graded_cooldown_suppressed = 0;
 uint64_t FatTreeSwitch::_nmrc_diag_better_count[33] = {0};
 uint64_t FatTreeSwitch::_nmrc_diag_level_transitions[4][4] = {{0}};
 uint64_t FatTreeSwitch::_nmrc_diag_binary_original_safe = 0;
@@ -969,6 +971,8 @@ void FatTreeSwitch::reset_nmrc_hybrid_diag() {
     _nmrc_diag_threshold_blocked = 0;
     _nmrc_diag_fastcnp_generated = 0;
     _nmrc_diag_fastcnp_route_missing = 0;
+    _nmrc_diag_graded_cooldown_requested = 0;
+    _nmrc_diag_graded_cooldown_suppressed = 0;
     _nmrc_diag_binary_original_safe = 0;
     _nmrc_diag_binary_original_congested = 0;
     _nmrc_diag_binary_no_safe = 0;
@@ -1449,6 +1453,16 @@ FatTreeSwitch::nmrc_select_better_path(
     return decision;
 }
 
+bool FatTreeSwitch::nmrc_graded_requests_cooldown(
+        double original_score, double selected_score, double threshold) {
+    return std::isfinite(original_score) &&
+        std::isfinite(selected_score) &&
+        std::isfinite(threshold) &&
+        threshold > 0.0 &&
+        original_score - selected_score >=
+            threshold - NMRC_RELATIVE_EPSILON;
+}
+
 bool FatTreeSwitch::nmrc_binary_safe(double score, bool two_hop_valid) {
     return two_hop_valid && std::isfinite(score) && score < 0.5;
 }
@@ -1804,7 +1818,10 @@ bool FatTreeSwitch::nmrc_inject_fastcnp(
         uint32_t original_egress,
         uint32_t selected_egress,
         uint8_t original_level,
-        uint8_t selected_level) {
+        uint8_t selected_level,
+        double original_score,
+        double selected_score,
+        bool need_endpoint_cooldown) {
     HostFibEntry* host = _fib->getHostRoute(data.src(), data.flow_id());
     if (!host || !host->getEgressPort()) {
         _nmrc_diag_fastcnp_route_missing++;
@@ -1815,7 +1832,9 @@ bool FatTreeSwitch::nmrc_inject_fastcnp(
     RoceFastCnp* fast_cnp = RoceFastCnp::newpkt(
         data.flow(), *route, data.src(), data.mrc_ev(), data.seqno(),
         original_egress, selected_egress,
-        original_level, selected_level, _id, eventlist().now());
+        original_level, selected_level, _id, eventlist().now(),
+        data.attempt_id(), original_score, selected_score,
+        original_score - selected_score, 0, need_endpoint_cooldown);
     _nmrc_diag_fastcnp_generated++;
     receivePacket(*fast_cnp);
     return true;
@@ -2079,8 +2098,10 @@ uint32_t FatTreeSwitch::nmrc_maybe_reroute(
             return original_choice;
         }
 
-        if (!nmrc_inject_fastcnp(data, original_choice,
-                                 decision.selected_index, 1, 0)) {
+        if (!nmrc_inject_fastcnp(
+                data, original_choice, decision.selected_index, 1, 0,
+                scores[original_choice], scores[decision.selected_index],
+                true)) {
             return original_choice;
         }
 
@@ -2104,11 +2125,16 @@ uint32_t FatTreeSwitch::nmrc_maybe_reroute(
     }
 
     vector<uint8_t> levels(available_hops->size(), STOR_LEVEL_AVOID);
+    vector<double> scores(
+        available_hops->size(),
+        std::numeric_limits<double>::quiet_NaN());
     vector<bool> available(available_hops->size(), false);
     for (uint32_t i = 0; i < available_hops->size(); i++) {
         available[i] = sglb_entry_available((*available_hops)[i]);
         const SglbQualitySnapshot& snapshot =
             sglb_quality_snapshot((*available_hops)[i], pkt.dst(), 1);
+        if (snapshot.two_hop_valid())
+            scores[i] = snapshot.score;
         levels[i] = snapshot.quality;
         if (_sglb_score_mode == SGLB_SCORE_NMRC_QUANTIZED_TOPK &&
             _sglb_nmrc_levels == 8)
@@ -2131,15 +2157,23 @@ uint32_t FatTreeSwitch::nmrc_maybe_reroute(
         return original_choice;
     }
 
-    if (_nmrc_fastcnp_enabled &&
-        !nmrc_inject_fastcnp(data, original_choice,
-                             decision.selected_index,
-                             decision.original_level,
-                             decision.selected_level)) {
-        // PATH_REROUTE FastCNP is the endpoint's only indication that its EV
-        // was overridden.  With signalling enabled, do not create an
-        // unobservable reroute when the reverse host route is unavailable.
-        return original_choice;
+    const bool request_cooldown = nmrc_graded_requests_cooldown(
+        scores[original_choice], scores[decision.selected_index], 0.25);
+    if (_nmrc_fastcnp_enabled) {
+        if (!nmrc_inject_fastcnp(
+                data, original_choice, decision.selected_index,
+                decision.original_level, decision.selected_level,
+                scores[original_choice], scores[decision.selected_index],
+                request_cooldown)) {
+            // PATH_REROUTE FastCNP is the endpoint's only indication that its
+            // EV was overridden. With signalling enabled, do not create an
+            // unobservable reroute when the reverse host route is unavailable.
+            return original_choice;
+        }
+        if (request_cooldown)
+            _nmrc_diag_graded_cooldown_requested++;
+        else
+            _nmrc_diag_graded_cooldown_suppressed++;
     }
 
     _nmrc_diag_reroutes++;

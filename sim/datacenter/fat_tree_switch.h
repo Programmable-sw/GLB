@@ -190,6 +190,8 @@ public:
         NmrcReroutePolicy policy,
         uint32_t min_choices,
         uint32_t selection_value);
+    static bool nmrc_graded_requests_cooldown(
+        double original_score, double selected_score, double threshold);
 
     static bool nmrc_binary_safe(double score, bool two_hop_valid);
     static NmrcBinaryClass nmrc_binary_classify(double score,
@@ -601,6 +603,8 @@ public:
     static uint64_t _nmrc_diag_threshold_blocked;
     static uint64_t _nmrc_diag_fastcnp_generated;
     static uint64_t _nmrc_diag_fastcnp_route_missing;
+    static uint64_t _nmrc_diag_graded_cooldown_requested;
+    static uint64_t _nmrc_diag_graded_cooldown_suppressed;
     static uint64_t _nmrc_diag_better_count[33];
     static uint64_t _nmrc_diag_level_transitions[4][4];
     static uint64_t _nmrc_diag_binary_original_safe;
@@ -814,7 +818,10 @@ private:
                              uint32_t original_egress,
                              uint32_t selected_egress,
                              uint8_t original_level,
-                             uint8_t selected_level);
+                             uint8_t selected_level,
+                             double original_score,
+                             double selected_score,
+                             bool need_endpoint_cooldown);
     bool nmrc_inject_relative_fastcnp(
         RocePacket& data, uint32_t original_egress,
         uint32_t selected_egress, double original_score,
