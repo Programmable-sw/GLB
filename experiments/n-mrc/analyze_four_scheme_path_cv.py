@@ -115,17 +115,16 @@ def plot_rows(rows, path, window_selections):
             row for row in selected
             if is_complete_window(row, window_selections)
         ]
-        x = [row["time_us"] for row in complete_windows]
         axes[0].plot(
-            x,
-            [row["cumulative_cv"] for row in complete_windows],
+            [row["time_us"] for row in selected],
+            [row["cumulative_cv"] for row in selected],
             label=SCHEME_LABELS[scheme],
             color=colors[scheme],
             linestyle=styles[scheme],
             linewidth=1.8,
         )
         axes[1].plot(
-            x,
+            [row["time_us"] for row in complete_windows],
             [row["window_cv"] for row in complete_windows],
             label=SCHEME_LABELS[scheme],
             color=colors[scheme],
