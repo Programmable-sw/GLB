@@ -53,6 +53,13 @@ def main():
         rel_tol=1e-12,
     ):
         raise AssertionError(rows[2])
+    if module.is_complete_window({"window_selected": 99999}, 100000):
+        raise AssertionError("terminal partial window must not be complete")
+    if not module.is_complete_window({"window_selected": 100000}, 100000):
+        raise AssertionError("exact sampling window must be complete")
+    for index in range(4):
+        if rows[-1][f"path_{index}"] != [40, 30, 30, 20][index]:
+            raise AssertionError("derived rows must retain raw path counters")
     print("Four-scheme path CV analysis test passed")
 
 

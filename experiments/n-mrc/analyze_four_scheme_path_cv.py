@@ -24,6 +24,10 @@ def population_cv(values):
     return math.sqrt(variance) / mean
 
 
+def is_complete_window(row, window_selections):
+    return int(row["window_selected"]) == window_selections
+
+
 def transform_trace(scheme, path):
     with Path(path).open(encoding="utf-8") as handle:
         source_rows = list(csv.DictReader(handle))
@@ -52,33 +56,41 @@ def transform_trace(scheme, path):
         increments = [value - old for value, old in zip(counts, previous)]
         if min(increments) < 0:
             raise ValueError(f"path counter decreased in {path}")
-        transformed.append({
+        transformed_row = {
             "scheme": scheme,
             "time_us": float(row["time_us"]),
             "selected_total": total,
             "window_selected": total - previous_total,
             "cumulative_cv": population_cv(counts),
             "window_cv": population_cv(increments),
-        })
+        }
+        for name, count in zip(path_fields, counts):
+            transformed_row[name] = count
+        transformed.append(transformed_row)
         previous = counts
         previous_total = total
     return transformed
 
 
 def write_rows(rows, path):
+    path_fields = sorted(
+        {name for row in rows for name in row if name.startswith("path_")},
+        key=lambda name: int(name.split("_", 1)[1]),
+    )
     with Path(path).open("w", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(
             handle,
             fieldnames=(
                 "scheme", "time_us", "selected_total",
                 "window_selected", "cumulative_cv", "window_cv",
-            ),
+            ) + tuple(path_fields),
+            lineterminator="\n",
         )
         writer.writeheader()
         writer.writerows(rows)
 
 
-def plot_rows(rows, path):
+def plot_rows(rows, path, window_selections):
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
@@ -100,7 +112,8 @@ def plot_rows(rows, path):
         selected = [row for row in rows if row["scheme"] == scheme]
         selected.sort(key=lambda row: row["time_us"])
         complete_windows = [
-            row for row in selected if row["window_selected"] >= 50000
+            row for row in selected
+            if is_complete_window(row, window_selections)
         ]
         x = [row["time_us"] for row in complete_windows]
         axes[0].plot(
@@ -133,7 +146,7 @@ def plot_rows(rows, path):
     axes[0].legend(ncol=4, frameon=False, loc="upper right")
     figure.suptitle(
         "P16 full-global load, background off, seed 13; "
-        "100,000 selections per sample",
+        f"{window_selections:,} selections per complete window",
         fontsize=11,
     )
     figure.tight_layout()
@@ -151,6 +164,7 @@ def parse_args():
     )
     parser.add_argument("--csv", required=True)
     parser.add_argument("--png", required=True)
+    parser.add_argument("--window-selections", type=int, default=100000)
     return parser.parse_args()
 
 
@@ -170,7 +184,7 @@ def main():
     if missing:
         raise ValueError(f"missing schemes: {sorted(missing)}")
     write_rows(rows, args.csv)
-    plot_rows(rows, args.png)
+    plot_rows(rows, args.png, args.window_selections)
 
 
 if __name__ == "__main__":

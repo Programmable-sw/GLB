@@ -95,6 +95,42 @@ def main():
                 "not the simulation end time"
             )
 
+        baseline_command = command[:-4]
+        baseline_command[baseline_command.index("-o") + 1] = str(
+            temp / "baseline_logout.dat"
+        )
+        baseline = subprocess.run(
+            baseline_command,
+            cwd=ROOT,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            timeout=60,
+            check=False,
+        )
+        if baseline.returncode != 0:
+            raise AssertionError(baseline.stdout)
+        traced_flows = [
+            line for line in completed.stdout.splitlines()
+            if line.startswith("Flow ") and " finished at " in line
+        ]
+        baseline_flows = [
+            line for line in baseline.stdout.splitlines()
+            if line.startswith("Flow ") and " finished at " in line
+        ]
+        if traced_flows != baseline_flows:
+            raise AssertionError("timeline observer changed flow completion output")
+        traced_diag = next(
+            line for line in completed.stdout.splitlines()
+            if line.startswith("PathSelectDiag ")
+        )
+        baseline_diag = next(
+            line for line in baseline.stdout.splitlines()
+            if line.startswith("PathSelectDiag ")
+        )
+        if traced_diag != baseline_diag:
+            raise AssertionError("timeline observer changed path selections")
+
     print("Path-selection timeline test passed")
 
 
