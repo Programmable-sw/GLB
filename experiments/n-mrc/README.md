@@ -43,7 +43,7 @@ Source 端逐包随机喷洒。每次发送 data packet 时直接从 `path_space
 
 ## `rr`
 
-Source 端逐包确定性轮转 EV/pathid。每个 flow、每个 priority 用 `src/dst/flow_id/priority` 混合出起点和步长，步长会调整到与 EV 空间互质；后续 packet 按这个序列前进，因此单个 flow 可以遍历整个 EV 空间。该方案不使用拥塞反馈，只提供比随机 `ops` 更稳定的覆盖。
+Source 端 RR 是 MRC 的无状态对照。RR 与 MRC 使用相同的 per-QP 确定性 EV permutation、相同游标起点以及 encoded identity EV→path 映射；RR 不维护 ACTIVE/COOLING/FAILED/PROBING 路径质量状态，也不根据 ACK/ECN/NACK/RTO 改变候选集合。因此在 EV 数不超过 MRC 的 32 个 active EV 上限、且 MRC 尚未收到有效状态更新时，两者对新 data packet 的 EV/path 序列逐包一致。MRC 收到有效反馈后可以跳过或替换 EV，RR 则继续原始轮转。
 
 ## `reps`
 
@@ -308,7 +308,7 @@ original_score - candidate_score >= delta
 
 ## `mrc`
 
-`mrc` 是 MRC 文献简要复现，使用 `-lb mrc`。MRC 论文整理稿见 `docs/papers/MRC.md`，当前仿真实现说明见 `MRC_IMPLEMENTATION.md`。
+`mrc` 是 MRC 文献简要复现，使用 `-lb mrc`。MRC 论文整理稿见 `docs/papers/MRC.md`。`-lb rr` 复用 MRC 的确定性 per-QP EV 顺序和 encoded identity 映射，但不拥有或更新 MRC 路径质量状态，因此是 MRC 实验的受控无学习 baseline；严格逐包等价只适用于首次有效 MRC 状态更新之前、且候选集不超过 32 个 active EV 的情况。
 
 Source 端为每个 RoCE source/QP 初始化独立 EV profile。单平面二层 Clos 中，每条远端 leaf 路径由 spine/path-id 唯一确定，因此完整 EV namespace 大小等于有效物理路径数，EV `i` 一对一直接编码 physical path-id `i`。
 
