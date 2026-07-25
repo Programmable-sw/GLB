@@ -295,6 +295,28 @@ mrc_inherent_limitations_report.md
 raw/<experiment>/<scenario>/<scheme>/seed_<seed>/
 ```
 
+In addition, create and track:
+
+```text
+experiments/n-mrc/mrc_inherent_limitations_and_evidence.md
+```
+
+This is the durable user-facing explanation. Its structure follows
+`experiments/n-mrc/four_scheme_risks_and_evidence.md`:
+
+1. conclusion first, with a scenario/applicability table;
+2. explicit evidence grades (`causal`, `overall support`, `mechanism support`,
+   `not established`);
+3. one section per experiment containing mechanism, confirmed limitation,
+   counterexamples, and applicability boundary;
+4. a direct RR/MRC/MRC-shared comparison table;
+5. current limitations and the most valuable follow-up experiments;
+6. data sources, reproduction scope, CSV/figure links, and caveats.
+
+The file must embed or link the final figures using paths relative to
+`experiments/n-mrc/`. It must distinguish observed association from causal
+isolation and must not copy raw runner prose without interpretation.
+
 Every case validates:
 
 - simulator and full command fingerprint;

@@ -399,6 +399,8 @@ Commit runner, tests, and README documentation.
   `experiments/n-mrc/output/mrc_inherent_limitations_128/`
 - Force-track final report:
   `experiments/n-mrc/output/mrc_inherent_limitations_128/mrc_inherent_limitations_report.md`
+- Create and track:
+  `experiments/n-mrc/mrc_inherent_limitations_and_evidence.md`
 
 - [ ] **Step 1: Build the final simulator**
 
@@ -430,8 +432,23 @@ Audit every claimed conclusion against `flow_metrics.csv` and
 
 - [ ] **Step 4: Commit durable evidence**
 
-Force-track the Markdown report and figure files referenced by it. Do not
-track raw simulator logs.
+Force-track the output Markdown report and figure files referenced by it. Also
+write `experiments/n-mrc/mrc_inherent_limitations_and_evidence.md` in the
+conclusion-first format of `four_scheme_risks_and_evidence.md`, with:
+
+```text
+结论先行和场景适用表
+证据等级定义
+实验 1：机制、已确认结论、负收益分类、适用边界
+实验 2：重复探索证据、MRC-shared 对照、适用边界
+实验 3：active EV 覆盖、状态浪费、适用边界
+RR/MRC/MRC-shared 直接对比
+尚未证实的风险和后续实验
+数据来源、复现范围、CSV/图链接和限制
+```
+
+Use relative links from `experiments/n-mrc/` and do not track raw simulator
+logs.
 
 - [ ] **Step 5: Final verification**
 
