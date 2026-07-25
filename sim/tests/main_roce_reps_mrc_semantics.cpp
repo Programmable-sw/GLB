@@ -75,6 +75,25 @@ static void reset_mrc_config(uint32_t paths) {
     RoceSrc::resetPathSelectionDiag();
 }
 
+static void configure_identity(RoceSrc& src, uint32_t source,
+                               uint32_t destination, uint32_t flow_id) {
+    src.set_src(source);
+    src.set_dst(destination);
+    src.set_flowid(flow_id);
+    src._flow_started = true;
+}
+
+static std::vector<uint32_t> select_paths(RoceSrc& src,
+                                          RoceSrc::lb_mode_t mode,
+                                          uint32_t count) {
+    src._flow_lb_mode = mode;
+    std::vector<uint32_t> result;
+    for (uint32_t i = 0; i < count; i++)
+        result.push_back(
+            src.choose_path_for_test(Packet::PRIO_LO, false));
+    return result;
+}
+
 static bool active_contains(const RoceSrc& src, uint32_t logical_ev) {
     return std::find(src._mrc_active.begin(), src._mrc_active.end(),
                      logical_ev) != src._mrc_active.end();
@@ -235,6 +254,63 @@ static void test_mrc_deterministic_active_subset_and_unique_backups() {
          it != active.end(); ++it)
         expect(backup.count(*it) == 0,
                "backup EVs should not duplicate active physical paths");
+}
+
+static void test_rr_matches_healthy_mrc_order() {
+    for (uint32_t paths = 8; paths <= 16; paths *= 2) {
+        reset_mrc_config(paths);
+        for (uint32_t flow_id = 801; flow_id <= 802; flow_id++) {
+            RoceSrc rr(NULL, NULL, test_eventlist(),
+                       speedFromMbps((uint64_t)100000));
+            RoceSrc mrc(NULL, NULL, test_eventlist(),
+                        speedFromMbps((uint64_t)100000));
+            configure_identity(rr, 11, 27, flow_id);
+            configure_identity(mrc, 11, 27, flow_id);
+
+            std::vector<uint32_t> rr_paths =
+                select_paths(rr, RoceSrc::LB_RR, paths * 4);
+            std::vector<uint32_t> mrc_paths =
+                select_paths(mrc, RoceSrc::LB_MRC, paths * 4);
+            expect(rr_paths == mrc_paths,
+                   "RR must match healthy MRC EV/path order exactly");
+        }
+    }
+
+    reset_mrc_config(8);
+    RoceSrc first(NULL, NULL, test_eventlist(),
+                  speedFromMbps((uint64_t)100000));
+    RoceSrc second(NULL, NULL, test_eventlist(),
+                   speedFromMbps((uint64_t)100000));
+    configure_identity(first, 11, 27, 801);
+    configure_identity(second, 11, 27, 802);
+    expect(select_paths(first, RoceSrc::LB_RR, 8) !=
+               select_paths(second, RoceSrc::LB_RR, 8),
+           "different QP identities should retain distinct permutations");
+}
+
+static void test_rr_diverges_only_after_mrc_feedback() {
+    reset_mrc_config(8);
+    RoceSrc rr(NULL, NULL, test_eventlist(),
+               speedFromMbps((uint64_t)100000));
+    RoceSrc mrc(NULL, NULL, test_eventlist(),
+                speedFromMbps((uint64_t)100000));
+    configure_identity(rr, 11, 27, 803);
+    configure_identity(mrc, 11, 27, 803);
+
+    expect(select_paths(rr, RoceSrc::LB_RR, 8) ==
+               select_paths(mrc, RoceSrc::LB_MRC, 8),
+           "matched schemes must complete the first healthy rotation");
+
+    uint32_t cooled = mrc._mrc_active[mrc._mrc_active_cursor];
+    mrc.mrc_mark_congested(cooled, RoceSrc::MRC_CONGESTION_ECN);
+    uint32_t rr_next =
+        select_paths(rr, RoceSrc::LB_RR, 1).front();
+    uint32_t mrc_next =
+        select_paths(mrc, RoceSrc::LB_MRC, 1).front();
+    expect(rr_next == cooled,
+           "stateless RR must keep the common healthy order");
+    expect(mrc_next != cooled,
+           "MRC must skip the EV after effective congestion feedback");
 }
 
 static void test_mrc_ecn_uses_echoed_ev() {
@@ -668,6 +744,8 @@ int main() {
     test_reps_clean_ack_recycling();
     test_mrc_encoded_path_identity();
     test_mrc_deterministic_active_subset_and_unique_backups();
+    test_rr_matches_healthy_mrc_order();
+    test_rr_diverges_only_after_mrc_feedback();
     test_mrc_ecn_uses_echoed_ev();
     test_mrc_trim_soft_skips_exact_ev();
     test_dcqcn_variant_nacks_keep_natural_inflate();
