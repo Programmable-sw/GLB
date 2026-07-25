@@ -203,6 +203,9 @@ public:
                                                uint32_t domain);
     static void setNetawareDecisionTrace(std::ostream* trace) {_netaware_decision_trace = trace;}
     static void resetPathSelectionDiag();
+    static void configurePathSelectionTimeline(std::ostream* trace,
+                                               uint64_t every);
+    static void flushPathSelectionTimeline(simtime_picosec now);
     static void setDiagPhysicalPathSpace(uint32_t paths) {_diag_physical_path_space = paths ? paths : 1;}
     static uint64_t diagSelectedTotal() {return _diag_selected_total;}
     static const std::map<uint32_t, uint64_t>& diagSelectedEvHist() {return _diag_selected_ev_hist;}
@@ -829,6 +832,11 @@ private:
     static std::map<uint32_t, uint64_t> _diag_selected_ev_hist;
     static std::map<uint32_t, uint64_t> _diag_selected_physical_hist;
     static std::vector<uint32_t> _diag_first_selected_evs;
+    static std::ostream* _path_selection_timeline;
+    static uint64_t _path_selection_timeline_every;
+    static uint64_t _path_selection_timeline_next;
+    static uint64_t _path_selection_timeline_last;
+    static void writePathSelectionTimeline(simtime_picosec now);
     std::vector<uint32_t> _ndp_path_ids;
     uint32_t _ndp_cursor;
     uint32_t _ndp_pull_credit;

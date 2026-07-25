@@ -817,6 +817,8 @@ void exit_error(char* progr) {
     cout << "\t[-nmrc_relative_delta VALUE]" << endl;
     cout << "\t[-nmrc_route_delta VALUE] [-nmrc_cooldown_delta VALUE]" << endl;
     cout << "\t[-queue_cv_sample_us x]" << endl;
+    cout << "\t[-path_selection_timeline file] "
+         << "[-path_selection_timeline_every N]" << endl;
     cout << "\t[-mixed_lb_traffic]" << endl;
     exit(1);
 }
@@ -893,6 +895,8 @@ int main(int argc, char **argv) {
     double path_hotspot_bg_on_us = 1000.0;
     double path_hotspot_bg_off_us = 0.0;
     double queue_cv_sample_us = 0.0;
+    string path_selection_timeline_file;
+    uint64_t path_selection_timeline_every = 100000;
     double stor_feedback_min_us = 5.0;
     double stor_feedback_max_us = 5.0;
     double stor_trim_feedback_min_us = 5.0;
@@ -1651,6 +1655,18 @@ int main(int argc, char **argv) {
             if (queue_cv_sample_us < 0.0)
                 queue_cv_sample_us = 0.0;
             cout << "Queue CV sample interval " << queue_cv_sample_us << "us" << endl;
+        } else if (!strcmp(argv[i],"-path_selection_timeline")){
+            path_selection_timeline_file = argv[i+1];
+            cout << "path selection timeline "
+                 << path_selection_timeline_file << endl;
+            i++;
+        } else if (!strcmp(argv[i],"-path_selection_timeline_every")){
+            path_selection_timeline_every = strtoull(argv[i+1], NULL, 10);
+            if (path_selection_timeline_every == 0)
+                path_selection_timeline_every = 1;
+            cout << "path selection timeline every "
+                 << path_selection_timeline_every << " selections" << endl;
+            i++;
             i++;
         } else if (!strcmp(argv[i],"-sglb_update_us")){
             double sglb_update_us = atof(argv[i+1]);
@@ -3458,6 +3474,18 @@ int main(int argc, char **argv) {
     RoceSrc::setMrcProbeIntervalPkts(mrc_probe_interval_pkts);
     RoceSrc::setPathEntropySize(path_entropy_size);
 
+    ofstream path_selection_timeline;
+    if (!path_selection_timeline_file.empty()) {
+        path_selection_timeline.open(path_selection_timeline_file.c_str());
+        if (!path_selection_timeline.is_open()) {
+            cerr << "Could not open path selection timeline "
+                 << path_selection_timeline_file << endl;
+            exit(1);
+        }
+        RoceSrc::configurePathSelectionTimeline(
+            &path_selection_timeline, path_selection_timeline_every);
+    }
+
     ofstream netaware_path_trace;
     ofstream netaware_decision_trace;
     NetawarePathStateTracer* netaware_path_tracer = NULL;
@@ -4173,6 +4201,7 @@ int main(int argc, char **argv) {
          << endl;
     const map<uint32_t, uint64_t>& selected_ev_hist = RoceSrc::diagSelectedEvHist();
     const map<uint32_t, uint64_t>& selected_physical_hist = RoceSrc::diagSelectedPhysicalHist();
+    RoceSrc::flushPathSelectionTimeline(eventlist.now());
     cout << "PathSelectDiag "
          << "selected_total=" << RoceSrc::diagSelectedTotal()
          << " unique_evs=" << selected_ev_hist.size()
