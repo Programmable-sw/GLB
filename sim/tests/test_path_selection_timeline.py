@@ -48,6 +48,7 @@ def main():
             "-cc", "dcqcn_variant",
             "-roce_rx_mode", "sp",
             "-roce_sack_bitmap_bits", "64",
+            "-queue_cv_sample_us", "100",
             "-path_selection_timeline", str(trace),
             "-path_selection_timeline_every", "1000",
         ]
@@ -88,6 +89,11 @@ def main():
             if float(row["cumulative_cv"]) < 0:
                 raise AssertionError("cumulative CV must be non-negative")
             previous_total = total
+        if float(rows[-1]["time_us"]) >= 1000:
+            raise AssertionError(
+                "final partial snapshot must use the last selection time, "
+                "not the simulation end time"
+            )
 
     print("Path-selection timeline test passed")
 

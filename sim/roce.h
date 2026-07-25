@@ -205,7 +205,7 @@ public:
     static void resetPathSelectionDiag();
     static void configurePathSelectionTimeline(std::ostream* trace,
                                                uint64_t every);
-    static void flushPathSelectionTimeline(simtime_picosec now);
+    static void flushPathSelectionTimeline();
     static void setDiagPhysicalPathSpace(uint32_t paths) {_diag_physical_path_space = paths ? paths : 1;}
     static uint64_t diagSelectedTotal() {return _diag_selected_total;}
     static const std::map<uint32_t, uint64_t>& diagSelectedEvHist() {return _diag_selected_ev_hist;}
@@ -836,6 +836,7 @@ private:
     static uint64_t _path_selection_timeline_every;
     static uint64_t _path_selection_timeline_next;
     static uint64_t _path_selection_timeline_last;
+    static simtime_picosec _path_selection_last_event_time;
     static void writePathSelectionTimeline(simtime_picosec now);
     std::vector<uint32_t> _ndp_path_ids;
     uint32_t _ndp_cursor;

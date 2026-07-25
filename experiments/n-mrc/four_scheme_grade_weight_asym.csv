@@ -1,0 +1,7 @@
+variant,seed,p99_finish_us,ecn_echo_acks
+default,13,464.412,2855
+default,29,467.937,2797
+default,47,475.537,3246
+equal,13,516.725,3904
+equal,29,544.406,3817
+equal,47,542.008,4346

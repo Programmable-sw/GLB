@@ -141,6 +141,7 @@ std::ostream* RoceSrc::_path_selection_timeline = NULL;
 uint64_t RoceSrc::_path_selection_timeline_every = 0;
 uint64_t RoceSrc::_path_selection_timeline_next = 0;
 uint64_t RoceSrc::_path_selection_timeline_last = 0;
+simtime_picosec RoceSrc::_path_selection_last_event_time = 0;
 
 void RoceSrc::printDcqcnConfiguration(std::ostream& out) {
     const char* nack_reaction = "cnp";
@@ -239,6 +240,7 @@ void RoceSrc::resetPathSelectionDiag() {
     _diag_first_selected_evs.clear();
     _path_selection_timeline_next = _path_selection_timeline_every;
     _path_selection_timeline_last = 0;
+    _path_selection_last_event_time = 0;
 }
 
 void RoceSrc::configurePathSelectionTimeline(std::ostream* trace,
@@ -284,8 +286,8 @@ void RoceSrc::writePathSelectionTimeline(simtime_picosec now) {
     _path_selection_timeline_last = _diag_selected_total;
 }
 
-void RoceSrc::flushPathSelectionTimeline(simtime_picosec now) {
-    writePathSelectionTimeline(now);
+void RoceSrc::flushPathSelectionTimeline() {
+    writePathSelectionTimeline(_path_selection_last_event_time);
     if (_path_selection_timeline)
         _path_selection_timeline->flush();
 }
@@ -1578,6 +1580,7 @@ void RoceSrc::record_path_selection(uint32_t selected_ev, uint32_t physical_path
     uint32_t physical_space = _diag_physical_path_space ?
         _diag_physical_path_space : 1;
     _diag_selected_physical_hist[physical_path % physical_space]++;
+    _path_selection_last_event_time = eventlist().now();
     if (_diag_first_selected_evs.size() < 128)
         _diag_first_selected_evs.push_back(selected_ev);
     if (_path_selection_timeline && _diag_selected_total >=

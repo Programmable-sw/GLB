@@ -1655,6 +1655,7 @@ int main(int argc, char **argv) {
             if (queue_cv_sample_us < 0.0)
                 queue_cv_sample_us = 0.0;
             cout << "Queue CV sample interval " << queue_cv_sample_us << "us" << endl;
+            i++;
         } else if (!strcmp(argv[i],"-path_selection_timeline")){
             path_selection_timeline_file = argv[i+1];
             cout << "path selection timeline "
@@ -1666,7 +1667,6 @@ int main(int argc, char **argv) {
                 path_selection_timeline_every = 1;
             cout << "path selection timeline every "
                  << path_selection_timeline_every << " selections" << endl;
-            i++;
             i++;
         } else if (!strcmp(argv[i],"-sglb_update_us")){
             double sglb_update_us = atof(argv[i+1]);
@@ -4201,7 +4201,7 @@ int main(int argc, char **argv) {
          << endl;
     const map<uint32_t, uint64_t>& selected_ev_hist = RoceSrc::diagSelectedEvHist();
     const map<uint32_t, uint64_t>& selected_physical_hist = RoceSrc::diagSelectedPhysicalHist();
-    RoceSrc::flushPathSelectionTimeline(eventlist.now());
+    RoceSrc::flushPathSelectionTimeline();
     cout << "PathSelectDiag "
          << "selected_total=" << RoceSrc::diagSelectedTotal()
          << " unique_evs=" << selected_ev_hist.size()
