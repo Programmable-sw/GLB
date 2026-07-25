@@ -432,6 +432,7 @@ public:
     uint64_t _mrc_cycle_cooling_expiries;
     uint64_t _mrc_cooling_skip_selection_sum;
     uint64_t _mrc_cooling_skip_selection_events;
+    uint64_t _mrc_duplicate_feedback_ignored;
     uint64_t _mrc_cwnd_scaled_feedback_events;
     uint64_t _mrc_cwnd_scaled_duplicate_feedback_ignored;
     uint64_t _mrc_probe_events;

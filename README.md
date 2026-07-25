@@ -50,7 +50,7 @@ n-MRC 让端侧按确定性顺序逐包轮询 EV。第一跳 Leaf 会检查当�
 | `n-mrc` | 端侧逐包轮询路径。第一跳 Leaf 发现至少三条路径严格优于当前路径时，为当前包选择更好的出口，并通知端侧暂时停用原路径。全部路径都在冷却时仍选择最早恢复的路径发送。 |
 | `n-mrc-fixed0.5` | 原实验方案 `n-mrc4` 的正式名称。默认要求原路径分数不低于 `0.5`、候选路径低于 `0.5`，且质量差至少为 `0.25`，满足时将当前包换路和 FastCNP cooldown 通知作为配对动作。 |
 | `n-mrc-delta` | 不设置绝对拥塞门槛，只在候选路径比原路径至少好 `delta=0.25` 时，将当前包换路并配对发送 FastCNP cooldown 通知。 |
-| `mrc` | 每个 QP 将 EV 与单平面物理 path-id 一一编码，按确定性排列循环使用不超过 32 个 active EV。ECN 与 TRIM 使用相同处罚：默认进入 one-cycle soft skip，冷却期间后续拥塞反馈会续期，反馈排空后自然恢复；显式 `-mrc_cooldown_mode cwnd_scaled` 保留按拓扑 BDP 取整的固定长 cooldown 诊断。全部 EV 冷却时使用最早到期 EV 保活，不清除状态或 deadline。OOO 只进入 SP/SACK 选择重传，LOSS/RTO 标记 failed 并换入剩余唯一路径。 |
+| `mrc` | 每个 QP 将 EV 与单平面物理 path-id 一一编码，按确定性排列循环使用不超过 32 个 active EV。ECN 与 TRIM 使用相同处罚：默认进入 one-cycle soft skip，冷却期间后续拥塞反馈只计数而不续期，冷却结束后自然恢复；显式 `-mrc_cooldown_mode cwnd_scaled` 保留按拓扑 BDP 取整的固定长 cooldown 诊断。全部 EV 冷却时使用最早到期 EV 保活，不清除状态或 deadline。OOO 只进入 SP/SACK 选择重传，LOSS/RTO 标记 failed 并换入剩余唯一路径。 |
 | `conweave` | RTT 超过阈值后切换 pathid，减少持续走拥塞路径的概率。 |
 | `adaptive-routing` | 交换机按本地队列拥塞情况在可用下一跳中选择端口。 |
 | `drill` | 交换机结合随机候选和历史候选端口，优先选择拥塞较低的下一跳。 |

@@ -101,7 +101,7 @@ static RoceNack* make_nack(PacketFlow& flow, Route& route,
 static void test_mrc_default_is_one_cycle() {
     expect(RoceSrc::mrcCooldownMode() ==
                RoceSrc::MRC_COOLDOWN_ONE_CYCLE,
-           "default MRC cooldown should be one-cycle rearming");
+           "default MRC cooldown should be one-cycle non-rearming");
     RoceSrc::setMrcCooldownReferencePkts(86);
     expect(RoceSrc::mrcCooldownReferencePkts() == 86,
            "MRC should expose the resolved BDP reference window");
@@ -116,6 +116,37 @@ static void test_mrc_default_is_one_cycle() {
     expect(RoceSrc::mrcAllCoolingFallback() ==
                RoceSrc::MRC_ALL_COOLING_EARLIEST,
            "default all-cooling fallback should be earliest");
+}
+
+static void test_mrc_one_cycle_duplicate_feedback_does_not_rearm() {
+    reset_mrc_config(8);
+    RoceSrc src(NULL, NULL, test_eventlist(),
+                speedFromMbps((uint64_t)100000));
+    src.set_flowid(700);
+    src._flow_started = true;
+    src.init_mrc_paths(8);
+
+    uint32_t ev = src._mrc_active[0];
+    src.mrc_mark_congested(ev, RoceSrc::MRC_CONGESTION_ECN);
+    uint64_t original_deadline =
+        src._mrc_evs[ev].cool_until_select_count;
+    expect(original_deadline == 8,
+           "the first one-cycle signal should skip eight selections");
+
+    src._mrc_select_counter = 3;
+    src.mrc_mark_congested(ev, RoceSrc::MRC_CONGESTION_TRIM);
+    expect(src._mrc_evs[ev].cool_until_select_count == original_deadline,
+           "feedback received while cooling must not extend the deadline");
+    expect(src._mrc_duplicate_feedback_ignored == 1,
+           "ignored one-cycle feedback should be counted");
+
+    src._mrc_select_counter = original_deadline;
+    expect(src.mrc_ev_selectable(ev),
+           "the EV should reactivate at its original deadline");
+    src.mrc_mark_congested(ev, RoceSrc::MRC_CONGESTION_ECN);
+    expect(src._mrc_evs[ev].cool_until_select_count ==
+               original_deadline + 8,
+           "feedback after reactivation should start a new cooldown");
 }
 
 static void test_reps_clean_ack_recycling() {
@@ -633,6 +664,7 @@ static void test_mrc_all_cooling_round_robin_preserves_spraying() {
 int main() {
     Packet::set_packet_size(1000);
     test_mrc_default_is_one_cycle();
+    test_mrc_one_cycle_duplicate_feedback_does_not_rearm();
     test_reps_clean_ack_recycling();
     test_mrc_encoded_path_identity();
     test_mrc_deterministic_active_subset_and_unique_backups();

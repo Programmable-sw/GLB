@@ -304,6 +304,7 @@ RoceSrc::RoceSrc(RoceLogger* logger, TrafficLogger* pktlogger, EventList &eventl
     _mrc_cycle_cooling_expiries = 0;
     _mrc_cooling_skip_selection_sum = 0;
     _mrc_cooling_skip_selection_events = 0;
+    _mrc_duplicate_feedback_ignored = 0;
     _mrc_cwnd_scaled_feedback_events = 0;
     _mrc_cwnd_scaled_duplicate_feedback_ignored = 0;
     _mrc_probe_events = 0;
@@ -2693,12 +2694,13 @@ void RoceSrc::mrc_mark_congested(uint32_t logical_ev,
         return;
     bool cwnd_scaled_feedback =
         _mrc_cooldown_mode == MRC_COOLDOWN_CWND_SCALED;
-    if (cwnd_scaled_feedback) {
+    if (cwnd_scaled_feedback)
         _mrc_cwnd_scaled_feedback_events++;
-        if (ev.state == MRC_PATH_COOLING) {
+    if (ev.state == MRC_PATH_COOLING) {
+        _mrc_duplicate_feedback_ignored++;
+        if (cwnd_scaled_feedback)
             _mrc_cwnd_scaled_duplicate_feedback_ignored++;
-            return;
-        }
+        return;
     }
     if (ev.state == MRC_PATH_PROBING)
         _mrc_probe_fail_events++;

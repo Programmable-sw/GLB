@@ -3766,6 +3766,7 @@ int main(int argc, char **argv) {
     uint64_t mrc_cycle_cooling_expiries = 0;
     uint64_t mrc_cooling_skip_selection_sum = 0;
     uint64_t mrc_cooling_skip_selection_events = 0;
+    uint64_t mrc_duplicate_feedback_ignored = 0;
     uint64_t mrc_cwnd_scaled_feedback_events = 0;
     uint64_t mrc_cwnd_scaled_duplicate_feedback_ignored = 0;
     uint64_t mrc_probe_events = 0, mrc_backup_replacement_events = 0;
@@ -3905,6 +3906,8 @@ int main(int argc, char **argv) {
             roce_srcs[ix]->_mrc_cooling_skip_selection_sum;
         mrc_cooling_skip_selection_events +=
             roce_srcs[ix]->_mrc_cooling_skip_selection_events;
+        mrc_duplicate_feedback_ignored +=
+            roce_srcs[ix]->_mrc_duplicate_feedback_ignored;
         mrc_cwnd_scaled_feedback_events +=
             roce_srcs[ix]->_mrc_cwnd_scaled_feedback_events;
         mrc_cwnd_scaled_duplicate_feedback_ignored +=
@@ -4106,6 +4109,8 @@ int main(int argc, char **argv) {
          << mrc_cooling_skip_selection_sum
          << " cooling_skip_selection_events="
          << mrc_cooling_skip_selection_events
+         << " duplicate_feedback_ignored="
+         << mrc_duplicate_feedback_ignored
          << " cwnd_scaled_feedback_events="
          << mrc_cwnd_scaled_feedback_events
          << " cwnd_scaled_duplicate_feedback_ignored="
