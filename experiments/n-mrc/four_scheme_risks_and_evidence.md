@@ -129,9 +129,9 @@ P1 是可靠的非 equal 场景：gentle 比 equal 快 0.93%，seed 29/47 胜出
 | equal | 3,893 | 113,374 | 114,211 | 72,338 | **0.373** |
 | gentle | **3,877** | **110,418** | **111,188** | **70,324** | 0.454 |
 
-gentle 的 CCT 收益与 trim、NACK、等级变化下降约 2.6%–2.8% 同时出现，但 queue CV 反而提高 21.5%。因此它不是靠“路径更均衡”获胜；更符合数据的解释是，P1 每源只有一个活动流，轻度等级偏好能够减少一部分恢复事件，同时又不像 default/sharp 那样放大错误路径判断。该解释仍是机制推断，没有逐包反事实隔离。
+gentle 的 CCT 收益与 trim、NACK、等级变化下降约 2.6%–2.8% 同时出现，但 queue CV 反而提高 21.5%。因此“更低 queue CV 导致它获胜”与数据不符。现有计数只能确认 gentle 同时具有较少恢复事件和较短 CCT，不能判断这些恢复事件是否是 CCT 改善的原因。
 
-从 P2 开始 equal 转为最优，并一直保持到 P32。已验证的是并发提高后等级权重不再产生稳定收益；“更多发送者使等级更偏短期状态”是与结果一致的机制解释，本轮没有路径级时间序列将它隔离。尤其 P2 的单 seed 赢家在 sharp/default/equal 之间变化，说明低并发过渡区对随机映射敏感。
+从 P2 开始 equal 转为最优，并一直保持到 P32。已验证的是并发提高后等级权重不再产生稳定收益。为什么 P1 到 P2 会改变排序仍未被隔离；需要路径等级驻留时间和逐批选择时间线才能检验“更多发送者使等级更偏短期状态”。P2 的单 seed 赢家在 sharp/default/equal 之间变化，说明该过渡区的结果随 seed 变化。
 
 #### 固定 P4，改变单流大小
 
@@ -150,9 +150,9 @@ gentle 的 CCT 收益与 trim、NACK、等级变化下降约 2.6%–2.8% 同时�
 | default | **200** | **81** | **81** | **124** | **0.604** |
 | 相对变化 | -14.3% | -51.4% | -51.7% | -36.4% | -1.4% |
 
-短流只持续很短时间。equal 把 GOOD/MILD/BAD 一视同仁，而 default 保留等级差异；后者与更少的 ECN、trim、NACK 和更短 CCT 同时出现。由于没有记录每条短流选择路径的等级，这支持但没有隔离“default 在流结束前避开已出现坏信号路径”的机制。
+equal 把 GOOD/MILD/BAD 一视同仁，而 default 保留等级差异；在 0.125 MiB 点，后者与更少的 ECN、trim、NACK 和更短 CCT 同时出现。由于没有记录每条流选择路径的等级，当前实验只能确认这些指标共同改善，不能确认 default 是否在流结束前避开了已出现坏信号的路径。
 
-流增至 0.5/2 MiB 后，equal 重新最优。长流经历多轮反馈和路径状态变化，固定权重会持续重新分配流量，default 在 P4/0.5 MiB 中相对 equal 多 12.0% ECN、6.6% trim 和 6.4% NACK，CCT 慢 4.0%。这支持“短流可利用一次等级判断，长流更容易承受持续权重反馈代价”的解释。
+流增至 0.5/2 MiB 后，equal 重新最优。default 在 P4/0.5 MiB 中相对 equal 多 12.0% ECN、6.6% trim 和 6.4% NACK，CCT 慢 4.0%。这验证了指标方向随规模反转，但没有记录单流经历的反馈轮数或权重导致的流量迁移次数，因此“长流承受持续权重反馈代价”仍是待验证假设。
 
 8 MiB 的三 seed 几何均值虽然由 default 小幅领先 0.72%，但它只在 seed 47 胜 equal，seed 13/29 均落后，而且 queue CV 比 equal 高 67%。因此该点只说明大流场景存在高方差，不能作为 default 稳定优于 equal 的证据。
 
@@ -305,3 +305,6 @@ python3 experiments/n-mrc/analyze_four_scheme_parameter_matrix.py \
 - `summary.csv`: `b345d4505fd7c94b4ae6b95eddd3a7099fceca382283978a9b57b694132d8ef1`
 - `transitions.csv`: `61a2e05239162e49097a06f9f32a4e96d672f30d4c35fe18eb06787078eedd5a`
 - `flow_size_bins.csv`: `73470b115e472be6f049eaa4e30b8b200ecb6d700c81a953d5e400dc780519d2`
+- `collective results.csv`: `4434a888ff054f1491ac2a40bd3f8a7e34749f21eb9006290633d8e505af5339`
+- `collective summary.csv`: `152d0c87caa53c422eca26f44ed5c190164225aacf51e516b92a924de5a2ea18`
+- `collective winners.csv`: `17179b8230550054e9df50d75099d65cda9e25b37a0050f44b3e48c6529b2554`

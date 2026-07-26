@@ -137,7 +137,8 @@ def run(spec, artifact, args):
 def write_csv(path, rows):
     fields = list(dict.fromkeys(key for row in rows for key in row))
     with path.open("w", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=fields)
+        writer = csv.DictWriter(
+            handle, fieldnames=fields, lineterminator="\n")
         writer.writeheader()
         writer.writerows(rows)
 

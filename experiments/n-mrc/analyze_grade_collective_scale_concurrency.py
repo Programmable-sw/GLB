@@ -34,7 +34,8 @@ def write_csv(path, rows):
     rows = list(rows)
     fields = list(dict.fromkeys(key for row in rows for key in row))
     with path.open("w", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=fields)
+        writer = csv.DictWriter(
+            handle, fieldnames=fields, lineterminator="\n")
         writer.writeheader()
         writer.writerows(rows)
 
@@ -52,11 +53,29 @@ def validate(rows):
         raise ValueError("results do not contain 108 unique cells")
     if set(identities) != expected:
         raise ValueError("results differ from expected matrix")
-    if any(
-            row["returncode"] != "0" or row["config_ok"] != "1" or
-            row["all_flows_completed"] != "1" or
-            float(row["primary_us"]) <= 0 for row in rows):
-        raise ValueError("results contain an invalid cell")
+    for row in rows:
+        primary = float(row["primary_us"])
+        meta = runner.SCENARIO_META[row["scenario"]]
+        if (
+                row["returncode"] != "0" or row["config_ok"] != "1" or
+                row["all_flows_completed"] != "1" or
+                not math.isfinite(primary) or primary <= 0):
+            raise ValueError("results contain an invalid cell")
+        if (
+                row["weights"] != "/".join(
+                    runner.WEIGHTS[row["variant"]]) or
+                row["primary_metric"] != "all_to_all_cct_us" or
+                int(row["parallel"]) != meta["parallel"] or
+                int(row["flow_kib"]) != meta["flow_kib"]):
+            raise ValueError("result metadata does not match scenario")
+        for field in DIAGNOSTICS:
+            if field not in row or row[field] == "":
+                raise ValueError(f"result lacks diagnostic {field}")
+            if not math.isfinite(float(row[field])):
+                raise ValueError(f"result has non-finite diagnostic {field}")
+    sim_hashes = {row["sim_sha256"] for row in rows}
+    if len(sim_hashes) != 1 or not next(iter(sim_hashes)):
+        raise ValueError("results do not share one simulator SHA")
     hashes = {}
     for row in rows:
         hashes.setdefault(
@@ -89,7 +108,7 @@ def summarize(rows):
         }
         for field in DIAGNOSTICS:
             item[field] = statistics.fmean(
-                float(row.get(field) or 0) for row in selected)
+                float(row[field]) for row in selected)
         output.append(item)
     if len(output) != 36:
         raise ValueError("summary does not contain 36 groups")

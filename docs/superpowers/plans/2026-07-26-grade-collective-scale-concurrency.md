@@ -47,7 +47,7 @@
 - Consumes: the runner result rows.
 - Produces: a complete scenario/variant summary and a winner table with seed support and mechanism deltas versus equal.
 
-- [ ] **Step 1:** Run the 120-cell matrix with four workers.
+- [ ] **Step 1:** Run the 108-cell matrix with four workers.
 - [ ] **Step 2:** Reject missing cells, invalid completion, duplicate seeds, or traffic hash mismatch.
 - [ ] **Step 3:** Compute three-seed geometric-mean CCT and mean ECN, trim, NACK, level-change, all-zero, and queue-CV metrics.
 - [ ] **Step 4:** Mark a non-equal winner valid only when it has the lowest geometric-mean CCT and beats equal in at least two seeds.
