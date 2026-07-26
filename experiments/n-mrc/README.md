@@ -337,6 +337,10 @@ python3 experiments/n-mrc/run_mrc_inherent_limitations.py run \
 
 runner 对每个 paired block 复用同一 traffic SHA-256，并在聚合前要求完成记录、`MrcFlowDiag`、配置和所有预期 flow ID 全部匹配。`report` 子命令只接受 `manifest.json` 已标记 complete 的结果目录。
 
+128 节点、102 个正式单元、三个 seed 的机制结论、图表和数据入口见
+[`mrc_inherent_limitations_and_evidence.md`](mrc_inherent_limitations_and_evidence.md)。
+该轮不包含路径失效或动态故障实验。
+
 OOO/SACK NACK 只进入 SP/SACK selective retransmission queue，不冷却、不 fail EV，也不触发 Go-Back-N replay。LOSS NACK 和能够归因到首个未确认 packet 的 RTO 才把对应 EV 标为 `FAILED`，从 active set 移除，并从剩余 unique backup path 中补入一个 EV。FAILED EV 等待 retry 时间后可以通过低频 probe 回到 active；backup replacement 不会引入 duplicate physical path。
 
 `dcqcn_variant` 独立维护 QP 级 congestion window。clean ACK 执行 `cwnd += 1/cwnd`，ECN ACK 执行 `cwnd -= 0.5`；OOO、TRIM、LOSS NACK 和 RTO 都执行 `cwnd -= 1`。默认 Exact+Bounded 传输不维护 `inflate`，发送额度为 `awnd=cwnd-inflight`，唯一 PSN 首次被 ACK/SACK 后才释放额度。MRC path state 与这个 QP 级窗口更新彼此独立。

@@ -1,0 +1,8 @@
+{
+  "exp1_actionable_fraction": 0.28740213079004756,
+  "exp1_paired_flows": 608976,
+  "exp1_slowdown_gt_5pct_fraction": 0.25735825385565275,
+  "flow_diagnostics": 2292990,
+  "paired_flow_rows": 1146495,
+  "shared_key_rows": 866065
+}

@@ -1072,23 +1072,33 @@ def make_streaming_figures(out, flow_size_rows, summary):
 
     figure_dir = Path(out) / "figures"
     figure_dir.mkdir(parents=True, exist_ok=True)
-    fig, axis = plt.subplots(figsize=(8, 4.8))
+    colors = {"mrc": "#2f6b9a", "mrc-shared": "#e58a2b"}
+
+    fig, axes = plt.subplots(
+        2, 1, figsize=(8.2, 6.6), sharex=True,
+        gridspec_kw={"height_ratios": (1, 1)})
     labels = [row["flow_size_kib"] for row in flow_size_rows]
-    axis.plot(
+    axes[0].plot(
         labels, [row["fct_ratio_geomean"] for row in flow_size_rows],
-        marker="o", label="MRC / RR FCT")
-    axis.axhline(1.0, color="black", linewidth=0.8)
-    axis.set_xscale("log")
-    axis.set_xlabel("Flow size (KiB, log scale)")
-    axis.set_ylabel("Paired FCT ratio")
-    other = axis.twinx()
-    other.plot(
+        marker="o", color=colors["mrc"])
+    axes[0].axhline(
+        1.0, color="#333333", linewidth=0.9, linestyle="--")
+    axes[0].set_ylabel("MRC / RR FCT geomean")
+    axes[0].grid(axis="y", color="#dddddd", linewidth=0.7)
+    axes[1].plot(
         labels, [row["actionable_fraction"] for row in flow_size_rows],
-        marker="s", color="tab:orange",
-        label="actionable feedback fraction")
-    other.set_ylabel("Actionable feedback fraction")
-    axis.set_title("Experiment 1: feedback opportunity versus flow size")
-    fig.tight_layout()
+        marker="s", color=colors["mrc-shared"])
+    axes[1].set_xscale("log")
+    axes[1].set_ylim(-0.03, 1.05)
+    axes[1].set_xlabel("Flow size (KiB, log scale)")
+    axes[1].set_ylabel("Actionable feedback fraction")
+    axes[1].grid(axis="y", color="#dddddd", linewidth=0.7)
+    fig.suptitle("Experiment 1: feedback opportunity versus flow size")
+    fig.text(
+        0.5, 0.945,
+        "608,976 paired flows; healthy/asymmetric, 40–100% load, 3 seeds",
+        ha="center", fontsize=9, color="#444444")
+    fig.tight_layout(rect=(0, 0, 1, 0.93))
     for suffix in ("png", "pdf"):
         fig.savefig(
             figure_dir / ("exp1_feedback_value_by_flow_size." + suffix),
@@ -1098,28 +1108,48 @@ def make_streaming_figures(out, flow_size_rows, summary):
     exp2 = [
         row for row in summary if row["experiment"] == "per_qp_sharing"
     ]
-    fig, axes = plt.subplots(1, 2, figsize=(9.5, 4.2))
-    for scheme in ("mrc", "mrc-shared"):
-        selected = sorted(
-            (row for row in exp2 if row["scheme"] == scheme),
-            key=lambda row: row["parallel"])
-        axes[0].plot(
-            [row["parallel"] for row in selected],
-            [row["redundant_discoveries"] for row in selected],
-            marker="o", label=scheme)
-        axes[1].plot(
-            [row["parallel"] for row in selected],
-            [row["cct_geomean_us"] for row in selected],
-            marker="o", label=scheme)
-    axes[0].set_title("Repeated discoveries")
-    axes[0].set_xlabel("Parallel QPs per source")
+    fig, axes = plt.subplots(1, 2, figsize=(9.8, 4.8))
+    parallels = tuple(sorted({row["parallel"] for row in exp2}))
+    positions = list(range(len(parallels)))
+    width = 0.36
+    for offset, scheme in ((-width / 2, "mrc"),
+                           (width / 2, "mrc-shared")):
+        selected = {
+            row["parallel"]: row for row in exp2
+            if row["scheme"] == scheme
+        }
+        repeated = axes[0].bar(
+            [position + offset for position in positions],
+            [selected[value]["redundant_discoveries"]
+             for value in parallels],
+            width=width, label=scheme, color=colors[scheme])
+        cct = axes[1].bar(
+            [position + offset for position in positions],
+            [selected[value]["cct_geomean_us"] for value in parallels],
+            width=width, label=scheme, color=colors[scheme])
+        axes[0].bar_label(
+            repeated, fmt="{:,.0f}", padding=2, fontsize=7,
+            rotation=90)
+        axes[1].bar_label(
+            cct, fmt="{:,.0f}", padding=2, fontsize=8)
+    axes[0].set_title("Redundant local discoveries")
+    axes[0].set_xlabel("Parallel QPs per source (P)")
     axes[0].set_ylabel("Redundant local discoveries")
-    axes[1].set_title("Completion time (secondary)")
-    axes[1].set_xlabel("Parallel QPs per source")
+    axes[1].set_title("Collective completion time")
+    axes[1].set_xlabel("Parallel QPs per source (P)")
     axes[1].set_ylabel("CCT geometric mean (us)")
+    for axis in axes:
+        axis.set_xticks(positions, parallels)
+        axis.set_ylim(bottom=0)
+        axis.grid(axis="y", color="#dddddd", linewidth=0.7)
+        axis.set_axisbelow(True)
     axes[0].legend()
-    axes[1].legend()
-    fig.tight_layout()
+    fig.suptitle("Experiment 2: per-QP repeated exploration")
+    fig.text(
+        0.5, 0.925,
+        "48,768 foreground QPs per bar across 3 seeds; fixed total bytes",
+        ha="center", fontsize=9, color="#444444")
+    fig.tight_layout(rect=(0, 0, 1, 0.91))
     for suffix in ("png", "pdf"):
         fig.savefig(
             figure_dir / ("exp2_per_qp_repeated_exploration." + suffix),
@@ -1129,29 +1159,55 @@ def make_streaming_figures(out, flow_size_rows, summary):
     exp3 = [
         row for row in summary if row["experiment"] == "active_ev_count"
     ]
-    fig, axes = plt.subplots(1, 2, figsize=(9.5, 4.2))
-    for load in (40, 80):
-        selected = sorted(
-            (row for row in exp3
-             if row["scheme"] == "mrc" and row["load_pct"] == load),
-            key=lambda row: row["active_evs"])
-        axes[0].plot(
-            [row["active_evs"] for row in selected],
-            [row["coverage_mean"] for row in selected],
-            marker="o", label="{}% load".format(load))
-        axes[1].plot(
-            [row["active_evs"] for row in selected],
-            [row["p99_fct_us"] for row in selected],
-            marker="o", label="{}% load".format(load))
+    fig, axes = plt.subplots(1, 2, figsize=(9.8, 4.8))
+    active_counts = tuple(sorted({row["active_evs"] for row in exp3}))
+    positions = list(range(len(active_counts)))
+    load_colors = {40: colors["mrc"], 80: colors["mrc-shared"]}
+    width = 0.36
+    loads = tuple(sorted({row["load_pct"] for row in exp3}))
+    offsets = (
+        (0.0,) if len(loads) == 1
+        else tuple(-width / 2 + index * width
+                   for index in range(len(loads)))
+    )
+    for offset, load in zip(offsets, loads):
+        selected = {
+            row["active_evs"]: row for row in exp3
+            if row["scheme"] == "mrc" and row["load_pct"] == load
+        }
+        coverage = axes[0].bar(
+            [position + offset for position in positions],
+            [selected[value]["coverage_mean"] for value in active_counts],
+            width=width, label="{}% load".format(load),
+            color=load_colors[load])
+        fct = axes[1].bar(
+            [position + offset for position in positions],
+            [selected[value]["p99_fct_us"] for value in active_counts],
+            width=width, label="{}% load".format(load),
+            color=load_colors[load])
+        axes[0].bar_label(
+            coverage, fmt="{:.3f}", padding=2, fontsize=8)
+        axes[1].bar_label(
+            fct, fmt="{:,.0f}", padding=2, fontsize=8)
     axes[0].set_xlabel("Active EV count")
     axes[0].set_ylabel("Mean EV coverage")
-    axes[0].set_ylim(0, 1.05)
+    axes[0].set_ylim(0, 1.12)
+    axes[0].set_title("State-set coverage")
     axes[1].set_xlabel("Active EV count")
     axes[1].set_ylabel("p99 FCT (us)")
+    axes[1].set_ylim(bottom=0)
+    axes[1].set_title("Tail flow completion time")
+    for axis in axes:
+        axis.set_xticks(positions, active_counts)
+        axis.grid(axis="y", color="#dddddd", linewidth=0.7)
+        axis.set_axisbelow(True)
     axes[0].legend()
-    axes[1].legend()
-    fig.suptitle("Experiment 3: EV-set size versus workload granularity")
-    fig.tight_layout()
+    fig.suptitle("Experiment 3: active EV count and workload granularity")
+    fig.text(
+        0.5, 0.925,
+        "MRC, asymmetric WebSearch, 3 seeds; physical path namespace = 8",
+        ha="center", fontsize=9, color="#444444")
+    fig.tight_layout(rect=(0, 0, 1, 0.91))
     for suffix in ("png", "pdf"):
         fig.savefig(
             figure_dir / ("exp3_active_ev_coverage_and_fct." + suffix),

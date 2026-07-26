@@ -1,0 +1,316 @@
+{
+  "case_count": 102,
+  "expected_identities": [
+    "flow_lifetime:exp1_healthy_websearch_40pct:rr:seed13",
+    "flow_lifetime:exp1_healthy_websearch_40pct:mrc:seed13",
+    "flow_lifetime:exp1_healthy_websearch_40pct:rr:seed29",
+    "flow_lifetime:exp1_healthy_websearch_40pct:mrc:seed29",
+    "flow_lifetime:exp1_healthy_websearch_40pct:rr:seed47",
+    "flow_lifetime:exp1_healthy_websearch_40pct:mrc:seed47",
+    "flow_lifetime:exp1_healthy_websearch_60pct:rr:seed13",
+    "flow_lifetime:exp1_healthy_websearch_60pct:mrc:seed13",
+    "flow_lifetime:exp1_healthy_websearch_60pct:rr:seed29",
+    "flow_lifetime:exp1_healthy_websearch_60pct:mrc:seed29",
+    "flow_lifetime:exp1_healthy_websearch_60pct:rr:seed47",
+    "flow_lifetime:exp1_healthy_websearch_60pct:mrc:seed47",
+    "flow_lifetime:exp1_healthy_websearch_80pct:rr:seed13",
+    "flow_lifetime:exp1_healthy_websearch_80pct:mrc:seed13",
+    "flow_lifetime:exp1_healthy_websearch_80pct:rr:seed29",
+    "flow_lifetime:exp1_healthy_websearch_80pct:mrc:seed29",
+    "flow_lifetime:exp1_healthy_websearch_80pct:rr:seed47",
+    "flow_lifetime:exp1_healthy_websearch_80pct:mrc:seed47",
+    "flow_lifetime:exp1_healthy_websearch_100pct:rr:seed13",
+    "flow_lifetime:exp1_healthy_websearch_100pct:mrc:seed13",
+    "flow_lifetime:exp1_healthy_websearch_100pct:rr:seed29",
+    "flow_lifetime:exp1_healthy_websearch_100pct:mrc:seed29",
+    "flow_lifetime:exp1_healthy_websearch_100pct:rr:seed47",
+    "flow_lifetime:exp1_healthy_websearch_100pct:mrc:seed47",
+    "flow_lifetime:exp1_asymmetric_websearch_40pct:rr:seed13",
+    "flow_lifetime:exp1_asymmetric_websearch_40pct:mrc:seed13",
+    "flow_lifetime:exp1_asymmetric_websearch_40pct:rr:seed29",
+    "flow_lifetime:exp1_asymmetric_websearch_40pct:mrc:seed29",
+    "flow_lifetime:exp1_asymmetric_websearch_40pct:rr:seed47",
+    "flow_lifetime:exp1_asymmetric_websearch_40pct:mrc:seed47",
+    "flow_lifetime:exp1_asymmetric_websearch_60pct:rr:seed13",
+    "flow_lifetime:exp1_asymmetric_websearch_60pct:mrc:seed13",
+    "flow_lifetime:exp1_asymmetric_websearch_60pct:rr:seed29",
+    "flow_lifetime:exp1_asymmetric_websearch_60pct:mrc:seed29",
+    "flow_lifetime:exp1_asymmetric_websearch_60pct:rr:seed47",
+    "flow_lifetime:exp1_asymmetric_websearch_60pct:mrc:seed47",
+    "flow_lifetime:exp1_asymmetric_websearch_80pct:rr:seed13",
+    "flow_lifetime:exp1_asymmetric_websearch_80pct:mrc:seed13",
+    "flow_lifetime:exp1_asymmetric_websearch_80pct:rr:seed29",
+    "flow_lifetime:exp1_asymmetric_websearch_80pct:mrc:seed29",
+    "flow_lifetime:exp1_asymmetric_websearch_80pct:rr:seed47",
+    "flow_lifetime:exp1_asymmetric_websearch_80pct:mrc:seed47",
+    "flow_lifetime:exp1_asymmetric_websearch_100pct:rr:seed13",
+    "flow_lifetime:exp1_asymmetric_websearch_100pct:mrc:seed13",
+    "flow_lifetime:exp1_asymmetric_websearch_100pct:rr:seed29",
+    "flow_lifetime:exp1_asymmetric_websearch_100pct:mrc:seed29",
+    "flow_lifetime:exp1_asymmetric_websearch_100pct:rr:seed47",
+    "flow_lifetime:exp1_asymmetric_websearch_100pct:mrc:seed47",
+    "per_qp_sharing:exp2_asymmetric_alltoall_256mib_p4:mrc:seed13",
+    "per_qp_sharing:exp2_asymmetric_alltoall_256mib_p4:mrc-shared:seed13",
+    "per_qp_sharing:exp2_asymmetric_alltoall_256mib_p4:mrc:seed29",
+    "per_qp_sharing:exp2_asymmetric_alltoall_256mib_p4:mrc-shared:seed29",
+    "per_qp_sharing:exp2_asymmetric_alltoall_256mib_p4:mrc:seed47",
+    "per_qp_sharing:exp2_asymmetric_alltoall_256mib_p4:mrc-shared:seed47",
+    "per_qp_sharing:exp2_asymmetric_alltoall_256mib_p8:mrc:seed13",
+    "per_qp_sharing:exp2_asymmetric_alltoall_256mib_p8:mrc-shared:seed13",
+    "per_qp_sharing:exp2_asymmetric_alltoall_256mib_p8:mrc:seed29",
+    "per_qp_sharing:exp2_asymmetric_alltoall_256mib_p8:mrc-shared:seed29",
+    "per_qp_sharing:exp2_asymmetric_alltoall_256mib_p8:mrc:seed47",
+    "per_qp_sharing:exp2_asymmetric_alltoall_256mib_p8:mrc-shared:seed47",
+    "per_qp_sharing:exp2_asymmetric_alltoall_256mib_p16:mrc:seed13",
+    "per_qp_sharing:exp2_asymmetric_alltoall_256mib_p16:mrc-shared:seed13",
+    "per_qp_sharing:exp2_asymmetric_alltoall_256mib_p16:mrc:seed29",
+    "per_qp_sharing:exp2_asymmetric_alltoall_256mib_p16:mrc-shared:seed29",
+    "per_qp_sharing:exp2_asymmetric_alltoall_256mib_p16:mrc:seed47",
+    "per_qp_sharing:exp2_asymmetric_alltoall_256mib_p16:mrc-shared:seed47",
+    "active_ev_count:exp3_asymmetric_websearch_40pct_k2:rr:seed13",
+    "active_ev_count:exp3_asymmetric_websearch_40pct_k2:mrc:seed13",
+    "active_ev_count:exp3_asymmetric_websearch_40pct_k2:rr:seed29",
+    "active_ev_count:exp3_asymmetric_websearch_40pct_k2:mrc:seed29",
+    "active_ev_count:exp3_asymmetric_websearch_40pct_k2:rr:seed47",
+    "active_ev_count:exp3_asymmetric_websearch_40pct_k2:mrc:seed47",
+    "active_ev_count:exp3_asymmetric_websearch_40pct_k4:rr:seed13",
+    "active_ev_count:exp3_asymmetric_websearch_40pct_k4:mrc:seed13",
+    "active_ev_count:exp3_asymmetric_websearch_40pct_k4:rr:seed29",
+    "active_ev_count:exp3_asymmetric_websearch_40pct_k4:mrc:seed29",
+    "active_ev_count:exp3_asymmetric_websearch_40pct_k4:rr:seed47",
+    "active_ev_count:exp3_asymmetric_websearch_40pct_k4:mrc:seed47",
+    "active_ev_count:exp3_asymmetric_websearch_40pct_k8:rr:seed13",
+    "active_ev_count:exp3_asymmetric_websearch_40pct_k8:mrc:seed13",
+    "active_ev_count:exp3_asymmetric_websearch_40pct_k8:rr:seed29",
+    "active_ev_count:exp3_asymmetric_websearch_40pct_k8:mrc:seed29",
+    "active_ev_count:exp3_asymmetric_websearch_40pct_k8:rr:seed47",
+    "active_ev_count:exp3_asymmetric_websearch_40pct_k8:mrc:seed47",
+    "active_ev_count:exp3_asymmetric_websearch_80pct_k2:rr:seed13",
+    "active_ev_count:exp3_asymmetric_websearch_80pct_k2:mrc:seed13",
+    "active_ev_count:exp3_asymmetric_websearch_80pct_k2:rr:seed29",
+    "active_ev_count:exp3_asymmetric_websearch_80pct_k2:mrc:seed29",
+    "active_ev_count:exp3_asymmetric_websearch_80pct_k2:rr:seed47",
+    "active_ev_count:exp3_asymmetric_websearch_80pct_k2:mrc:seed47",
+    "active_ev_count:exp3_asymmetric_websearch_80pct_k4:rr:seed13",
+    "active_ev_count:exp3_asymmetric_websearch_80pct_k4:mrc:seed13",
+    "active_ev_count:exp3_asymmetric_websearch_80pct_k4:rr:seed29",
+    "active_ev_count:exp3_asymmetric_websearch_80pct_k4:mrc:seed29",
+    "active_ev_count:exp3_asymmetric_websearch_80pct_k4:rr:seed47",
+    "active_ev_count:exp3_asymmetric_websearch_80pct_k4:mrc:seed47",
+    "active_ev_count:exp3_asymmetric_websearch_80pct_k8:rr:seed13",
+    "active_ev_count:exp3_asymmetric_websearch_80pct_k8:mrc:seed13",
+    "active_ev_count:exp3_asymmetric_websearch_80pct_k8:rr:seed29",
+    "active_ev_count:exp3_asymmetric_websearch_80pct_k8:mrc:seed29",
+    "active_ev_count:exp3_asymmetric_websearch_80pct_k8:rr:seed47",
+    "active_ev_count:exp3_asymmetric_websearch_80pct_k8:mrc:seed47"
+  ],
+  "flow_diagnostics": 2292990,
+  "mode": "full",
+  "nodes": 128,
+  "paths": 8,
+  "seeds": [
+    13,
+    29,
+    47
+  ],
+  "sim_sha256": "49442a2573670bb21dd5d782d821b0bbecf09940c1813758f000c79a853964da",
+  "status": "complete",
+  "traffic": {
+    "exp1_asymmetric_websearch_100pct_seed13": {
+      "connections": 36615,
+      "path": "/home/user/workspace/csg-htsim/.worktrees/mrc-inherent-limitations/experiments/n-mrc/output/mrc_inherent_limitations_128/traffic/exp1_asymmetric_websearch_100pct_seed13.cm",
+      "sha256": "be62c26ee8643b49c0878b3045fbb1e1337c2964d4b336625f4aed1edf629b9d"
+    },
+    "exp1_asymmetric_websearch_100pct_seed29": {
+      "connections": 35997,
+      "path": "/home/user/workspace/csg-htsim/.worktrees/mrc-inherent-limitations/experiments/n-mrc/output/mrc_inherent_limitations_128/traffic/exp1_asymmetric_websearch_100pct_seed29.cm",
+      "sha256": "9549bc0e724ce8f51a07b8771183278bca47ba99b6ee1dd6943e67085069ab31"
+    },
+    "exp1_asymmetric_websearch_100pct_seed47": {
+      "connections": 36242,
+      "path": "/home/user/workspace/csg-htsim/.worktrees/mrc-inherent-limitations/experiments/n-mrc/output/mrc_inherent_limitations_128/traffic/exp1_asymmetric_websearch_100pct_seed47.cm",
+      "sha256": "a1074e855c7a2b9e2ec0a6bffc3f1ae1970feb886f04b71ded3637bce1b85e90"
+    },
+    "exp1_asymmetric_websearch_40pct_seed13": {
+      "connections": 14748,
+      "path": "/home/user/workspace/csg-htsim/.worktrees/mrc-inherent-limitations/experiments/n-mrc/output/mrc_inherent_limitations_128/traffic/exp1_asymmetric_websearch_40pct_seed13.cm",
+      "sha256": "9b6775fe3d6129ade29794a72fc06ef31133b75b7a6c45d461364c3eacecaeca"
+    },
+    "exp1_asymmetric_websearch_40pct_seed29": {
+      "connections": 14198,
+      "path": "/home/user/workspace/csg-htsim/.worktrees/mrc-inherent-limitations/experiments/n-mrc/output/mrc_inherent_limitations_128/traffic/exp1_asymmetric_websearch_40pct_seed29.cm",
+      "sha256": "5087f83602014cbabc5ac8a7f1ba7ab5dbaa26255c67bdfdb6dc2818389f6899"
+    },
+    "exp1_asymmetric_websearch_40pct_seed47": {
+      "connections": 14511,
+      "path": "/home/user/workspace/csg-htsim/.worktrees/mrc-inherent-limitations/experiments/n-mrc/output/mrc_inherent_limitations_128/traffic/exp1_asymmetric_websearch_40pct_seed47.cm",
+      "sha256": "469bb3de688335bd6cf281bca6793febbbfddbdb672477a4587eb04a262464bf"
+    },
+    "exp1_asymmetric_websearch_60pct_seed13": {
+      "connections": 21984,
+      "path": "/home/user/workspace/csg-htsim/.worktrees/mrc-inherent-limitations/experiments/n-mrc/output/mrc_inherent_limitations_128/traffic/exp1_asymmetric_websearch_60pct_seed13.cm",
+      "sha256": "bb18267fc9c3fc272e6f4676a57035dc01ec621256e2e1ce7edd621f0ffa775a"
+    },
+    "exp1_asymmetric_websearch_60pct_seed29": {
+      "connections": 21353,
+      "path": "/home/user/workspace/csg-htsim/.worktrees/mrc-inherent-limitations/experiments/n-mrc/output/mrc_inherent_limitations_128/traffic/exp1_asymmetric_websearch_60pct_seed29.cm",
+      "sha256": "aad1cc8a87274259b813a1a06b48e1cff2077e575ef521dc7ae90657bb8b9dea"
+    },
+    "exp1_asymmetric_websearch_60pct_seed47": {
+      "connections": 21892,
+      "path": "/home/user/workspace/csg-htsim/.worktrees/mrc-inherent-limitations/experiments/n-mrc/output/mrc_inherent_limitations_128/traffic/exp1_asymmetric_websearch_60pct_seed47.cm",
+      "sha256": "7823e5b60e5b04c6e58bad946af265d185aa71e58021346d19443836ea749709"
+    },
+    "exp1_asymmetric_websearch_80pct_seed13": {
+      "connections": 29191,
+      "path": "/home/user/workspace/csg-htsim/.worktrees/mrc-inherent-limitations/experiments/n-mrc/output/mrc_inherent_limitations_128/traffic/exp1_asymmetric_websearch_80pct_seed13.cm",
+      "sha256": "008da4ad9615dce108cb046b2ccd82a5a1fad0be6f1ecb7a6c61e55710bd6903"
+    },
+    "exp1_asymmetric_websearch_80pct_seed29": {
+      "connections": 28640,
+      "path": "/home/user/workspace/csg-htsim/.worktrees/mrc-inherent-limitations/experiments/n-mrc/output/mrc_inherent_limitations_128/traffic/exp1_asymmetric_websearch_80pct_seed29.cm",
+      "sha256": "5a935a2ff8c749623d9636104a3ad440fb71895f25f2bbf4112c51a2cd84228a"
+    },
+    "exp1_asymmetric_websearch_80pct_seed47": {
+      "connections": 29117,
+      "path": "/home/user/workspace/csg-htsim/.worktrees/mrc-inherent-limitations/experiments/n-mrc/output/mrc_inherent_limitations_128/traffic/exp1_asymmetric_websearch_80pct_seed47.cm",
+      "sha256": "1fe6ddb58d688341f9c040d00d3e1925526a70a23b438c897191a7cccf76159f"
+    },
+    "exp1_healthy_websearch_100pct_seed13": {
+      "connections": 36615,
+      "path": "/home/user/workspace/csg-htsim/.worktrees/mrc-inherent-limitations/experiments/n-mrc/output/mrc_inherent_limitations_128/traffic/exp1_healthy_websearch_100pct_seed13.cm",
+      "sha256": "be62c26ee8643b49c0878b3045fbb1e1337c2964d4b336625f4aed1edf629b9d"
+    },
+    "exp1_healthy_websearch_100pct_seed29": {
+      "connections": 35997,
+      "path": "/home/user/workspace/csg-htsim/.worktrees/mrc-inherent-limitations/experiments/n-mrc/output/mrc_inherent_limitations_128/traffic/exp1_healthy_websearch_100pct_seed29.cm",
+      "sha256": "9549bc0e724ce8f51a07b8771183278bca47ba99b6ee1dd6943e67085069ab31"
+    },
+    "exp1_healthy_websearch_100pct_seed47": {
+      "connections": 36242,
+      "path": "/home/user/workspace/csg-htsim/.worktrees/mrc-inherent-limitations/experiments/n-mrc/output/mrc_inherent_limitations_128/traffic/exp1_healthy_websearch_100pct_seed47.cm",
+      "sha256": "a1074e855c7a2b9e2ec0a6bffc3f1ae1970feb886f04b71ded3637bce1b85e90"
+    },
+    "exp1_healthy_websearch_40pct_seed13": {
+      "connections": 14748,
+      "path": "/home/user/workspace/csg-htsim/.worktrees/mrc-inherent-limitations/experiments/n-mrc/output/mrc_inherent_limitations_128/traffic/exp1_healthy_websearch_40pct_seed13.cm",
+      "sha256": "9b6775fe3d6129ade29794a72fc06ef31133b75b7a6c45d461364c3eacecaeca"
+    },
+    "exp1_healthy_websearch_40pct_seed29": {
+      "connections": 14198,
+      "path": "/home/user/workspace/csg-htsim/.worktrees/mrc-inherent-limitations/experiments/n-mrc/output/mrc_inherent_limitations_128/traffic/exp1_healthy_websearch_40pct_seed29.cm",
+      "sha256": "5087f83602014cbabc5ac8a7f1ba7ab5dbaa26255c67bdfdb6dc2818389f6899"
+    },
+    "exp1_healthy_websearch_40pct_seed47": {
+      "connections": 14511,
+      "path": "/home/user/workspace/csg-htsim/.worktrees/mrc-inherent-limitations/experiments/n-mrc/output/mrc_inherent_limitations_128/traffic/exp1_healthy_websearch_40pct_seed47.cm",
+      "sha256": "469bb3de688335bd6cf281bca6793febbbfddbdb672477a4587eb04a262464bf"
+    },
+    "exp1_healthy_websearch_60pct_seed13": {
+      "connections": 21984,
+      "path": "/home/user/workspace/csg-htsim/.worktrees/mrc-inherent-limitations/experiments/n-mrc/output/mrc_inherent_limitations_128/traffic/exp1_healthy_websearch_60pct_seed13.cm",
+      "sha256": "bb18267fc9c3fc272e6f4676a57035dc01ec621256e2e1ce7edd621f0ffa775a"
+    },
+    "exp1_healthy_websearch_60pct_seed29": {
+      "connections": 21353,
+      "path": "/home/user/workspace/csg-htsim/.worktrees/mrc-inherent-limitations/experiments/n-mrc/output/mrc_inherent_limitations_128/traffic/exp1_healthy_websearch_60pct_seed29.cm",
+      "sha256": "aad1cc8a87274259b813a1a06b48e1cff2077e575ef521dc7ae90657bb8b9dea"
+    },
+    "exp1_healthy_websearch_60pct_seed47": {
+      "connections": 21892,
+      "path": "/home/user/workspace/csg-htsim/.worktrees/mrc-inherent-limitations/experiments/n-mrc/output/mrc_inherent_limitations_128/traffic/exp1_healthy_websearch_60pct_seed47.cm",
+      "sha256": "7823e5b60e5b04c6e58bad946af265d185aa71e58021346d19443836ea749709"
+    },
+    "exp1_healthy_websearch_80pct_seed13": {
+      "connections": 29191,
+      "path": "/home/user/workspace/csg-htsim/.worktrees/mrc-inherent-limitations/experiments/n-mrc/output/mrc_inherent_limitations_128/traffic/exp1_healthy_websearch_80pct_seed13.cm",
+      "sha256": "008da4ad9615dce108cb046b2ccd82a5a1fad0be6f1ecb7a6c61e55710bd6903"
+    },
+    "exp1_healthy_websearch_80pct_seed29": {
+      "connections": 28640,
+      "path": "/home/user/workspace/csg-htsim/.worktrees/mrc-inherent-limitations/experiments/n-mrc/output/mrc_inherent_limitations_128/traffic/exp1_healthy_websearch_80pct_seed29.cm",
+      "sha256": "5a935a2ff8c749623d9636104a3ad440fb71895f25f2bbf4112c51a2cd84228a"
+    },
+    "exp1_healthy_websearch_80pct_seed47": {
+      "connections": 29117,
+      "path": "/home/user/workspace/csg-htsim/.worktrees/mrc-inherent-limitations/experiments/n-mrc/output/mrc_inherent_limitations_128/traffic/exp1_healthy_websearch_80pct_seed47.cm",
+      "sha256": "1fe6ddb58d688341f9c040d00d3e1925526a70a23b438c897191a7cccf76159f"
+    },
+    "exp2_asymmetric_alltoall_256mib_p16_seed13": {
+      "connections": 16256,
+      "path": "/home/user/workspace/csg-htsim/.worktrees/mrc-inherent-limitations/experiments/n-mrc/output/mrc_inherent_limitations_128/traffic/exp2_asymmetric_alltoall_256mib_p16_seed13.cm",
+      "sha256": "20427d53cb40a34632ad4b93722726c89b4713dc6c0bc86529e0861b6a0da1ed"
+    },
+    "exp2_asymmetric_alltoall_256mib_p16_seed29": {
+      "connections": 16256,
+      "path": "/home/user/workspace/csg-htsim/.worktrees/mrc-inherent-limitations/experiments/n-mrc/output/mrc_inherent_limitations_128/traffic/exp2_asymmetric_alltoall_256mib_p16_seed29.cm",
+      "sha256": "b6e964e539c454f6ad030e2ea13146ec010ba047b1f252b5671a422f95abc00f"
+    },
+    "exp2_asymmetric_alltoall_256mib_p16_seed47": {
+      "connections": 16256,
+      "path": "/home/user/workspace/csg-htsim/.worktrees/mrc-inherent-limitations/experiments/n-mrc/output/mrc_inherent_limitations_128/traffic/exp2_asymmetric_alltoall_256mib_p16_seed47.cm",
+      "sha256": "f40783e501c2c5ae9fd8b796ffa1726ea6b78ea62afb0238fce5bf70f4f7bd5c"
+    },
+    "exp2_asymmetric_alltoall_256mib_p4_seed13": {
+      "connections": 16256,
+      "path": "/home/user/workspace/csg-htsim/.worktrees/mrc-inherent-limitations/experiments/n-mrc/output/mrc_inherent_limitations_128/traffic/exp2_asymmetric_alltoall_256mib_p4_seed13.cm",
+      "sha256": "e14c9b2fa5732d49d911c4cc54a6ca6cf4e84e086da834ec0677080c5d52f635"
+    },
+    "exp2_asymmetric_alltoall_256mib_p4_seed29": {
+      "connections": 16256,
+      "path": "/home/user/workspace/csg-htsim/.worktrees/mrc-inherent-limitations/experiments/n-mrc/output/mrc_inherent_limitations_128/traffic/exp2_asymmetric_alltoall_256mib_p4_seed29.cm",
+      "sha256": "9b3cf271c7a010936f4029f88649472095d7e054e3bdda708c77cfc44becbdb6"
+    },
+    "exp2_asymmetric_alltoall_256mib_p4_seed47": {
+      "connections": 16256,
+      "path": "/home/user/workspace/csg-htsim/.worktrees/mrc-inherent-limitations/experiments/n-mrc/output/mrc_inherent_limitations_128/traffic/exp2_asymmetric_alltoall_256mib_p4_seed47.cm",
+      "sha256": "c1bf054e67dc1798e712c0ed5173423bbdcb5d4f5c716c92247f936f57e0709c"
+    },
+    "exp2_asymmetric_alltoall_256mib_p8_seed13": {
+      "connections": 16256,
+      "path": "/home/user/workspace/csg-htsim/.worktrees/mrc-inherent-limitations/experiments/n-mrc/output/mrc_inherent_limitations_128/traffic/exp2_asymmetric_alltoall_256mib_p8_seed13.cm",
+      "sha256": "3151dbb939ef8855f574162c7079076511ec6f3ff41448604694a67ceb5c2ac6"
+    },
+    "exp2_asymmetric_alltoall_256mib_p8_seed29": {
+      "connections": 16256,
+      "path": "/home/user/workspace/csg-htsim/.worktrees/mrc-inherent-limitations/experiments/n-mrc/output/mrc_inherent_limitations_128/traffic/exp2_asymmetric_alltoall_256mib_p8_seed29.cm",
+      "sha256": "d150841e2665d2b7f07c5486e8ce52c026cafc61505b776fb965a704d2dff27b"
+    },
+    "exp2_asymmetric_alltoall_256mib_p8_seed47": {
+      "connections": 16256,
+      "path": "/home/user/workspace/csg-htsim/.worktrees/mrc-inherent-limitations/experiments/n-mrc/output/mrc_inherent_limitations_128/traffic/exp2_asymmetric_alltoall_256mib_p8_seed47.cm",
+      "sha256": "e3037d67bb3a910c47f7711125fb15f28dd35c8d88d7fccdfe2b02c590c25bc6"
+    },
+    "exp3_asymmetric_websearch_40pct_seed13": {
+      "connections": 14748,
+      "path": "/home/user/workspace/csg-htsim/.worktrees/mrc-inherent-limitations/experiments/n-mrc/output/mrc_inherent_limitations_128/traffic/exp3_asymmetric_websearch_40pct_seed13.cm",
+      "sha256": "9b6775fe3d6129ade29794a72fc06ef31133b75b7a6c45d461364c3eacecaeca"
+    },
+    "exp3_asymmetric_websearch_40pct_seed29": {
+      "connections": 14198,
+      "path": "/home/user/workspace/csg-htsim/.worktrees/mrc-inherent-limitations/experiments/n-mrc/output/mrc_inherent_limitations_128/traffic/exp3_asymmetric_websearch_40pct_seed29.cm",
+      "sha256": "5087f83602014cbabc5ac8a7f1ba7ab5dbaa26255c67bdfdb6dc2818389f6899"
+    },
+    "exp3_asymmetric_websearch_40pct_seed47": {
+      "connections": 14511,
+      "path": "/home/user/workspace/csg-htsim/.worktrees/mrc-inherent-limitations/experiments/n-mrc/output/mrc_inherent_limitations_128/traffic/exp3_asymmetric_websearch_40pct_seed47.cm",
+      "sha256": "469bb3de688335bd6cf281bca6793febbbfddbdb672477a4587eb04a262464bf"
+    },
+    "exp3_asymmetric_websearch_80pct_seed13": {
+      "connections": 29191,
+      "path": "/home/user/workspace/csg-htsim/.worktrees/mrc-inherent-limitations/experiments/n-mrc/output/mrc_inherent_limitations_128/traffic/exp3_asymmetric_websearch_80pct_seed13.cm",
+      "sha256": "008da4ad9615dce108cb046b2ccd82a5a1fad0be6f1ecb7a6c61e55710bd6903"
+    },
+    "exp3_asymmetric_websearch_80pct_seed29": {
+      "connections": 28640,
+      "path": "/home/user/workspace/csg-htsim/.worktrees/mrc-inherent-limitations/experiments/n-mrc/output/mrc_inherent_limitations_128/traffic/exp3_asymmetric_websearch_80pct_seed29.cm",
+      "sha256": "5a935a2ff8c749623d9636104a3ad440fb71895f25f2bbf4112c51a2cd84228a"
+    },
+    "exp3_asymmetric_websearch_80pct_seed47": {
+      "connections": 29117,
+      "path": "/home/user/workspace/csg-htsim/.worktrees/mrc-inherent-limitations/experiments/n-mrc/output/mrc_inherent_limitations_128/traffic/exp3_asymmetric_websearch_80pct_seed47.cm",
+      "sha256": "1fe6ddb58d688341f9c040d00d3e1925526a70a23b438c897191a7cccf76159f"
+    }
+  },
+  "validated_cells": 102
+}
