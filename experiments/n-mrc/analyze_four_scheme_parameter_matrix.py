@@ -8,6 +8,8 @@ from pathlib import Path
 import re
 import statistics
 
+import run_four_scheme_parameter_matrix as runner
+
 
 COMPLETION = re.compile(
     r"Flow Roce_\d+_\d+\s+\d+ finished at ([0-9.]+) "
@@ -52,6 +54,15 @@ def aggregate(rows):
                 row["traffic_sha256"])
     if any(len(values) != 1 for values in paired_hashes.values()):
         raise ValueError("traffic hash differs within a scenario/seed pair")
+    expected_groups = {
+        (scenario, variant)
+        for scenario, variants in runner.MATRIX.items()
+        for variant in variants
+    }
+    if set(groups) != expected_groups:
+        raise ValueError(
+            f"result matrix differs: missing={expected_groups - set(groups)} "
+            f"extra={set(groups) - expected_groups}")
     output = []
     for (scenario, variant), selected in sorted(groups.items()):
         seeds = [row["seed"] for row in selected]
