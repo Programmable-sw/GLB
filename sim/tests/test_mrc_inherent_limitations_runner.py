@@ -187,6 +187,89 @@ class RunnerContractTest(unittest.TestCase):
         self.assertEqual(
             analysis.flow_size_rows()[0]["fct_ratio_geomean"], 1.1)
 
+    def test_streaming_collective_cct_spans_staggered_flow_starts(self):
+        runner = load_runner()
+        analysis = runner.StreamingAnalysis()
+        base = {
+            "experiment": "per_qp_sharing",
+            "parallel": 4,
+            "scheme": "mrc",
+            "seed": 13,
+            "shared_updates_published": 0,
+            "shared_updates_consumed": 0,
+            "shared_updates_from_other_qps": 0,
+            "redundant_discoveries": 0,
+            "post_shared_bad_ev_sends": 0,
+            "effective_state_updates": 0,
+            "active_evs": 8,
+            "unique_active_evs": 1,
+        }
+        analysis.add_flow({
+            **base, "start_us": 0.0, "finish_us": 10.0,
+            "fct_us": 10.0,
+        })
+        analysis.add_flow({
+            **base, "start_us": 9.0, "finish_us": 15.0,
+            "fct_us": 6.0,
+        })
+
+        row = next(item for item in analysis.summary_rows()
+                   if item["experiment"] == "per_qp_sharing")
+        self.assertEqual(row["cct_geomean_us"], 15.0)
+
+    def test_nonstreaming_collective_cct_spans_staggered_flow_starts(self):
+        runner = load_runner()
+        base = {
+            "experiment": "per_qp_sharing",
+            "parallel": 4,
+            "scheme": "mrc",
+            "seed": 13,
+            "shared_updates_published": 0,
+            "shared_updates_consumed": 0,
+            "shared_updates_from_other_qps": 0,
+            "redundant_discoveries": 0,
+            "post_shared_bad_ev_sends": 0,
+            "effective_state_updates": 0,
+            "active_evs": 8,
+            "unique_active_evs": 1,
+            "scenario": "exp2_test",
+            "src": 0,
+            "dst": 1,
+            "flow_size": 100,
+            "new_selections_after_first_update": 0,
+            "post_cooldown_first_clean": 0,
+            "max_simultaneous_cooling": 0,
+            "replacement_congestion": 0,
+            "forced_cooling_uses": 0,
+        }
+        summary, _ = runner.build_aggregates([
+            {
+                **base, "flow_id": 1,
+                "start_us": 0.0, "finish_us": 10.0,
+                "fct_us": 10.0,
+            },
+            {
+                **base, "flow_id": 2,
+                "start_us": 9.0, "finish_us": 15.0,
+                "fct_us": 6.0,
+            },
+            {
+                **base, "scheme": "mrc-shared", "flow_id": 1,
+                "start_us": 0.0, "finish_us": 10.0,
+                "fct_us": 10.0,
+            },
+            {
+                **base, "scheme": "mrc-shared", "flow_id": 2,
+                "start_us": 9.0, "finish_us": 15.0,
+                "fct_us": 6.0,
+            },
+        ], [])
+
+        row = next(item for item in summary
+                   if item["experiment"] == "per_qp_sharing"
+                   and item["scheme"] == "mrc")
+        self.assertEqual(row["cct_geomean_us"], 15.0)
+
 
 if __name__ == "__main__":
     unittest.main()

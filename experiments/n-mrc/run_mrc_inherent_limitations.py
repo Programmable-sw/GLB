@@ -744,8 +744,12 @@ def build_aggregates(flow_rows, shared_key_rows):
     for (parallel, scheme), selected in sorted(exp2_groups.items()):
         per_seed_cct = []
         for seed in sorted({row["seed"] for row in selected}):
-            per_seed_cct.append(max(
-                row["fct_us"] for row in selected if row["seed"] == seed))
+            seed_rows = [
+                row for row in selected if row["seed"] == seed
+            ]
+            per_seed_cct.append(
+                max(row["finish_us"] for row in seed_rows) -
+                min(row["start_us"] for row in seed_rows))
         summary.append({
             "experiment": "per_qp_sharing",
             "family": "asymmetric_alltoall",
@@ -827,7 +831,7 @@ class StreamingAnalysis:
         if row["experiment"] == "per_qp_sharing":
             key = (row["parallel"], row["scheme"])
             group = self.exp2.setdefault(key, {
-                "count": 0, "fcts": [], "cct": {},
+                "count": 0, "fcts": [], "collective_bounds": {},
                 "shared_updates_published": 0,
                 "shared_updates_consumed": 0,
                 "shared_updates_from_other_qps": 0,
@@ -836,8 +840,10 @@ class StreamingAnalysis:
             })
             group["count"] += 1
             group["fcts"].append(row["fct_us"])
-            group["cct"][row["seed"]] = max(
-                group["cct"].get(row["seed"], 0.0), row["fct_us"])
+            bounds = group["collective_bounds"].setdefault(
+                row["seed"], [row["start_us"], row["finish_us"]])
+            bounds[0] = min(bounds[0], row["start_us"])
+            bounds[1] = max(bounds[1], row["finish_us"])
             for field in (
                     "shared_updates_published", "shared_updates_consumed",
                     "shared_updates_from_other_qps",
@@ -909,7 +915,9 @@ class StreamingAnalysis:
                 "active_evs": PATHS,
                 "scheme": scheme,
                 "flow_count": group["count"],
-                "cct_geomean_us": geometric_mean(group["cct"].values()),
+                "cct_geomean_us": geometric_mean(
+                    finish - start for start, finish
+                    in group["collective_bounds"].values()),
                 "p99_fct_us": percentile(group["fcts"], 0.99),
                 "shared_updates_published":
                     group["shared_updates_published"],
