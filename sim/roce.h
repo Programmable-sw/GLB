@@ -159,6 +159,19 @@ public:
     static void setHostsPerTor(uint32_t hosts) {_hosts_per_tor = hosts ? hosts : 1;}
     static void resetStorSharedState();
     static void resetNetawareSharedState();
+    static void resetStorProfileDiag();
+    static uint64_t storLevelTransition(uint8_t from, uint8_t to) {
+        return from < 4 && to < 4 ? _stor_level_transitions[from][to] : 0;
+    }
+    static uint64_t netawareLevelTransition(uint8_t from, uint8_t to) {
+        return from < 4 && to < 4 ? _netaware_level_transitions[from][to] : 0;
+    }
+    static uint64_t storLevelChanges() {return _stor_level_changes;}
+    static uint64_t netawareLevelChanges() {return _netaware_level_changes;}
+    static uint64_t storAllZeroProfiles() {return _stor_all_zero_profiles;}
+    static uint64_t netawareAllZeroProfiles() {return _netaware_all_zero_profiles;}
+    static uint64_t storAllZeroSelections() {return _stor_all_zero_selections;}
+    static uint64_t netawareAllZeroSelections() {return _netaware_all_zero_selections;}
     static void setStorBinarySelector(bool enabled) {_stor_binary_selector = enabled;}
     static bool storBinarySelector() {return _stor_binary_selector;}
     static void setStorLevelWeights(uint32_t good, uint32_t degraded,
@@ -826,6 +839,14 @@ private:
     static std::map<std::pair<uint32_t, uint32_t>, SharedWeightedProfile> _netaware_shared_profiles;
     static std::array<uint32_t, 4> _stor_level_weights;
     static std::array<uint32_t, 4> _netaware_level_weights;
+    static uint64_t _stor_level_transitions[4][4];
+    static uint64_t _netaware_level_transitions[4][4];
+    static uint64_t _stor_level_changes;
+    static uint64_t _netaware_level_changes;
+    static uint64_t _stor_all_zero_profiles;
+    static uint64_t _netaware_all_zero_profiles;
+    static uint64_t _stor_all_zero_selections;
+    static uint64_t _netaware_all_zero_selections;
     static netaware_wrr_mode_t _netaware_wrr_mode;
     static uint32_t _netaware_topk;
     static netaware_weight_adaptation_t _netaware_weight_adaptation;

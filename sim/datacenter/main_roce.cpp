@@ -155,6 +155,20 @@ static string format_nmrc_level_transitions() {
     return out.str();
 }
 
+static string format_profile_level_transitions(bool netaware) {
+    stringstream out;
+    for (uint32_t from = 0; from < 4; from++) {
+        for (uint32_t to = 0; to < 4; to++) {
+            if (from != 0 || to != 0)
+                out << "/";
+            out << (netaware ?
+                RoceSrc::netawareLevelTransition(from, to) :
+                RoceSrc::storLevelTransition(from, to));
+        }
+    }
+    return out.str();
+}
+
 static string format_top_u32_u64_hist(const map<uint32_t, uint64_t>& hist,
                                       size_t limit) {
     if (hist.empty())
@@ -3209,6 +3223,7 @@ int main(int argc, char **argv) {
     }
     RoceSrc::setDiagPhysicalPathSpace(topology_path_combo);
     RoceSrc::resetPathSelectionDiag();
+    RoceSrc::resetStorProfileDiag();
     FatTreeSwitch::reset_sglb_route_diag();
     FatTreeSwitch::reset_nmrc_hybrid_diag();
     RoceSrc::setHostsPerTor(top->radix_down(TOR_TIER));
@@ -4229,6 +4244,20 @@ int main(int argc, char **argv) {
          << " stor_clean_signals=" << stor_diag.clean_signals
          << " stor_ecn_signals=" << stor_diag.ecn_signals
          << " stor_trim_signals=" << stor_diag.trim_signals
+         << endl;
+    cout << "StorProfileDiag "
+         << "stor_level_transitions="
+         << format_profile_level_transitions(false)
+         << " stor_level_changes=" << RoceSrc::storLevelChanges()
+         << " stor_all_zero_profiles=" << RoceSrc::storAllZeroProfiles()
+         << " stor_all_zero_selections=" << RoceSrc::storAllZeroSelections()
+         << " netaware_level_transitions="
+         << format_profile_level_transitions(true)
+         << " netaware_level_changes=" << RoceSrc::netawareLevelChanges()
+         << " netaware_all_zero_profiles="
+         << RoceSrc::netawareAllZeroProfiles()
+         << " netaware_all_zero_selections="
+         << RoceSrc::netawareAllZeroSelections()
          << endl;
     NetawareDiag netaware_diag = collect_netaware_diag(top);
     cout << "NetawareDiag "
