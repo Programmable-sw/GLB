@@ -65,8 +65,13 @@ def validate(rows):
                 row["weights"] != "/".join(
                     runner.WEIGHTS[row["variant"]]) or
                 row["primary_metric"] != "all_to_all_cct_us" or
+                row["axis"] != meta["axis"] or
                 int(row["parallel"]) != meta["parallel"] or
-                int(row["flow_kib"]) != meta["flow_kib"]):
+                int(row["flow_kib"]) != meta["flow_kib"] or
+                not math.isclose(
+                    float(row["per_source_mib"]),
+                    meta["flow_kib"] * 127 / 1024,
+                    rel_tol=1e-12)):
             raise ValueError("result metadata does not match scenario")
         for field in DIAGNOSTICS:
             if field not in row or row[field] == "":
@@ -78,6 +83,8 @@ def validate(rows):
         raise ValueError("results do not share one simulator SHA")
     hashes = {}
     for row in rows:
+        if not row["traffic_sha256"]:
+            raise ValueError("result has an empty traffic hash")
         hashes.setdefault(
             (row["scenario"], row["seed"]), set()).add(
                 row["traffic_sha256"])
@@ -92,12 +99,13 @@ def summarize(rows):
     output = []
     for (scenario, variant), selected in sorted(groups.items()):
         selected.sort(key=lambda row: int(row["seed"]))
+        meta = runner.SCENARIO_META[scenario]
         item = {
             "scenario": scenario,
-            "axis": selected[0]["axis"],
-            "parallel": int(selected[0]["parallel"]),
-            "flow_kib": int(selected[0]["flow_kib"]),
-            "per_source_mib": float(selected[0]["per_source_mib"]),
+            "axis": meta["axis"],
+            "parallel": meta["parallel"],
+            "flow_kib": meta["flow_kib"],
+            "per_source_mib": meta["flow_kib"] * 127 / 1024,
             "variant": variant,
             "weights": selected[0]["weights"],
             "cct_geomean_us": geomean(
