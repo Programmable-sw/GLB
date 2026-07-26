@@ -168,6 +168,50 @@ static void test_nmrc_graded_selective_cooldown() {
            "invalid scores must not cool");
 }
 
+static void test_nmrc_graded_delta_selector() {
+    std::vector<uint8_t> levels{
+        STOR_LEVEL_BAD, STOR_LEVEL_GOOD, STOR_LEVEL_DEGRADED,
+        STOR_LEVEL_GOOD, STOR_LEVEL_DEGRADED};
+    std::vector<double> scores{0.70, 0.44, 0.45, 0.45, 0.60};
+    std::vector<bool> available(5, true);
+
+    FatTreeSwitch::NmrcRerouteDecision d =
+        FatTreeSwitch::nmrc_select_graded_delta_path(
+            0, levels, scores, available,
+            FatTreeSwitch::NMRC_REROUTE_BETTER_GE3, 8, 0, 0.25);
+    expect(d.reroute && d.better_count == 3,
+           "graded delta must count only strict-better paths meeting delta");
+    expect(d.selected_index == 1 || d.selected_index == 2 ||
+               d.selected_index == 3,
+           "graded delta must select only a strict-better delta candidate");
+
+    scores[3] = 0.51;
+    d = FatTreeSwitch::nmrc_select_graded_delta_path(
+        0, levels, scores, available,
+        FatTreeSwitch::NMRC_REROUTE_BETTER_GE3, 8, 0, 0.25);
+    expect(!d.reroute && d.better_count == 2,
+           "graded delta must block when fewer than three paths meet delta");
+}
+
+static void test_nmrc_graded_cooldown_modes() {
+    expect(FatTreeSwitch::nmrc_graded_cooldown_requested(
+               FatTreeSwitch::NMRC_GRADED_COOLDOWN_FULL,
+               0.401, 0.399, 0.25),
+           "full mode must cool every committed reroute");
+    expect(!FatTreeSwitch::nmrc_graded_cooldown_requested(
+               FatTreeSwitch::NMRC_GRADED_COOLDOWN_NONE,
+               0.80, 0.10, 0.25),
+           "none mode must never cool a committed reroute");
+    expect(!FatTreeSwitch::nmrc_graded_cooldown_requested(
+               FatTreeSwitch::NMRC_GRADED_COOLDOWN_SELECTIVE,
+               0.401, 0.399, 0.25),
+           "selective mode must suppress tiny raw-score gaps");
+    expect(FatTreeSwitch::nmrc_graded_cooldown_requested(
+               FatTreeSwitch::NMRC_GRADED_COOLDOWN_SELECTIVE,
+               0.70, 0.40, 0.25),
+           "selective mode must cool sufficiently large raw-score gaps");
+}
+
 static void test_nmrc_relative_delta_selector() {
     std::vector<double> scores{0.70, 0.40, 0.20, 0.60};
     std::vector<bool> valid(4, true);
@@ -478,6 +522,8 @@ int main() {
     }
 
     test_nmrc_graded_selective_cooldown();
+    test_nmrc_graded_delta_selector();
+    test_nmrc_graded_cooldown_modes();
     test_nmrc_relative_delta_selector();
     test_nmrc_two_stage_delta_selector();
     test_nmrc_absolute_reroute_selector();

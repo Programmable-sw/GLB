@@ -150,6 +150,12 @@ public:
         NMRC_BINARY_CONGESTED = 2
     };
 
+    enum NmrcGradedCooldownMode {
+        NMRC_GRADED_COOLDOWN_SELECTIVE = 0,
+        NMRC_GRADED_COOLDOWN_FULL = 1,
+        NMRC_GRADED_COOLDOWN_NONE = 2
+    };
+
     struct NmrcRerouteDecision {
         bool reroute;
         uint32_t selected_index;
@@ -190,7 +196,19 @@ public:
         NmrcReroutePolicy policy,
         uint32_t min_choices,
         uint32_t selection_value);
+    static NmrcRerouteDecision nmrc_select_graded_delta_path(
+        uint32_t original_index,
+        const vector<uint8_t>& levels,
+        const vector<double>& scores,
+        const vector<bool>& available,
+        NmrcReroutePolicy policy,
+        uint32_t min_choices,
+        uint32_t selection_value,
+        double delta);
     static bool nmrc_graded_requests_cooldown(
+        double original_score, double selected_score, double threshold);
+    static bool nmrc_graded_cooldown_requested(
+        NmrcGradedCooldownMode mode,
         double original_score, double selected_score, double threshold);
 
     static bool nmrc_binary_safe(double score, bool two_hop_valid);
@@ -591,6 +609,9 @@ public:
     static bool _nmrc_fastcnp_enabled;
     static NmrcReroutePolicy _nmrc_reroute_policy;
     static NmrcNetworkDecisionMode _nmrc_network_decision_mode;
+    static NmrcGradedCooldownMode _nmrc_graded_cooldown_mode;
+    static double _nmrc_graded_reroute_delta;
+    static double _nmrc_graded_cooldown_delta;
     static double _nmrc_absolute_threshold;
     static double _nmrc_relative_delta;
     static double _nmrc_piecewise_delta_below;

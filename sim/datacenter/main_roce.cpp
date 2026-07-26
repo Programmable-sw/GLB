@@ -815,6 +815,8 @@ void exit_error(char* progr) {
     cout << "\t[-nmrc_binary_threshold 0.5]" << endl;
     cout << "\t[-nmrc_absolute_threshold VALUE]" << endl;
     cout << "\t[-nmrc_relative_delta VALUE]" << endl;
+    cout << "\t[-nmrc_graded_cooldown selective|full|none]" << endl;
+    cout << "\t[-nmrc_graded_reroute_delta VALUE]" << endl;
     cout << "\t[-nmrc_route_delta VALUE] [-nmrc_cooldown_delta VALUE]" << endl;
     cout << "\t[-queue_cv_sample_us x]" << endl;
     cout << "\t[-path_selection_timeline file] "
@@ -956,6 +958,9 @@ int main(int argc, char **argv) {
         RoceSrc::NMRC_ALL_COOLING_EARLIEST;
     FatTreeSwitch::NmrcNetworkDecisionMode nmrc_network_decision =
         FatTreeSwitch::NMRC_NETWORK_GRADED;
+    FatTreeSwitch::NmrcGradedCooldownMode nmrc_graded_cooldown =
+        FatTreeSwitch::NMRC_GRADED_COOLDOWN_SELECTIVE;
+    double nmrc_graded_reroute_delta = 0.0;
     double nmrc_binary_threshold = 0.5;
     double nmrc_absolute_threshold = 0.50;
     double nmrc_relative_delta = 0.25;
@@ -969,6 +974,8 @@ int main(int argc, char **argv) {
     bool nmrc_endpoint_policy_user_set = false;
     bool nmrc_all_cooling_policy_user_set = false;
     bool nmrc_network_decision_user_set = false;
+    bool nmrc_graded_cooldown_user_set = false;
+    bool nmrc_graded_reroute_delta_user_set = false;
     bool nmrc_binary_threshold_user_set = false;
     bool nmrc_absolute_threshold_user_set = false;
     bool nmrc_relative_delta_user_set = false;
@@ -2232,6 +2239,57 @@ int main(int argc, char **argv) {
             nmrc_option_user_set = true;
             nmrc_absolute_threshold_user_set = true;
             i++;
+        } else if (!strcmp(argv[i],"-nmrc_graded_cooldown")) {
+            if (i + 1 >= argc) {
+                cerr << "missing value for -nmrc_graded_cooldown" << endl;
+                exit(1);
+            }
+            if (nmrc_graded_cooldown_user_set) {
+                cerr << "-nmrc_graded_cooldown may only be specified once"
+                     << endl;
+                exit(1);
+            }
+            if (!strcmp(argv[i+1], "selective"))
+                nmrc_graded_cooldown =
+                    FatTreeSwitch::NMRC_GRADED_COOLDOWN_SELECTIVE;
+            else if (!strcmp(argv[i+1], "full"))
+                nmrc_graded_cooldown =
+                    FatTreeSwitch::NMRC_GRADED_COOLDOWN_FULL;
+            else if (!strcmp(argv[i+1], "none"))
+                nmrc_graded_cooldown =
+                    FatTreeSwitch::NMRC_GRADED_COOLDOWN_NONE;
+            else {
+                cerr << "invalid -nmrc_graded_cooldown " << argv[i+1]
+                     << "; expected selective, full, or none" << endl;
+                exit(1);
+            }
+            nmrc_option_user_set = true;
+            nmrc_graded_cooldown_user_set = true;
+            i++;
+        } else if (!strcmp(argv[i],"-nmrc_graded_reroute_delta")) {
+            if (i + 1 >= argc) {
+                cerr << "missing value for -nmrc_graded_reroute_delta"
+                     << endl;
+                exit(1);
+            }
+            if (nmrc_graded_reroute_delta_user_set) {
+                cerr << "-nmrc_graded_reroute_delta may only be specified once"
+                     << endl;
+                exit(1);
+            }
+            char* end = NULL;
+            errno = 0;
+            double value = strtod(argv[i+1], &end);
+            if (errno || end == argv[i+1] || *end != '\0' ||
+                !std::isfinite(value) || value < 0.0 || value > 1.0) {
+                cerr << "invalid -nmrc_graded_reroute_delta " << argv[i+1]
+                     << "; expected 0 <= value <= 1" << endl;
+                exit(1);
+            }
+            nmrc_graded_reroute_delta = value;
+            nmrc_option_user_set = true;
+            nmrc_graded_reroute_delta_user_set = true;
+            i++;
         } else if (!strcmp(argv[i],"-nmrc_relative_delta")) {
             if (i + 1 >= argc) {
                 cerr << "missing value for -nmrc_relative_delta" << endl;
@@ -2525,6 +2583,12 @@ int main(int argc, char **argv) {
     if (nmrc_absolute_threshold_user_set &&
         lb_scheme_name != "n-mrc-fixed0.5") {
         cerr << "-nmrc_absolute_threshold requires -lb n-mrc-fixed0.5" << endl;
+        exit(1);
+    }
+    if ((nmrc_graded_cooldown_user_set ||
+         nmrc_graded_reroute_delta_user_set) &&
+        lb_scheme_name != "n-mrc") {
+        cerr << "graded n-MRC controls require -lb n-mrc" << endl;
         exit(1);
     }
     if (nmrc_route_delta_user_set || nmrc_cooldown_delta_user_set) {
@@ -2935,6 +2999,9 @@ int main(int argc, char **argv) {
     FatTreeSwitch::_nmrc_fastcnp_enabled = nmrc_fastcnp;
     FatTreeSwitch::_nmrc_reroute_policy = nmrc_reroute_policy;
     FatTreeSwitch::_nmrc_network_decision_mode = nmrc_network_decision;
+    FatTreeSwitch::_nmrc_graded_cooldown_mode = nmrc_graded_cooldown;
+    FatTreeSwitch::_nmrc_graded_reroute_delta =
+        nmrc_graded_reroute_delta;
     FatTreeSwitch::_nmrc_absolute_threshold = nmrc_absolute_threshold;
     FatTreeSwitch::_nmrc_relative_delta = nmrc_relative_delta;
     FatTreeSwitch::_nmrc_route_delta = nmrc_route_delta;
@@ -3358,6 +3425,13 @@ int main(int argc, char **argv) {
             32 : min(path_space, 32U);
         const char* network_decision_name =
             nmrc_network_decision_name(nmrc_network_decision);
+        const char* graded_cooldown_name =
+            nmrc_graded_cooldown ==
+                    FatTreeSwitch::NMRC_GRADED_COOLDOWN_FULL ?
+                "full" :
+            (nmrc_graded_cooldown ==
+                    FatTreeSwitch::NMRC_GRADED_COOLDOWN_NONE ?
+                "none" : "selective");
         if (lb_scheme_name == "n-mrc-fixed0.5" ||
             lb_scheme_name == "n-mrc-delta") {
             cout << "HybridNmrcConfig ev_mode=" << ev_mode_name
@@ -3392,6 +3466,9 @@ int main(int argc, char **argv) {
                  << " all_cooling_policy="
                  << RoceSrc::nmrcAllCoolingPolicyName()
                  << " network_decision=" << network_decision_name
+                 << " graded_cooldown=" << graded_cooldown_name
+                 << " graded_reroute_delta="
+                 << nmrc_graded_reroute_delta
                  << " binary_threshold=" << nmrc_binary_threshold
                  << endl;
         }

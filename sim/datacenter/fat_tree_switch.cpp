@@ -409,6 +409,11 @@ FatTreeSwitch::NmrcReroutePolicy FatTreeSwitch::_nmrc_reroute_policy =
 FatTreeSwitch::NmrcNetworkDecisionMode
     FatTreeSwitch::_nmrc_network_decision_mode =
         FatTreeSwitch::NMRC_NETWORK_GRADED;
+FatTreeSwitch::NmrcGradedCooldownMode
+    FatTreeSwitch::_nmrc_graded_cooldown_mode =
+        FatTreeSwitch::NMRC_GRADED_COOLDOWN_SELECTIVE;
+double FatTreeSwitch::_nmrc_graded_reroute_delta = 0.0;
+double FatTreeSwitch::_nmrc_graded_cooldown_delta = 0.25;
 double FatTreeSwitch::_nmrc_absolute_threshold = 0.50;
 double FatTreeSwitch::_nmrc_relative_delta = 0.25;
 double FatTreeSwitch::_nmrc_piecewise_delta_below = 0.25;
@@ -1453,6 +1458,46 @@ FatTreeSwitch::nmrc_select_better_path(
     return decision;
 }
 
+FatTreeSwitch::NmrcRerouteDecision
+FatTreeSwitch::nmrc_select_graded_delta_path(
+        uint32_t original_index,
+        const vector<uint8_t>& levels,
+        const vector<double>& scores,
+        const vector<bool>& available,
+        NmrcReroutePolicy policy,
+        uint32_t min_choices,
+        uint32_t selection_value,
+        double delta) {
+    NmrcRerouteDecision decision;
+    if (original_index >= levels.size() ||
+        levels.size() != scores.size() ||
+        levels.size() != available.size() ||
+        !std::isfinite(delta) || delta < 0.0)
+        return decision;
+
+    if (delta <= NMRC_RELATIVE_EPSILON)
+        return nmrc_select_better_path(
+            original_index, levels, available, policy,
+            min_choices, selection_value);
+
+    vector<bool> eligible(available.size(), false);
+    eligible[original_index] = available[original_index];
+    if (std::isfinite(scores[original_index])) {
+        for (uint32_t i = 0; i < levels.size(); i++) {
+            if (i == original_index || !available[i] ||
+                levels[i] >= levels[original_index] ||
+                !std::isfinite(scores[i]))
+                continue;
+            eligible[i] =
+                scores[original_index] - scores[i] >=
+                delta - NMRC_RELATIVE_EPSILON;
+        }
+    }
+    return nmrc_select_better_path(
+        original_index, levels, eligible, policy,
+        min_choices, selection_value);
+}
+
 bool FatTreeSwitch::nmrc_graded_requests_cooldown(
         double original_score, double selected_score, double threshold) {
     return std::isfinite(original_score) &&
@@ -1461,6 +1506,17 @@ bool FatTreeSwitch::nmrc_graded_requests_cooldown(
         threshold > 0.0 &&
         original_score - selected_score >=
             threshold - NMRC_RELATIVE_EPSILON;
+}
+
+bool FatTreeSwitch::nmrc_graded_cooldown_requested(
+        NmrcGradedCooldownMode mode,
+        double original_score, double selected_score, double threshold) {
+    if (mode == NMRC_GRADED_COOLDOWN_FULL)
+        return true;
+    if (mode == NMRC_GRADED_COOLDOWN_NONE)
+        return false;
+    return nmrc_graded_requests_cooldown(
+        original_score, selected_score, threshold);
 }
 
 bool FatTreeSwitch::nmrc_binary_safe(double score, bool two_hop_valid) {
@@ -2146,9 +2202,9 @@ uint32_t FatTreeSwitch::nmrc_maybe_reroute(
     uint32_t selection_value = freeBSDHash(
         pkt.flow_id(), data.mrc_ev(),
         (uint32_t)data.seqno() ^ _hash_salt);
-    NmrcRerouteDecision decision = nmrc_select_better_path(
-        original_choice, levels, available, _nmrc_reroute_policy,
-        _sglb_min_choices, selection_value);
+    NmrcRerouteDecision decision = nmrc_select_graded_delta_path(
+        original_choice, levels, scores, available, _nmrc_reroute_policy,
+        _sglb_min_choices, selection_value, _nmrc_graded_reroute_delta);
     uint32_t better_bucket = std::min(decision.better_count, 32U);
     _nmrc_diag_better_count[better_bucket]++;
     if (!decision.reroute) {
@@ -2157,8 +2213,10 @@ uint32_t FatTreeSwitch::nmrc_maybe_reroute(
         return original_choice;
     }
 
-    const bool request_cooldown = nmrc_graded_requests_cooldown(
-        scores[original_choice], scores[decision.selected_index], 0.25);
+    const bool request_cooldown = nmrc_graded_cooldown_requested(
+        _nmrc_graded_cooldown_mode,
+        scores[original_choice], scores[decision.selected_index],
+        _nmrc_graded_cooldown_delta);
     if (_nmrc_fastcnp_enabled) {
         if (!nmrc_inject_fastcnp(
                 data, original_choice, decision.selected_index,
