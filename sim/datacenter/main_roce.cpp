@@ -816,6 +816,7 @@ void exit_error(char* progr) {
     cout << "\t[-nmrc_absolute_threshold VALUE]" << endl;
     cout << "\t[-nmrc_relative_delta VALUE]" << endl;
     cout << "\t[-nmrc_route_delta VALUE] [-nmrc_cooldown_delta VALUE]" << endl;
+    cout << "\t[-mrc_active_evs K]" << endl;
     cout << "\t[-queue_cv_sample_us x]" << endl;
     cout << "\t[-path_selection_timeline file] "
          << "[-path_selection_timeline_every N]" << endl;
@@ -978,6 +979,8 @@ int main(int argc, char **argv) {
     uint32_t mrc_logical_evs = 0;
     uint32_t mrc_active_paths = 0;
     uint32_t mrc_backup_paths = 0;
+    uint32_t mrc_active_evs = 0;
+    bool mrc_active_evs_user_set = false;
     uint32_t mrc_min_active_paths = 1;
     uint32_t mrc_path_bits = 0;
     RoceSrc::mrc_cooldown_mode_t mrc_cooldown_mode =
@@ -1384,6 +1387,19 @@ int main(int argc, char **argv) {
         } else if (!strcmp(argv[i],"-mrc_probe_interval_pkts")){
             mrc_probe_interval_pkts = atoi(argv[i+1]);
             cout << "MRC background probe interval " << mrc_probe_interval_pkts << " packets" << endl;
+            i++;
+        } else if (!strcmp(argv[i],"-mrc_active_evs")){
+            if (i + 1 >= argc) {
+                cerr << "missing value for -mrc_active_evs" << endl;
+                exit(1);
+            }
+            mrc_active_evs = (uint32_t)strtoul(argv[i+1], NULL, 10);
+            if (!mrc_active_evs) {
+                cerr << "-mrc_active_evs must be positive" << endl;
+                exit(1);
+            }
+            mrc_active_evs_user_set = true;
+            cout << "MRC active EV override " << mrc_active_evs << endl;
             i++;
         } else if (!strcmp(argv[i],"-roce_rx_mode")){
             if (!strcmp(argv[i+1], "gbn") || !strcmp(argv[i+1], "default")) {
@@ -2516,6 +2532,11 @@ int main(int argc, char **argv) {
         cerr << "MRC cooldown reference override requires -lb mrc" << endl;
         exit(1);
     }
+    if (mrc_active_evs_user_set &&
+        lb_scheme_name != "mrc" && lb_scheme_name != "rr") {
+        cerr << "-mrc_active_evs requires -lb mrc or -lb rr" << endl;
+        exit(1);
+    }
     if (nmrc_relative_delta_user_set &&
         lb_scheme_name != "n-mrc-fixed0.5" &&
         lb_scheme_name != "n-mrc-delta") {
@@ -3214,6 +3235,13 @@ int main(int argc, char **argv) {
     RoceSrc::setHostsPerTor(top->radix_down(TOR_TIER));
 
     uint32_t path_space = path_entropy_size ? path_entropy_size : 1;
+    if (mrc_active_evs_user_set &&
+        mrc_active_evs > std::min(path_space, 32U)) {
+        cerr << "-mrc_active_evs exceeds the available active EV space "
+             << std::min(path_space, 32U) << endl;
+        exit(1);
+    }
+    RoceSrc::setMrcActiveEvs(mrc_active_evs);
     FatTreeSwitch::_netaware_path_count = path_space;
     FatTreeSwitch::_netaware_enabled = roce_lb_mode == RoceSrc::LB_NETAWARE;
     FatTreeSwitch::_stor_path_count = path_space;
@@ -3401,7 +3429,7 @@ int main(int argc, char **argv) {
             mrc_cooldown_mode == RoceSrc::MRC_COOLDOWN_ONE_CYCLE ?
             "one_cycle" : "cwnd_scaled";
         mrc_logical_evs = path_space;
-        mrc_active_paths = path_space < 32 ? path_space : 32;
+        mrc_active_paths = RoceSrc::resolvedMrcActiveEvs(path_space);
         mrc_backup_paths = path_space - mrc_active_paths;
         mrc_min_active_paths = 1;
         uint32_t encoded_universe = path_space ? path_space : 1;

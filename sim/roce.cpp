@@ -99,6 +99,7 @@ RoceSrc::mrc_cooldown_mode_t RoceSrc::_mrc_cooldown_mode =
 uint32_t RoceSrc::_mrc_cooldown_reference_pkts = 1;
 RoceSrc::mrc_all_cooling_fallback_t RoceSrc::_mrc_all_cooling_fallback =
     RoceSrc::MRC_ALL_COOLING_EARLIEST;
+uint32_t RoceSrc::_mrc_active_evs = 0;
 simtime_picosec RoceSrc::_mrc_failed_retry = timeFromUs(100.0);
 uint32_t RoceSrc::_mrc_probe_interval_pkts = 256;
 simtime_picosec RoceSrc::_conweave_rtt_threshold = timeFromUs(16.0);
@@ -2580,6 +2581,7 @@ void RoceSrc::init_rr_paths(uint32_t path_space) {
     if (_rr_paths_ready && _rr_path_space == path_space)
         return;
     _rr_evs = build_mrc_ev_order(path_space);
+    _rr_evs.resize(resolvedMrcActiveEvs(path_space));
     _rr_cursor = 0;
     _rr_path_space = path_space;
     _rr_paths_ready = true;
@@ -2609,9 +2611,7 @@ uint32_t RoceSrc::mrc_logical_ev_count(uint32_t path_space) const {
 }
 
 uint32_t RoceSrc::mrc_desired_active_paths(uint32_t path_space) const {
-    if (!path_space)
-        return 1;
-    return path_space < 32 ? path_space : 32;
+    return resolvedMrcActiveEvs(path_space);
 }
 
 bool RoceSrc::mrc_ev_in_active(uint32_t logical_ev) const {

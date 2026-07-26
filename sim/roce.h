@@ -251,6 +251,16 @@ public:
         return (uint64_t)active_count *
             (uint64_t)mrcCwndScaledRotations(active_count);
     }
+    static void setMrcActiveEvs(uint32_t value) {
+        _mrc_active_evs = value;
+    }
+    static uint32_t mrcActiveEvs() {
+        return _mrc_active_evs;
+    }
+    static uint32_t resolvedMrcActiveEvs(uint32_t path_space) {
+        uint32_t limit = std::min(path_space ? path_space : 1U, 32U);
+        return _mrc_active_evs ? std::min(_mrc_active_evs, limit) : limit;
+    }
     static void setMrcFailedRetry(simtime_picosec retry) {_mrc_failed_retry = retry;}
     static void setMrcProbeIntervalPkts(uint32_t pkts) {_mrc_probe_interval_pkts = pkts;}
     static void setConweaveRttThreshold(simtime_picosec threshold) {_conweave_rtt_threshold = threshold;}
@@ -536,6 +546,7 @@ public:
     static mrc_cooldown_mode_t _mrc_cooldown_mode;
     static uint32_t _mrc_cooldown_reference_pkts;
     static mrc_all_cooling_fallback_t _mrc_all_cooling_fallback;
+    static uint32_t _mrc_active_evs;
     static simtime_picosec _mrc_failed_retry;
     static uint32_t _mrc_probe_interval_pkts;
     static simtime_picosec _conweave_rtt_threshold;

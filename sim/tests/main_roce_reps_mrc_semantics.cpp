@@ -288,6 +288,38 @@ static void test_rr_matches_healthy_mrc_order() {
            "different QP identities should retain distinct permutations");
 }
 
+static void test_mrc_active_ev_override_and_rr_equivalence() {
+    reset_mrc_config(8);
+    RoceSrc::setMrcActiveEvs(0);
+    RoceSrc default_mrc(NULL, NULL, test_eventlist(),
+                        speedFromMbps((uint64_t)100000));
+    configure_identity(default_mrc, 11, 27, 804);
+    default_mrc.init_mrc_paths(8);
+    expect(default_mrc._mrc_active.size() == 8 &&
+               default_mrc._mrc_backup.empty(),
+           "unset active-EV override must preserve the default");
+
+    for (uint32_t active_evs = 2; active_evs <= 8; active_evs *= 2) {
+        RoceSrc::setMrcActiveEvs(active_evs);
+        RoceSrc rr(NULL, NULL, test_eventlist(),
+                   speedFromMbps((uint64_t)100000));
+        RoceSrc mrc(NULL, NULL, test_eventlist(),
+                    speedFromMbps((uint64_t)100000));
+        configure_identity(rr, 11, 27, 805);
+        configure_identity(mrc, 11, 27, 805);
+        mrc.init_mrc_paths(8);
+
+        expect(mrc._mrc_active.size() == active_evs,
+               "active-EV override must limit MRC active state");
+        expect(mrc._mrc_backup.size() == 8 - active_evs,
+               "non-active EVs must remain unique MRC backups");
+        expect(select_paths(rr, RoceSrc::LB_RR, active_evs * 4) ==
+                   select_paths(mrc, RoceSrc::LB_MRC, active_evs * 4),
+               "RR must match MRC for each active-EV setting");
+    }
+    RoceSrc::setMrcActiveEvs(0);
+}
+
 static void test_rr_diverges_only_after_mrc_feedback() {
     reset_mrc_config(8);
     RoceSrc rr(NULL, NULL, test_eventlist(),
@@ -745,6 +777,7 @@ int main() {
     test_mrc_encoded_path_identity();
     test_mrc_deterministic_active_subset_and_unique_backups();
     test_rr_matches_healthy_mrc_order();
+    test_mrc_active_ev_override_and_rr_equivalence();
     test_rr_diverges_only_after_mrc_feedback();
     test_mrc_ecn_uses_echoed_ev();
     test_mrc_trim_soft_skips_exact_ev();
