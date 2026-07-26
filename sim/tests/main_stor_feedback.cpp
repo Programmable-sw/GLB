@@ -569,6 +569,54 @@ static void test_stor_profile_is_shared_but_virtual_order_is_per_qp(
                "two QPs should consume the same shared ticket allocation");
 }
 
+static void test_stor_profile_diagnostics(EventList& eventlist) {
+    RoceSrc::resetStorProfileDiag();
+    RoceSrc::resetStorSharedState();
+    RoceSrc::setLoadBalancing(RoceSrc::LB_STOR);
+    RoceSrc::setPathEntropySize(2);
+    RoceSrc::setStorLevelWeights(4, 2, 1, 0);
+    RoceSrc::setStorBinarySelector(false);
+
+    RoceSrc src(NULL, NULL, eventlist, speedFromMbps((uint64_t)10000));
+    src.set_flowid(91);
+    src.set_src(0);
+    src.set_dst(6);
+
+    StorFeedbackLevels mild;
+    mild.push_back(STOR_LEVEL_DEGRADED);
+    mild.push_back(STOR_LEVEL_GOOD);
+    src.apply_stor_feedback_for_test(mild);
+    expect(RoceSrc::storLevelTransition(STOR_LEVEL_GOOD,
+                                       STOR_LEVEL_DEGRADED) == 1,
+           "GOOD to DEGRADED feedback should count one STOR transition");
+    expect(RoceSrc::storLevelChanges() == 1,
+           "one changed path should count one STOR level change");
+
+    StorFeedbackLevels recovered;
+    recovered.push_back(STOR_LEVEL_GOOD);
+    recovered.push_back(STOR_LEVEL_GOOD);
+    src.apply_stor_feedback_for_test(recovered);
+    expect(RoceSrc::storLevelTransition(STOR_LEVEL_DEGRADED,
+                                       STOR_LEVEL_GOOD) == 1,
+           "DEGRADED to GOOD feedback should count recovery");
+
+    StorFeedbackLevels all_avoid;
+    all_avoid.push_back(STOR_LEVEL_AVOID);
+    all_avoid.push_back(STOR_LEVEL_AVOID);
+    src.apply_stor_feedback_for_test(all_avoid);
+    expect(RoceSrc::storAllZeroProfiles() == 1,
+           "all-AVOID feedback should count one all-zero STOR profile");
+    src.choose_path_for_test(Packet::PRIO_LO, false);
+    expect(RoceSrc::storAllZeroSelections() == 1,
+           "selection under all-AVOID feedback should count one fallback");
+
+    RoceSrc::resetStorProfileDiag();
+    expect(RoceSrc::storLevelChanges() == 0 &&
+           RoceSrc::storAllZeroProfiles() == 0 &&
+           RoceSrc::storAllZeroSelections() == 0,
+           "reset should clear STOR profile diagnostics");
+}
+
 int main() {
     EventList eventlist;
     expect(RoceSrc::storLevelWeight(STOR_LEVEL_GOOD) == 4 &&
@@ -592,5 +640,6 @@ int main() {
     test_endpoint_level_selection(eventlist);
     test_stor_shuffled_bucket_is_scale_invariant(eventlist);
     test_stor_profile_is_shared_but_virtual_order_is_per_qp(eventlist);
+    test_stor_profile_diagnostics(eventlist);
     return 0;
 }

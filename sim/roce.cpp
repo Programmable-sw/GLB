@@ -126,6 +126,14 @@ std::map<std::pair<uint32_t, uint32_t>, RoceSrc::SharedWeightedProfile>
     RoceSrc::_netaware_shared_profiles;
 std::array<uint32_t, 4> RoceSrc::_stor_level_weights = {{4, 2, 1, 0}};
 std::array<uint32_t, 4> RoceSrc::_netaware_level_weights = {{4, 2, 1, 0}};
+uint64_t RoceSrc::_stor_level_transitions[4][4] = {{0}};
+uint64_t RoceSrc::_netaware_level_transitions[4][4] = {{0}};
+uint64_t RoceSrc::_stor_level_changes = 0;
+uint64_t RoceSrc::_netaware_level_changes = 0;
+uint64_t RoceSrc::_stor_all_zero_profiles = 0;
+uint64_t RoceSrc::_netaware_all_zero_profiles = 0;
+uint64_t RoceSrc::_stor_all_zero_selections = 0;
+uint64_t RoceSrc::_netaware_all_zero_selections = 0;
 RoceSrc::netaware_wrr_mode_t RoceSrc::_netaware_wrr_mode = NETAWARE_WRR_SHUFFLED_BUCKET;
 uint32_t RoceSrc::_netaware_topk = 4;
 RoceSrc::netaware_weight_adaptation_t RoceSrc::_netaware_weight_adaptation =
@@ -1488,6 +1496,36 @@ void RoceSrc::resetNetawareSharedState() {
     _netaware_shared_profiles.clear();
 }
 
+void RoceSrc::resetStorProfileDiag() {
+    for (uint32_t from = 0; from < 4; from++) {
+        for (uint32_t to = 0; to < 4; to++) {
+            _stor_level_transitions[from][to] = 0;
+            _netaware_level_transitions[from][to] = 0;
+        }
+    }
+    _stor_level_changes = 0;
+    _netaware_level_changes = 0;
+    _stor_all_zero_profiles = 0;
+    _netaware_all_zero_profiles = 0;
+    _stor_all_zero_selections = 0;
+    _netaware_all_zero_selections = 0;
+}
+
+static bool all_profile_weights_zero(
+        const StorFeedbackLevels& levels,
+        const std::array<uint32_t, 4>& weights,
+        uint32_t path_space) {
+    for (uint32_t path = 0; path < path_space; path++) {
+        uint8_t level = path < levels.size() ?
+            levels[path] : STOR_LEVEL_GOOD;
+        if (level > STOR_LEVEL_AVOID)
+            level = STOR_LEVEL_GOOD;
+        if (weights[level] > 0)
+            return false;
+    }
+    return true;
+}
+
 RoceSrc::SharedWeightedProfile& RoceSrc::shared_stor_profile(
         uint32_t path_space) {
     if (path_space == 0)
@@ -1526,6 +1564,20 @@ void RoceSrc::apply_stor_feedback(const StorFeedbackLevels& feedback,
             next[i] = feedback[i];
     }
     if (profile.levels != next) {
+        for (uint32_t path = 0; path < path_space; path++) {
+            uint8_t from = path < profile.levels.size() ?
+                profile.levels[path] : STOR_LEVEL_GOOD;
+            uint8_t to = next[path];
+            if (from > STOR_LEVEL_AVOID)
+                from = STOR_LEVEL_GOOD;
+            if (to > STOR_LEVEL_AVOID)
+                to = STOR_LEVEL_GOOD;
+            _stor_level_transitions[from][to]++;
+            if (from != to)
+                _stor_level_changes++;
+        }
+        if (all_profile_weights_zero(next, _stor_level_weights, path_space))
+            _stor_all_zero_profiles++;
         profile.levels.swap(next);
         profile.version++;
         rebuild_shared_weighted_profile(profile, path_space,
@@ -1544,6 +1596,21 @@ void RoceSrc::apply_netaware_snapshot(const NetawareFeedbackLevels& feedback,
             next[i] = feedback[i];
     }
     if (profile.levels != next) {
+        for (uint32_t path = 0; path < path_space; path++) {
+            uint8_t from = path < profile.levels.size() ?
+                profile.levels[path] : STOR_LEVEL_GOOD;
+            uint8_t to = next[path];
+            if (from > STOR_LEVEL_AVOID)
+                from = STOR_LEVEL_GOOD;
+            if (to > STOR_LEVEL_AVOID)
+                to = STOR_LEVEL_GOOD;
+            _netaware_level_transitions[from][to]++;
+            if (from != to)
+                _netaware_level_changes++;
+        }
+        if (all_profile_weights_zero(next, _netaware_level_weights,
+                                     path_space))
+            _netaware_all_zero_profiles++;
         profile.levels.swap(next);
         profile.version++;
         rebuild_netaware_weighted_profile(profile, path_space);
@@ -2113,6 +2180,8 @@ uint32_t RoceSrc::choose_stor_path(Packet::PktPriority priority, uint32_t path_s
     uint32_t prio = selector_priority_index(priority);
     SharedWeightedProfile& profile = shared_stor_profile(path_space);
     const StorFeedbackLevels& levels = profile.levels;
+    if (all_profile_weights_zero(levels, _stor_level_weights, path_space))
+        _stor_all_zero_selections++;
 
     if (_stor_binary_selector)
         return choose_virtual_binary_path(prio, path_space, levels,
@@ -2151,7 +2220,10 @@ uint32_t RoceSrc::choose_stor_path(Packet::PktPriority priority, uint32_t path_s
 
 uint32_t RoceSrc::choose_netaware_path(Packet::PktPriority priority, uint32_t path_space) {
     uint32_t prio = selector_priority_index(priority);
-    shared_netaware_profile(path_space);
+    SharedWeightedProfile& profile = shared_netaware_profile(path_space);
+    if (all_profile_weights_zero(profile.levels, _netaware_level_weights,
+                                 path_space))
+        _netaware_all_zero_selections++;
 
     if (_netaware_wrr_mode == NETAWARE_WRR_TOPK)
         return choose_netaware_topk_path(prio, path_space);
