@@ -29,10 +29,10 @@
 - Consumes: `run_final_512_comparison.materialize_traffic`, `build_command`, and diagnostic parsers.
 - Produces: `results.csv` with scenario, axis, per-flow MiB, parallelism, variant, seed, paired traffic hash, CCT, and diagnostics.
 
-- [ ] **Step 1:** Define the ten unique scenarios, four weights, and three seeds; deduplicate the common P4/0.5 MiB cell.
-- [ ] **Step 2:** Validate that the command matrix contains exactly 120 cells and that every scenario/seed has one traffic hash.
+- [ ] **Step 1:** Define the nine unique scenarios, four weights, and three seeds; deduplicate the common P4/0.5 MiB cell.
+- [ ] **Step 2:** Validate that the command matrix contains exactly 108 cells and that every scenario/seed has one traffic hash.
 - [ ] **Step 3:** Add cache validation using traffic hash, exact command, and simulator SHA.
-- [ ] **Step 4:** Run `python3 experiments/n-mrc/run_grade_collective_scale_concurrency.py --dry-run`; expect `validated 120 paired commands`.
+- [ ] **Step 4:** Run `python3 experiments/n-mrc/run_grade_collective_scale_concurrency.py --dry-run`; expect `validated 108 paired commands`.
 - [ ] **Step 5:** Commit the runner.
 
 ### Task 2: Execute and analyze the sweep
@@ -47,11 +47,11 @@
 - Consumes: the runner result rows.
 - Produces: a complete scenario/variant summary and a winner table with seed support and mechanism deltas versus equal.
 
-- [ ] **Step 1:** Run the 120-cell matrix with four workers.
+- [ ] **Step 1:** Run the 108-cell matrix with four workers.
 - [ ] **Step 2:** Reject missing cells, invalid completion, duplicate seeds, or traffic hash mismatch.
 - [ ] **Step 3:** Compute three-seed geometric-mean CCT and mean ECN, trim, NACK, level-change, all-zero, and queue-CV metrics.
 - [ ] **Step 4:** Mark a non-equal winner valid only when it has the lowest geometric-mean CCT and beats equal in at least two seeds.
-- [ ] **Step 5:** Run the analyzer and verify all ten scenarios and forty summary groups are present.
+- [ ] **Step 5:** Run the analyzer and verify all nine scenarios and thirty-six summary groups are present.
 - [ ] **Step 6:** Commit runner, analyzer, and compact CSV evidence.
 
 ### Task 3: Update and verify the report

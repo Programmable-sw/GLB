@@ -98,6 +98,71 @@ P4 和 P16 不是严格的单变量消融：从 P4 到 P16，单流大小、并�
 
 所以旧结论“加权一定比等权好”是错的，“等权一定更好”也同样错。正确结论是：固定异构路径偏好陡权重，全局动态拥塞偏好平缓权重。
 
+### 集合通信补充扫描：低并发或短流时并非 equal 最优
+
+为分离并发与流规模，本轮增加两个 All-to-All 单变量扫描：
+
+- 固定单流 0.5 MiB，扫描每源并发 P1/P2/P4/P8/P16/P32。
+- 固定 P4，扫描单流 0.125/0.5/2/8 MiB。
+
+所有场景均为 128 节点、8 路径、无背景流，使用 seeds 13/29/47；同一场景/seed 的四组权重共享 traffic hash。完整数据见：
+
+- [collective results.csv](output/grade_collective_scale_concurrency_20260726/results.csv)
+- [collective summary.csv](output/grade_collective_scale_concurrency_20260726/summary.csv)
+- [collective winners.csv](output/grade_collective_scale_concurrency_20260726/winners.csv)
+
+#### 固定 0.5 MiB，改变每源并发
+
+| 并发 | equal | gentle | default | sharp | 三 seed 几何均值最优 |
+|---:|---:|---:|---:|---:|---|
+| P1 | 3808.8 | **3773.5** | 3833.6 | 3934.6 | gentle |
+| P2 | **2666.7** | 2945.6 | 2992.0 | 2773.3 | equal |
+| P4 | **2158.5** | 2254.4 | 2245.7 | 2311.9 | equal |
+| P8 | **1993.9** | 2083.2 | 2141.5 | 2106.7 | equal |
+| P16 | **1885.5** | 1908.0 | 1946.1 | 1956.4 | equal |
+| P32 | **1930.8** | 1944.9 | 1987.9 | 2011.5 | equal |
+
+P1 是可靠的非 equal 场景：gentle 比 equal 快 0.93%，seed 29/47 胜出，seed 13 略差。机制指标为：
+
+| P1/0.5 MiB | ECN | trims | NACK | 等级变化 | spine queue CV |
+|---|---:|---:|---:|---:|---:|
+| equal | 3,893 | 113,374 | 114,211 | 72,338 | **0.373** |
+| gentle | **3,877** | **110,418** | **111,188** | **70,324** | 0.454 |
+
+gentle 的 CCT 收益与 trim、NACK、等级变化下降约 2.6%–2.8% 同时出现，但 queue CV 反而提高 21.5%。因此“更低 queue CV 导致它获胜”与数据不符。现有计数只能确认 gentle 同时具有较少恢复事件和较短 CCT，不能判断这些恢复事件是否是 CCT 改善的原因。
+
+从 P2 开始 equal 转为最优，并一直保持到 P32。已验证的是并发提高后等级权重不再产生稳定收益。为什么 P1 到 P2 会改变排序仍未被隔离；需要路径等级驻留时间和逐批选择时间线才能检验“更多发送者使等级更偏短期状态”。P2 的单 seed 赢家在 sharp/default/equal 之间变化，说明该过渡区的结果随 seed 变化。
+
+#### 固定 P4，改变单流大小
+
+| 单流大小 | 每源总量 | equal | gentle | default | sharp | 三 seed 几何均值最优 |
+|---:|---:|---:|---:|---:|---:|---|
+| 0.125 MiB | 15.875 MiB | 490.7 | 493.7 | **482.1** | 488.9 | default |
+| 0.5 MiB | 63.5 MiB | **2158.5** | 2254.4 | 2245.7 | 2311.9 | equal |
+| 2 MiB | 254 MiB | **10664.1** | 11119.0 | 11765.4 | 11171.5 | equal |
+| 8 MiB | 1016 MiB | 38283.8 | 40668.2 | **38007.6** | 38730.0 | default（仅 1/3 seed 胜 equal，不稳定） |
+
+最可靠的规模反转出现在 0.125 MiB：default 三个 seed 全部优于 equal，几何均值改善 1.75%。
+
+| P4/0.125 MiB | ECN | trims | NACK | 等级变化 | spine queue CV |
+|---|---:|---:|---:|---:|---:|
+| equal | 233 | 167 | 168 | 194 | 0.612 |
+| default | **200** | **81** | **81** | **124** | **0.604** |
+| 相对变化 | -14.3% | -51.4% | -51.7% | -36.4% | -1.4% |
+
+equal 把 GOOD/MILD/BAD 一视同仁，而 default 保留等级差异；在 0.125 MiB 点，后者与更少的 ECN、trim、NACK 和更短 CCT 同时出现。由于没有记录每条流选择路径的等级，当前实验只能确认这些指标共同改善，不能确认 default 是否在流结束前避开了已出现坏信号的路径。
+
+流增至 0.5/2 MiB 后，equal 重新最优。default 在 P4/0.5 MiB 中相对 equal 多 12.0% ECN、6.6% trim 和 6.4% NACK，CCT 慢 4.0%。这验证了指标方向随规模反转，但没有记录单流经历的反馈轮数或权重导致的流量迁移次数，因此“长流承受持续权重反馈代价”仍是待验证假设。
+
+8 MiB 的三 seed 几何均值虽然由 default 小幅领先 0.72%，但它只在 seed 47 胜 equal，seed 13/29 均落后，而且 queue CV 比 equal 高 67%。因此该点只说明大流场景存在高方差，不能作为 default 稳定优于 equal 的证据。
+
+综合两个扫描，最优权重确实随并发和流规模变化：
+
+- 极低并发 P1：gentle 最优。
+- 很短的 P4/0.125 MiB：default 最优。
+- P2–P32 的 0.5 MiB 集合通信，以及 P4 的 0.5/2 MiB：equal 最稳定。
+- 权重越陡并非越好；可靠非 equal 赢家是 gentle/default，而不是 sharp。
+
 ### 短流与长流也有相反取舍
 
 WebSearch 按流大小重新分桶后的 p99 FCT：
@@ -240,3 +305,6 @@ python3 experiments/n-mrc/analyze_four_scheme_parameter_matrix.py \
 - `summary.csv`: `b345d4505fd7c94b4ae6b95eddd3a7099fceca382283978a9b57b694132d8ef1`
 - `transitions.csv`: `61a2e05239162e49097a06f9f32a4e96d672f30d4c35fe18eb06787078eedd5a`
 - `flow_size_bins.csv`: `73470b115e472be6f049eaa4e30b8b200ecb6d700c81a953d5e400dc780519d2`
+- `collective results.csv`: `4434a888ff054f1491ac2a40bd3f8a7e34749f21eb9006290633d8e505af5339`
+- `collective summary.csv`: `152d0c87caa53c422eca26f44ed5c190164225aacf51e516b92a924de5a2ea18`
+- `collective winners.csv`: `17179b8230550054e9df50d75099d65cda9e25b37a0050f44b3e48c6529b2554`
