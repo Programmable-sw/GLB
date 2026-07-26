@@ -65,6 +65,12 @@ class TrafficArtifact(NamedTuple):
     serialized_bytes: int
 
 
+class CaseResult(NamedTuple):
+    cell: dict
+    flow_path: Path
+    event_path: Path
+
+
 def case_catalog(seeds=CANONICAL_SEEDS):
     cases = []
     for family, degraded in (("healthy", False), ("asymmetric", True)):
@@ -495,6 +501,17 @@ def config_ok(text, case):
     return all(token in text for token in required)
 
 
+def load_cached_case_result(
+        summary_path, flow_path, event_path, fingerprint, force):
+    """Return a cache descriptor without decoding its potentially large data."""
+    if force or not summary_path.exists() or not flow_path.exists():
+        return None
+    cached = json.loads(summary_path.read_text(encoding="utf-8"))
+    if cached.get("fingerprint") != fingerprint or not cached.get("valid"):
+        return None
+    return CaseResult(cached, flow_path, event_path)
+
+
 def run_case(case, artifact, args):
     case_dir = (
         Path(args.out) / "raw" / case.experiment / case.scenario /
@@ -510,17 +527,11 @@ def run_case(case, artifact, args):
     summary_path = case_dir / "summary.json"
     flow_path = case_dir / "flow_metrics.json.gz"
     event_path = case_dir / "shared_events.json.gz"
-    if not args.force and summary_path.exists() and flow_path.exists():
-        cached = json.loads(summary_path.read_text(encoding="utf-8"))
-        if cached.get("fingerprint") == fingerprint and cached.get("valid"):
-            with gzip.open(flow_path, "rt", encoding="utf-8") as handle:
-                flows = json.load(handle)
-            events = []
-            if event_path.exists():
-                with gzip.open(event_path, "rt", encoding="utf-8") as handle:
-                    events = json.load(handle)
-            print("cached " + case_identity(case), flush=True)
-            return cached, flows, events
+    cached = load_cached_case_result(
+        summary_path, flow_path, event_path, fingerprint, args.force)
+    if cached is not None:
+        print("cached " + case_identity(case), flush=True)
+        return cached
 
     print("run " + case_identity(case), flush=True)
     started = time.monotonic()
@@ -621,7 +632,7 @@ def run_case(case, artifact, args):
         disposable.unlink(missing_ok=True)
     print("done {} valid={} flows={} runtime={:.1f}s".format(
         case_identity(case), valid, len(flow_records), runtime_s), flush=True)
-    return cell, flow_records, events
+    return CaseResult(cell, flow_path, event_path)
 
 
 def aggregate_shared_keys(events):
@@ -789,6 +800,365 @@ def build_aggregates(flow_rows, shared_key_rows):
     return summary, paired
 
 
+class StreamingAnalysis:
+    """Bounded-memory accumulators for the full result matrix."""
+
+    def __init__(self):
+        self.exp1 = {}
+        self.exp1_sizes = {}
+        self.exp2 = {}
+        self.exp3 = {}
+        self.total_flows = 0
+        self.exp1_total = 0
+        self.exp1_actionable = 0
+        self.exp1_slow5 = 0
+
+    @staticmethod
+    def _ratio_group(groups, key):
+        return groups.setdefault(key, {
+            "count": 0, "log_ratio_sum": 0.0,
+            "slow1": 0, "slow5": 0, "slow10": 0,
+            "actionable": 0, "sweeps": 0, "coverage_sum": 0.0,
+            "treatment_fcts": [],
+        })
+
+    def add_flow(self, row):
+        self.total_flows += 1
+        if row["experiment"] == "per_qp_sharing":
+            key = (row["parallel"], row["scheme"])
+            group = self.exp2.setdefault(key, {
+                "count": 0, "fcts": [], "cct": {},
+                "shared_updates_published": 0,
+                "shared_updates_consumed": 0,
+                "shared_updates_from_other_qps": 0,
+                "redundant_discoveries": 0,
+                "post_shared_bad_ev_sends": 0,
+            })
+            group["count"] += 1
+            group["fcts"].append(row["fct_us"])
+            group["cct"][row["seed"]] = max(
+                group["cct"].get(row["seed"], 0.0), row["fct_us"])
+            for field in (
+                    "shared_updates_published", "shared_updates_consumed",
+                    "shared_updates_from_other_qps",
+                    "redundant_discoveries", "post_shared_bad_ev_sends"):
+                group[field] += row[field]
+        elif row["experiment"] == "active_ev_count":
+            key = (row["load_pct"], row["active_evs"], row["scheme"])
+            group = self.exp3.setdefault(key, {
+                "count": 0, "fcts": [], "coverage_sum": 0.0,
+                "sweeps": 0, "unused_sum": 0, "actionable": 0,
+            })
+            group["count"] += 1
+            group["fcts"].append(row["fct_us"])
+            group["coverage_sum"] += row["coverage_fraction"]
+            group["sweeps"] += int(row["full_sweeps"] > 0)
+            group["unused_sum"] += row["unused_active_evs"]
+            group["actionable"] += int(row["actionable_feedback"] > 0)
+
+    def add_paired(self, row):
+        if not row["scenario"].startswith("exp1_"):
+            return
+        group = self._ratio_group(
+            self.exp1, (row["family"], row["load_pct"]))
+        size_group = self._ratio_group(
+            self.exp1_sizes, row["flow_size"])
+        for selected in (group, size_group):
+            selected["count"] += 1
+            selected["log_ratio_sum"] += math.log(row["fct_ratio"])
+            selected["slow1"] += row["slowdown_gt_1pct"]
+            selected["slow5"] += row["slowdown_gt_5pct"]
+            selected["slow10"] += row["slowdown_gt_10pct"]
+            selected["actionable"] += int(row["actionable_feedback"] > 0)
+            selected["sweeps"] += int(row["full_sweeps"] > 0)
+            selected["coverage_sum"] += row["coverage_fraction"]
+            selected["treatment_fcts"].append(row["treatment_fct_us"])
+        self.exp1_total += 1
+        self.exp1_actionable += int(row["actionable_feedback"] > 0)
+        self.exp1_slow5 += row["slowdown_gt_5pct"]
+
+    def summary_rows(self):
+        rows = []
+        for (family, load), group in sorted(self.exp1.items()):
+            count = group["count"]
+            rows.append({
+                "experiment": "flow_lifetime",
+                "family": family,
+                "load_pct": load,
+                "parallel": 0,
+                "active_evs": PATHS,
+                "scheme": "mrc_vs_rr",
+                "flow_count": count,
+                "fct_ratio_geomean": math.exp(
+                    group["log_ratio_sum"] / count),
+                "slowdown_gt_1pct_fraction": group["slow1"] / count,
+                "slowdown_gt_5pct_fraction": group["slow5"] / count,
+                "slowdown_gt_10pct_fraction": group["slow10"] / count,
+                "actionable_fraction": group["actionable"] / count,
+                "complete_sweep_fraction": group["sweeps"] / count,
+                "coverage_mean": group["coverage_sum"] / count,
+                "p99_treatment_fct_us": percentile(
+                    group["treatment_fcts"], 0.99),
+            })
+        for (parallel, scheme), group in sorted(self.exp2.items()):
+            rows.append({
+                "experiment": "per_qp_sharing",
+                "family": "asymmetric_alltoall",
+                "load_pct": 0,
+                "parallel": parallel,
+                "active_evs": PATHS,
+                "scheme": scheme,
+                "flow_count": group["count"],
+                "cct_geomean_us": geometric_mean(group["cct"].values()),
+                "p99_fct_us": percentile(group["fcts"], 0.99),
+                "shared_updates_published":
+                    group["shared_updates_published"],
+                "shared_updates_consumed":
+                    group["shared_updates_consumed"],
+                "shared_updates_from_other_qps":
+                    group["shared_updates_from_other_qps"],
+                "redundant_discoveries": group["redundant_discoveries"],
+                "post_shared_bad_ev_sends":
+                    group["post_shared_bad_ev_sends"],
+            })
+        for (load, active, scheme), group in sorted(self.exp3.items()):
+            count = group["count"]
+            rows.append({
+                "experiment": "active_ev_count",
+                "family": "asymmetric_websearch",
+                "load_pct": load,
+                "parallel": 0,
+                "active_evs": active,
+                "scheme": scheme,
+                "flow_count": count,
+                "p99_fct_us": percentile(group["fcts"], 0.99),
+                "coverage_mean": group["coverage_sum"] / count,
+                "complete_sweep_fraction": group["sweeps"] / count,
+                "unused_active_evs_mean": group["unused_sum"] / count,
+                "actionable_fraction": group["actionable"] / count,
+            })
+        return rows
+
+    def flow_size_rows(self):
+        rows = []
+        for size, group in sorted(self.exp1_sizes.items()):
+            count = group["count"]
+            rows.append({
+                "flow_size": size,
+                "flow_size_kib": size / 1024,
+                "flow_count": count,
+                "fct_ratio_geomean": math.exp(
+                    group["log_ratio_sum"] / count),
+                "slowdown_gt_5pct_fraction": group["slow5"] / count,
+                "actionable_fraction": group["actionable"] / count,
+                "complete_sweep_fraction": group["sweeps"] / count,
+                "coverage_mean": group["coverage_sum"] / count,
+                "p99_treatment_fct_us": percentile(
+                    group["treatment_fcts"], 0.99),
+            })
+        return rows
+
+    def report_stats(self):
+        return {
+            "flow_diagnostics": self.total_flows,
+            "exp1_paired_flows": self.exp1_total,
+            "exp1_actionable_fraction": (
+                self.exp1_actionable / self.exp1_total
+                if self.exp1_total else 0.0),
+            "exp1_slowdown_gt_5pct_fraction": (
+                self.exp1_slow5 / self.exp1_total
+                if self.exp1_total else 0.0),
+        }
+
+
+def load_case_flow_rows(result):
+    with gzip.open(result.flow_path, "rt", encoding="utf-8") as handle:
+        rows = json.load(handle)
+    for row in rows:
+        row["feedback_bucket"] = feedback_bucket(row)
+        row["coverage_fraction"] = (
+            row["unique_active_evs"] / row["active_evs"]
+            if row["active_evs"] else 0.0)
+    return rows
+
+
+def load_case_events(result):
+    if not result.event_path.exists():
+        return []
+    with gzip.open(result.event_path, "rt", encoding="utf-8") as handle:
+        return json.load(handle)
+
+
+def atomic_csv_chunks(path, chunks):
+    """Atomically write row chunks while retaining at most one chunk."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = None
+    count = 0
+    try:
+        with tempfile.NamedTemporaryFile(
+                "w", encoding="utf-8", newline="", dir=path.parent,
+                prefix="." + path.name + ".", suffix=".tmp",
+                delete=False) as handle:
+            temporary = Path(handle.name)
+            writer = None
+            fields = None
+            for chunk in chunks:
+                for row in chunk:
+                    if writer is None:
+                        fields = list(row)
+                        writer = csv.DictWriter(
+                            handle, fieldnames=fields, lineterminator="\n")
+                        writer.writeheader()
+                    if set(row) != set(fields):
+                        raise ValueError("inconsistent streaming CSV schema")
+                    writer.writerow(row)
+                    count += 1
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+    except BaseException:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
+        raise
+    return count
+
+
+def paired_result_groups(results):
+    groups = {}
+    for result in results:
+        cell = result.cell
+        key = (cell["experiment"], cell["scenario"], cell["seed"])
+        groups.setdefault(key, {})[cell["scheme"]] = result
+    for key, schemes in sorted(groups.items()):
+        baseline, treatment = (
+            ("mrc", "mrc-shared")
+            if key[0] == "per_qp_sharing" else ("rr", "mrc"))
+        if set(schemes) != {baseline, treatment}:
+            raise ValueError("missing result scheme pair for {}".format(key))
+        yield schemes[baseline], schemes[treatment], baseline, treatment
+
+
+def stream_flow_chunks(results, analysis):
+    for result in sorted(results, key=lambda item: item.cell["identity"]):
+        rows = load_case_flow_rows(result)
+        for row in rows:
+            analysis.add_flow(row)
+        yield rows
+
+
+def stream_paired_chunks(results, analysis):
+    for baseline, treatment, baseline_scheme, treatment_scheme in (
+            paired_result_groups(results)):
+        rows = load_case_flow_rows(baseline)
+        rows.extend(load_case_flow_rows(treatment))
+        paired = pair_flow_rows(rows, baseline_scheme, treatment_scheme)
+        for row in paired:
+            analysis.add_paired(row)
+        yield paired
+
+
+def stream_shared_key_chunks(results):
+    for result in sorted(results, key=lambda item: item.cell["identity"]):
+        events = load_case_events(result)
+        if events:
+            yield aggregate_shared_keys(events)
+
+
+def make_streaming_figures(out, flow_size_rows, summary):
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    figure_dir = Path(out) / "figures"
+    figure_dir.mkdir(parents=True, exist_ok=True)
+    fig, axis = plt.subplots(figsize=(8, 4.8))
+    labels = [row["flow_size_kib"] for row in flow_size_rows]
+    axis.plot(
+        labels, [row["fct_ratio_geomean"] for row in flow_size_rows],
+        marker="o", label="MRC / RR FCT")
+    axis.axhline(1.0, color="black", linewidth=0.8)
+    axis.set_xscale("log")
+    axis.set_xlabel("Flow size (KiB, log scale)")
+    axis.set_ylabel("Paired FCT ratio")
+    other = axis.twinx()
+    other.plot(
+        labels, [row["actionable_fraction"] for row in flow_size_rows],
+        marker="s", color="tab:orange",
+        label="actionable feedback fraction")
+    other.set_ylabel("Actionable feedback fraction")
+    axis.set_title("Experiment 1: feedback opportunity versus flow size")
+    fig.tight_layout()
+    for suffix in ("png", "pdf"):
+        fig.savefig(
+            figure_dir / ("exp1_feedback_value_by_flow_size." + suffix),
+            dpi=180)
+    plt.close(fig)
+
+    exp2 = [
+        row for row in summary if row["experiment"] == "per_qp_sharing"
+    ]
+    fig, axes = plt.subplots(1, 2, figsize=(9.5, 4.2))
+    for scheme in ("mrc", "mrc-shared"):
+        selected = sorted(
+            (row for row in exp2 if row["scheme"] == scheme),
+            key=lambda row: row["parallel"])
+        axes[0].plot(
+            [row["parallel"] for row in selected],
+            [row["redundant_discoveries"] for row in selected],
+            marker="o", label=scheme)
+        axes[1].plot(
+            [row["parallel"] for row in selected],
+            [row["cct_geomean_us"] for row in selected],
+            marker="o", label=scheme)
+    axes[0].set_title("Repeated discoveries")
+    axes[0].set_xlabel("Parallel QPs per source")
+    axes[0].set_ylabel("Redundant local discoveries")
+    axes[1].set_title("Completion time (secondary)")
+    axes[1].set_xlabel("Parallel QPs per source")
+    axes[1].set_ylabel("CCT geometric mean (us)")
+    axes[0].legend()
+    axes[1].legend()
+    fig.tight_layout()
+    for suffix in ("png", "pdf"):
+        fig.savefig(
+            figure_dir / ("exp2_per_qp_repeated_exploration." + suffix),
+            dpi=180)
+    plt.close(fig)
+
+    exp3 = [
+        row for row in summary if row["experiment"] == "active_ev_count"
+    ]
+    fig, axes = plt.subplots(1, 2, figsize=(9.5, 4.2))
+    for load in (40, 80):
+        selected = sorted(
+            (row for row in exp3
+             if row["scheme"] == "mrc" and row["load_pct"] == load),
+            key=lambda row: row["active_evs"])
+        axes[0].plot(
+            [row["active_evs"] for row in selected],
+            [row["coverage_mean"] for row in selected],
+            marker="o", label="{}% load".format(load))
+        axes[1].plot(
+            [row["active_evs"] for row in selected],
+            [row["p99_fct_us"] for row in selected],
+            marker="o", label="{}% load".format(load))
+    axes[0].set_xlabel("Active EV count")
+    axes[0].set_ylabel("Mean EV coverage")
+    axes[0].set_ylim(0, 1.05)
+    axes[1].set_xlabel("Active EV count")
+    axes[1].set_ylabel("p99 FCT (us)")
+    axes[0].legend()
+    axes[1].legend()
+    fig.suptitle("Experiment 3: EV-set size versus workload granularity")
+    fig.tight_layout()
+    for suffix in ("png", "pdf"):
+        fig.savefig(
+            figure_dir / ("exp3_active_ev_coverage_and_fct." + suffix),
+            dpi=180)
+    plt.close(fig)
+
+
 def make_figures(out, flow_rows, summary, paired):
     import matplotlib
     matplotlib.use("Agg")
@@ -945,6 +1315,57 @@ def build_report_text(cells, flow_rows, summary, paired, smoke):
     ])
 
 
+def build_streaming_report_text(cells, stats, smoke):
+    valid = sum(int(row["valid"]) for row in cells)
+    return "\n".join([
+        "# MRC inherent limitations: controlled experiment report",
+        "",
+        "This is a {} run at 128 nodes / 8 physical paths.".format(
+            "smoke" if smoke else "full"),
+        "",
+        "## Validation",
+        "",
+        "- Validated cells: {}/{}.".format(valid, len(cells)),
+        "- Completed target-flow diagnostics: {}.".format(
+            stats["flow_diagnostics"]),
+        "- Traffic is byte-identical inside every paired comparison.",
+        "",
+        "## Experiment 1: flow lifetime and feedback value",
+        "",
+        "- Overall actionable-feedback fraction: {:.4f}.".format(
+            stats["exp1_actionable_fraction"]),
+        "- Fraction of paired flows with MRC slowdown >5%: {:.4f}.".format(
+            stats["exp1_slowdown_gt_5pct_fraction"]),
+        "- Interpret size-resolved results in `flow_size_summary.csv` and "
+        "`paired_flow_metrics.csv`; a no-update flow is a "
+        "no-learning-opportunity control.",
+        "",
+        "![Experiment 1](figures/exp1_feedback_value_by_flow_size.png)",
+        "",
+        "## Experiment 2: per-QP repeated exploration",
+        "",
+        "Direct evidence is in `shared_key_metrics.csv` and the per-flow "
+        "publication/consumption/redundancy counters. CCT is secondary.",
+        "",
+        "![Experiment 2](figures/exp2_per_qp_repeated_exploration.png)",
+        "",
+        "## Experiment 3: active EV count",
+        "",
+        "The physical path namespace remains eight; only the endpoint active "
+        "EV prefix changes.",
+        "",
+        "![Experiment 3](figures/exp3_active_ev_coverage_and_fct.png)",
+        "",
+        "## Caveats",
+        "",
+        "- Failure injection is intentionally excluded.",
+        "- WebSearch uses the repository's digitized proxy CDF.",
+        "- Mechanism labels describe observed evidence, not unobserved "
+        "counterfactual path state.",
+        "",
+    ])
+
+
 def read_csv(path):
     with Path(path).open(newline="", encoding="utf-8") as handle:
         return list(csv.DictReader(handle))
@@ -989,32 +1410,39 @@ def run_matrix(args, smoke=False):
             results.append(future.result())
             atomic_csv(
                 args.out / "cells.partial.csv",
-                [item[0] for item in results])
-    cells = [item[0] for item in results]
+                [item.cell for item in results])
+    cells = [item.cell for item in results]
     validate_complete_cells(
         cells, {case_identity(case) for case in cases})
-    flow_rows = [
-        row for _, selected, _ in results for row in selected
-    ]
-    events = [row for _, _, selected in results for row in selected]
-    shared = aggregate_shared_keys(events)
-    summary, paired = build_aggregates(flow_rows, shared)
     cells.sort(key=lambda row: row["identity"])
-    flow_rows.sort(key=lambda row: (
-        row["experiment"], row["scenario"], row["scheme"],
-        row["seed"], row["flow_id"]))
     atomic_csv(args.out / "cells.csv", cells)
-    atomic_csv(args.out / "flow_metrics.csv", flow_rows)
-    atomic_csv(args.out / "paired_flow_metrics.csv", paired)
-    atomic_csv(args.out / "shared_key_metrics.csv", shared)
+    analysis = StreamingAnalysis()
+    flow_count = atomic_csv_chunks(
+        args.out / "flow_metrics.csv",
+        stream_flow_chunks(results, analysis))
+    paired_count = atomic_csv_chunks(
+        args.out / "paired_flow_metrics.csv",
+        stream_paired_chunks(results, analysis))
+    shared_count = atomic_csv_chunks(
+        args.out / "shared_key_metrics.csv",
+        stream_shared_key_chunks(results))
+    summary = analysis.summary_rows()
+    flow_size_rows = analysis.flow_size_rows()
+    stats = analysis.report_stats()
+    stats.update({
+        "paired_flow_rows": paired_count,
+        "shared_key_rows": shared_count,
+    })
     atomic_csv(args.out / "summary.csv", summary)
-    make_figures(args.out, flow_rows, summary, paired)
+    atomic_csv(args.out / "flow_size_summary.csv", flow_size_rows)
+    atomic_json(args.out / "report_stats.json", stats)
+    make_streaming_figures(args.out, flow_size_rows, summary)
     atomic_text(
         args.out / "mrc_inherent_limitations_report.md",
-        build_report_text(cells, flow_rows, summary, paired, smoke))
+        build_streaming_report_text(cells, stats, smoke))
     manifest["status"] = "complete"
     manifest["validated_cells"] = len(cells)
-    manifest["flow_diagnostics"] = len(flow_rows)
+    manifest["flow_diagnostics"] = flow_count
     atomic_json(args.out / "manifest.json", manifest)
     atomic_text(args.out / "COMPLETE", "{} validated cells\n".format(
         len(cells)))
@@ -1028,13 +1456,12 @@ def report_existing(args):
     if manifest.get("status") != "complete":
         raise ValueError("cannot report an incomplete result matrix")
     cells = read_csv(args.out / "cells.csv")
-    flow_rows = read_csv(args.out / "flow_metrics.csv")
-    paired = read_csv(args.out / "paired_flow_metrics.csv")
-    summary = read_csv(args.out / "summary.csv")
+    stats = json.loads(
+        (args.out / "report_stats.json").read_text(encoding="utf-8"))
     atomic_text(
         args.out / "mrc_inherent_limitations_report.md",
-        build_report_text(
-            cells, flow_rows, summary, paired,
+        build_streaming_report_text(
+            cells, stats,
             manifest.get("mode") == "smoke"))
 
 

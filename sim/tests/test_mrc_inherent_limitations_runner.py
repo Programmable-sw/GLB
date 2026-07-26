@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
 
 import importlib.util
+import json
 from pathlib import Path
+import tempfile
 import unittest
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -112,6 +115,77 @@ class RunnerContractTest(unittest.TestCase):
              {"seed": 47, "value": 2.0}], "value")
         self.assertEqual(stats["min"], 1.0)
         self.assertEqual(stats["max"], 3.0)
+
+    def test_cached_case_result_keeps_large_payloads_lazy(self):
+        runner = load_runner()
+        with tempfile.TemporaryDirectory() as temporary:
+            case_dir = Path(temporary)
+            summary = case_dir / "summary.json"
+            flows = case_dir / "flow_metrics.json.gz"
+            events = case_dir / "shared_events.json.gz"
+            summary.write_text(json.dumps({
+                "fingerprint": "same",
+                "identity": "cell",
+                "valid": 1,
+            }), encoding="utf-8")
+            flows.touch()
+            events.touch()
+
+            with mock.patch.object(
+                    runner.gzip, "open",
+                    side_effect=AssertionError("payload decoded eagerly")):
+                result = runner.load_cached_case_result(
+                    summary, flows, events, "same", force=False)
+
+            self.assertEqual(result.cell["identity"], "cell")
+            self.assertEqual(result.flow_path, flows)
+            self.assertEqual(result.event_path, events)
+
+    def test_streaming_analysis_matches_exp1_group_statistics(self):
+        runner = load_runner()
+        analysis = runner.StreamingAnalysis()
+        rows = [
+            {
+                "scenario": "exp1_healthy_websearch_40pct",
+                "family": "healthy",
+                "load_pct": 40,
+                "flow_size": 4096,
+                "fct_ratio": 1.0,
+                "slowdown_gt_1pct": 0,
+                "slowdown_gt_5pct": 0,
+                "slowdown_gt_10pct": 0,
+                "actionable_feedback": 0,
+                "full_sweeps": 0,
+                "coverage_fraction": 0.5,
+                "treatment_fct_us": 10.0,
+            },
+            {
+                "scenario": "exp1_healthy_websearch_40pct",
+                "family": "healthy",
+                "load_pct": 40,
+                "flow_size": 4096,
+                "fct_ratio": 1.21,
+                "slowdown_gt_1pct": 1,
+                "slowdown_gt_5pct": 1,
+                "slowdown_gt_10pct": 1,
+                "actionable_feedback": 1,
+                "full_sweeps": 1,
+                "coverage_fraction": 1.0,
+                "treatment_fct_us": 20.0,
+            },
+        ]
+        for row in rows:
+            analysis.add_paired(row)
+
+        summary = analysis.summary_rows()
+        group = next(row for row in summary
+                     if row["experiment"] == "flow_lifetime")
+        self.assertEqual(group["flow_count"], 2)
+        self.assertAlmostEqual(group["fct_ratio_geomean"], 1.1)
+        self.assertEqual(group["slowdown_gt_5pct_fraction"], 0.5)
+        self.assertEqual(group["actionable_fraction"], 0.5)
+        self.assertEqual(
+            analysis.flow_size_rows()[0]["fct_ratio_geomean"], 1.1)
 
 
 if __name__ == "__main__":
