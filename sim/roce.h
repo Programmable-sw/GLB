@@ -701,6 +701,17 @@ private:
                                  uint32_t original_logical_ev);
     void publish_mrc_shared(uint32_t ev, mrc_shared_signal_t signal);
     void consume_mrc_shared();
+    void reset_mrc_flow_metrics();
+    void mrc_flow_note_new_selection(uint32_t ev);
+    void mrc_flow_note_quality_feedback();
+    void mrc_flow_note_effective_update(
+        uint32_t ev, RocePacket::seq_t sequence,
+        bool failure, bool replacement_congestion);
+    void mrc_flow_note_local_signal(
+        uint32_t ev, mrc_shared_signal_t signal);
+    simtime_picosec mrc_feedback_send_time(
+        RocePacket::seq_t sequence, uint32_t ev) const;
+    void emit_mrc_flow_diag();
     void update_mrc_on_ack(const RoceAck& ack);
     void update_mrc_on_nack(const RoceNack& nack);
     void update_mrc_on_rto();
@@ -791,10 +802,77 @@ private:
         uint8_t probe_successes;
         simtime_picosec retry_after;
         uint64_t cool_until_select_count;
+        bool awaiting_post_cooldown_feedback;
         MrcEv()
             : logical_ev(0), physical_path(0), state(MRC_PATH_UNUSED),
               probe_successes(0), retry_after(0),
-              cool_until_select_count(0) {}
+              cool_until_select_count(0),
+              awaiting_post_cooldown_feedback(false) {}
+    };
+    struct MrcFlowMetrics {
+        simtime_picosec start_time;
+        simtime_picosec first_full_sweep_time;
+        simtime_picosec first_state_update_time;
+        simtime_picosec feedback_age_sum;
+        simtime_picosec feedback_age_max;
+        uint64_t new_data_selections;
+        uint64_t full_sweeps;
+        uint64_t quality_feedback_before_done;
+        uint64_t effective_state_updates;
+        uint64_t packets_before_first_update;
+        uint64_t new_selections_after_first_update;
+        uint64_t actionable_feedback;
+        uint64_t pending_actionable_updates;
+        uint64_t cooldown_starts;
+        uint64_t failure_starts;
+        uint64_t max_simultaneous_cooling;
+        uint64_t replacement_congestion;
+        uint64_t post_cooldown_first_clean;
+        uint64_t shared_updates_published;
+        uint64_t shared_updates_consumed;
+        uint64_t shared_updates_from_other_qps;
+        uint64_t redundant_discoveries;
+        uint64_t post_shared_bad_ev_sends;
+        uint32_t active_evs;
+        bool first_full_sweep_set;
+        bool first_state_update_set;
+        bool emitted;
+        std::set<uint32_t> initial_active;
+        std::set<uint32_t> unique_active;
+        std::set<uint32_t> sweep_seen;
+        MrcFlowMetrics() { reset(); }
+        void reset() {
+            start_time = 0;
+            first_full_sweep_time = 0;
+            first_state_update_time = 0;
+            feedback_age_sum = 0;
+            feedback_age_max = 0;
+            new_data_selections = 0;
+            full_sweeps = 0;
+            quality_feedback_before_done = 0;
+            effective_state_updates = 0;
+            packets_before_first_update = 0;
+            new_selections_after_first_update = 0;
+            actionable_feedback = 0;
+            pending_actionable_updates = 0;
+            cooldown_starts = 0;
+            failure_starts = 0;
+            max_simultaneous_cooling = 0;
+            replacement_congestion = 0;
+            post_cooldown_first_clean = 0;
+            shared_updates_published = 0;
+            shared_updates_consumed = 0;
+            shared_updates_from_other_qps = 0;
+            redundant_discoveries = 0;
+            post_shared_bad_ev_sends = 0;
+            active_evs = 0;
+            first_full_sweep_set = false;
+            first_state_update_set = false;
+            emitted = false;
+            initial_active.clear();
+            unique_active.clear();
+            sweep_seen.clear();
+        }
     };
     struct NmrcEv {
         uint32_t ev;
@@ -897,7 +975,9 @@ private:
     uint32_t _mrc_path_space;
     bool _mrc_paths_ready;
     std::map<RocePacket::seq_t, uint32_t> _mrc_seq_ev;
+    std::map<RocePacket::seq_t, simtime_picosec> _mrc_seq_sent_at;
     std::map<uint32_t, uint64_t> _mrc_shared_consumed;
+    MrcFlowMetrics _mrc_flow_metrics;
     std::vector<NmrcEv> _nmrc_evs;
     uint32_t _nmrc_cursor;
     uint32_t _nmrc_path_space;

@@ -373,6 +373,8 @@ static void test_mrc_shared_disseminates_only_path_feedback() {
 
     expect(RoceSrc::_mrc_shared_events.size() == 1,
            "a real MRC-shared ECN transition must publish one shared key");
+    expect(publisher._mrc_flow_metrics.shared_updates_published == 1,
+           "the publishing QP must count its shared state update");
     double cwnd_before = consumer._cc_cwnd_pkts;
     size_t rtx_before = consumer._rtx_queue.size();
     uint64_t ack_before = consumer._last_acked;
@@ -382,6 +384,9 @@ static void test_mrc_shared_disseminates_only_path_feedback() {
     outside.consume_mrc_shared();
     expect(consumer._mrc_evs[ev].state == RoceSrc::MRC_PATH_COOLING,
            "an eligible QP must consume the shared ECN before selection");
+    expect(consumer._mrc_flow_metrics.shared_updates_consumed == 1 &&
+               consumer._mrc_flow_metrics.shared_updates_from_other_qps == 1,
+           "the consuming QP must attribute a shared update from another QP");
     expect(outside._mrc_evs[ev].state == RoceSrc::MRC_PATH_ACTIVE,
            "a QP on another source NIC must not consume the shared ECN");
     expect(consumer._cc_cwnd_pkts == cwnd_before &&
@@ -394,6 +399,19 @@ static void test_mrc_shared_disseminates_only_path_feedback() {
     consumer.consume_mrc_shared();
     expect(consumer._mrc_evs[ev].cool_until_select_count == deadline,
            "a shared generation must be consumed at most once per QP");
+
+    RoceSrc redundant(NULL, NULL, test_eventlist(), speedFromMbps(100000.0));
+    configure_identity(redundant, 1, 8, 103);
+    redundant._flow_lb_mode = RoceSrc::LB_MRC;
+    redundant.init_mrc_paths(4);
+    redundant.note_mrc_packet_ev(1, ev);
+    RoceAck* duplicate_discovery =
+        make_ack(redundant._flow, route, 1, ev, ECN_ECHO);
+    duplicate_discovery->set_mrc_ev(ev);
+    redundant.update_mrc_on_ack(*duplicate_discovery);
+    duplicate_discovery->free();
+    expect(redundant._mrc_flow_metrics.redundant_discoveries == 1,
+           "a later local signal must count prior cross-QP discovery");
 }
 
 static void test_mrc_shared_matches_mrc_without_feedback() {
@@ -408,6 +426,35 @@ static void test_mrc_shared_matches_mrc_without_feedback() {
                    select_paths(shared, RoceSrc::LB_MRC_SHARED, 32),
                "MRC-shared must match MRC when no feedback is published");
     }
+}
+
+static void test_mrc_flow_mechanism_counters() {
+    reset_mrc_config(4);
+    RoceSrc src(NULL, NULL, test_eventlist(), speedFromMbps(100000.0));
+    configure_identity(src, 1, 8, 200);
+    src._flow_lb_mode = RoceSrc::LB_MRC;
+    src.init_mrc_paths(4);
+    src.reset_mrc_flow_metrics();
+    src._mrc_flow_metrics.active_evs = 4;
+    src._mrc_flow_metrics.initial_active.insert(
+        src._mrc_active.begin(), src._mrc_active.end());
+
+    for (uint32_t i = 0; i < 4; i++)
+        src.mrc_flow_note_new_selection(src._mrc_active[i]);
+    expect(src._mrc_flow_metrics.unique_active.size() == 4 &&
+               src._mrc_flow_metrics.full_sweeps == 1 &&
+               src._mrc_flow_metrics.first_full_sweep_set,
+           "MRC flow diagnostics must record EV coverage and first sweep");
+
+    src.mrc_flow_note_effective_update(
+        src._mrc_active[0], 1, false, false);
+    expect(src._mrc_flow_metrics.effective_state_updates == 1 &&
+               src._mrc_flow_metrics.actionable_feedback == 0,
+           "an update without a later new-data selection is not actionable");
+    src.mrc_flow_note_new_selection(src._mrc_active[1]);
+    expect(src._mrc_flow_metrics.actionable_feedback == 1 &&
+               src._mrc_flow_metrics.new_selections_after_first_update == 1,
+           "the next new-data selection must make a pending update actionable");
 }
 
 static void test_mrc_ecn_uses_echoed_ev() {
@@ -846,6 +893,7 @@ int main() {
     test_rr_diverges_only_after_mrc_feedback();
     test_mrc_shared_disseminates_only_path_feedback();
     test_mrc_shared_matches_mrc_without_feedback();
+    test_mrc_flow_mechanism_counters();
     test_mrc_ecn_uses_echoed_ev();
     test_mrc_trim_soft_skips_exact_ev();
     test_dcqcn_variant_nacks_keep_natural_inflate();
