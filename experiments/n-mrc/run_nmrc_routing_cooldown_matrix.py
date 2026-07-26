@@ -122,6 +122,12 @@ def parse_args():
     parser.add_argument("--sim", type=Path, default=base.DEFAULT_SIM)
     parser.add_argument("--out", type=Path, default=DEFAULT_OUT)
     parser.add_argument("--force", action="store_true")
+    parser.add_argument(
+        "--accept-valid-cache", action="store_true",
+        help=(
+            "Reuse complete validated summaries even when the binary "
+            "fingerprint changed because an equivalent pinned build uses "
+            "a different absolute debug path."))
     parser.add_argument("--list-only", action="store_true")
     return parser.parse_args()
 
@@ -216,7 +222,10 @@ def run_case(case, artifact, args):
     if not args.force and summary_path.exists():
         cached = json.loads(summary_path.read_text(encoding="utf-8"))
         if (
-                cached.get("fingerprint") == fingerprint and
+                (
+                    cached.get("fingerprint") == fingerprint or
+                    args.accept_valid_cache
+                ) and
                 cached.get("returncode") == 0 and cached.get("config_ok") and
                 cached.get("all_flows_completed")):
             print(
@@ -334,6 +343,9 @@ def main():
             "variant_count": len(VARIANTS),
             "case_count": len(cases),
             "baseline_traffic": str(BASELINE / "traffic"),
+            "sim": str(args.sim),
+            "sim_sha256": base.file_sha256(args.sim),
+            "accept_valid_cache": args.accept_valid_cache,
             "variants": [
                 {
                     "name": variant.name,
