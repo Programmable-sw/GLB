@@ -316,7 +316,30 @@ Source 端为每个 RoCE source/QP 初始化独立 EV profile。单平面二层 
 
 当 `path_space <= 32` 时，所有 EV 都在 active set 中，backup 为空。当 `path_space > 32` 时，backup 不参与正常 packet spraying；它主要在 LOSS/RTO 把 active EV 标成 `FAILED` 后补足 active set，并可被低频 probe 使用。如果没有 failure、active 缺口或 probe，backup 不影响正常选择序列。
 
-Data packet 携带实际选择的 `mrc_ev`，receiver 在 ACK/NACK 中回显该 EV。带 `ECN_ECHO` 的 ACK 与 TRIM NACK 对精确 EV 使用相同 cooldown：默认进入 one-cycle soft skip；若该 EV 仍在冷却，后续 ECN/TRIM 会把 deadline 再后移一个 active-EV cycle，因此持续反馈可以续期，而反馈排空后 EV 会自然恢复。显式 `cwnd_scaled` 诊断模式使用拓扑计算的 1-BDP packet window，`rotations = ceil(bdp_pkts / active_evs)`，随后跳过 `rotations * active_evs` 次 MRC 选择，并忽略冷却期间的重复反馈。公共 400 Gbit/s、7 us RTT、4096-byte MSS 配置解析为 `bdp_pkts=86`，16 个 active EV 对应 6 轮和 96 次选择。TRIM 仍只是 soft skip，不表示该路径已被判坏：它不会把 EV 标成 `FAILED`，也不会触发 backup replacement。普通 clean ACK 不重写健康 EV，只负责确认数据、完成 probe recovery，或在 cooldown 已到期时恢复该 EV。
+Data packet 携带实际选择的 `mrc_ev`，receiver 在 ACK/NACK 中回显该 EV。带 `ECN_ECHO` 的 ACK 与 TRIM NACK 对精确 EV 使用相同 cooldown：默认进入 one-cycle soft skip；该 EV 冷却期间的重复 ECN/TRIM 不会重新延长 deadline，反馈排空后 EV 会自然恢复。显式 `cwnd_scaled` 诊断模式使用拓扑计算的 1-BDP packet window，`rotations = ceil(bdp_pkts / active_evs)`，随后跳过 `rotations * active_evs` 次 MRC 选择，同样忽略冷却期间的重复反馈。公共 400 Gbit/s、7 us RTT、4096-byte MSS 配置解析为 `bdp_pkts=86`，16 个 active EV 对应 6 轮和 96 次选择。TRIM 仍只是 soft skip，不表示该路径已被判坏：它不会把 EV 标成 `FAILED`，也不会触发 backup replacement。普通 clean ACK 不重写健康 EV，只负责确认数据、完成 probe recovery，或在 cooldown 已到期时恢复该 EV。
+
+### MRC 固有限制控制实验
+
+`-mrc_active_evs K` 只改变端点实际维护和轮询的 active EV 前缀，物理拓扑、八条物理路径及 encoded identity 映射保持不变。它可用于 `mrc`、`mrc-shared` 和 `rr`；同一个 K 下，RR 与 MRC 在首次有效反馈前使用完全相同的 EV 顺序。
+
+`-lb mrc-shared` 是 per-QP 状态隔离的单变量消融。它只把真实 ECN、TRIM、LOSS 或可归因 RTO 已经触发的 MRC 路径状态更新，按 `(source NIC, destination ToR, EV)` 发布给其他合格 QP。消费方仍用自己的 one-cycle 选择计数应用原 MRC 转移；cwnd、ACK、重传队列、在途字节、选择 cursor 和完成状态均不共享。它不是 NetAware/avail，也不读取交换机或 fabric 快照。
+
+每个 RR、MRC、MRC-shared 目标流完成时输出一条 `MrcFlowDiag`，记录反馈到达前发送量、反馈后剩余新数据选择、actionable update、EV 覆盖、同时冷却、fallback，以及共享发布、消费和重复发现。批量入口为：
+
+```bash
+python3 experiments/n-mrc/run_mrc_inherent_limitations.py smoke \
+  --out experiments/n-mrc/output/mrc_inherent_limitations_smoke
+
+python3 experiments/n-mrc/run_mrc_inherent_limitations.py run \
+  --seeds 13,29,47 --workers 3 --timeout 3600 \
+  --out experiments/n-mrc/output/mrc_inherent_limitations_128
+```
+
+runner 对每个 paired block 复用同一 traffic SHA-256，并在聚合前要求完成记录、`MrcFlowDiag`、配置和所有预期 flow ID 全部匹配。`report` 子命令只接受 `manifest.json` 已标记 complete 的结果目录。
+
+128 节点、102 个正式单元、三个 seed 的机制结论、图表和数据入口见
+[`mrc_inherent_limitations_and_evidence.md`](mrc_inherent_limitations_and_evidence.md)。
+该轮不包含路径失效或动态故障实验。
 
 OOO/SACK NACK 只进入 SP/SACK selective retransmission queue，不冷却、不 fail EV，也不触发 Go-Back-N replay。LOSS NACK 和能够归因到首个未确认 packet 的 RTO 才把对应 EV 标为 `FAILED`，从 active set 移除，并从剩余 unique backup path 中补入一个 EV。FAILED EV 等待 retry 时间后可以通过低频 probe 回到 active；backup replacement 不会引入 duplicate physical path。
 

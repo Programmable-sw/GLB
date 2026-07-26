@@ -288,6 +288,38 @@ static void test_rr_matches_healthy_mrc_order() {
            "different QP identities should retain distinct permutations");
 }
 
+static void test_mrc_active_ev_override_and_rr_equivalence() {
+    reset_mrc_config(8);
+    RoceSrc::setMrcActiveEvs(0);
+    RoceSrc default_mrc(NULL, NULL, test_eventlist(),
+                        speedFromMbps((uint64_t)100000));
+    configure_identity(default_mrc, 11, 27, 804);
+    default_mrc.init_mrc_paths(8);
+    expect(default_mrc._mrc_active.size() == 8 &&
+               default_mrc._mrc_backup.empty(),
+           "unset active-EV override must preserve the default");
+
+    for (uint32_t active_evs = 2; active_evs <= 8; active_evs *= 2) {
+        RoceSrc::setMrcActiveEvs(active_evs);
+        RoceSrc rr(NULL, NULL, test_eventlist(),
+                   speedFromMbps((uint64_t)100000));
+        RoceSrc mrc(NULL, NULL, test_eventlist(),
+                    speedFromMbps((uint64_t)100000));
+        configure_identity(rr, 11, 27, 805);
+        configure_identity(mrc, 11, 27, 805);
+        mrc.init_mrc_paths(8);
+
+        expect(mrc._mrc_active.size() == active_evs,
+               "active-EV override must limit MRC active state");
+        expect(mrc._mrc_backup.size() == 8 - active_evs,
+               "non-active EVs must remain unique MRC backups");
+        expect(select_paths(rr, RoceSrc::LB_RR, active_evs * 4) ==
+                   select_paths(mrc, RoceSrc::LB_MRC, active_evs * 4),
+               "RR must match MRC for each active-EV setting");
+    }
+    RoceSrc::setMrcActiveEvs(0);
+}
+
 static void test_rr_diverges_only_after_mrc_feedback() {
     reset_mrc_config(8);
     RoceSrc rr(NULL, NULL, test_eventlist(),
@@ -311,6 +343,118 @@ static void test_rr_diverges_only_after_mrc_feedback() {
            "stateless RR must keep the common healthy order");
     expect(mrc_next != cooled,
            "MRC must skip the EV after effective congestion feedback");
+}
+
+static void test_mrc_shared_disseminates_only_path_feedback() {
+    reset_mrc_config(4);
+    RoceSrc::setHostsPerTor(4);
+    RoceSrc::resetMrcSharedState();
+
+    RoceSrc publisher(NULL, NULL, test_eventlist(), speedFromMbps(100000.0));
+    RoceSrc consumer(NULL, NULL, test_eventlist(), speedFromMbps(100000.0));
+    RoceSrc outside(NULL, NULL, test_eventlist(), speedFromMbps(100000.0));
+    configure_identity(publisher, 1, 8, 100);
+    configure_identity(consumer, 1, 8, 101);
+    configure_identity(outside, 2, 8, 102);
+    publisher._flow_lb_mode = RoceSrc::LB_MRC_SHARED;
+    consumer._flow_lb_mode = RoceSrc::LB_MRC_SHARED;
+    outside._flow_lb_mode = RoceSrc::LB_MRC_SHARED;
+    publisher.init_mrc_paths(4);
+    consumer.init_mrc_paths(4);
+    outside.init_mrc_paths(4);
+
+    uint32_t ev = publisher._mrc_active[0];
+    publisher.note_mrc_packet_ev(1, ev);
+    Route route;
+    RoceAck* ecn = make_ack(publisher._flow, route, 1, ev, ECN_ECHO);
+    ecn->set_mrc_ev(ev);
+    publisher.update_mrc_on_ack(*ecn);
+    ecn->free();
+
+    expect(RoceSrc::_mrc_shared_events.size() == 1,
+           "a real MRC-shared ECN transition must publish one shared key");
+    expect(publisher._mrc_flow_metrics.shared_updates_published == 1,
+           "the publishing QP must count its shared state update");
+    double cwnd_before = consumer._cc_cwnd_pkts;
+    size_t rtx_before = consumer._rtx_queue.size();
+    uint64_t ack_before = consumer._last_acked;
+    uint64_t inflight_before = consumer._bounded_inflight_pkts;
+
+    consumer.choose_mrc_ev(4);
+    outside.consume_mrc_shared();
+    expect(consumer._mrc_evs[ev].state == RoceSrc::MRC_PATH_COOLING,
+           "an eligible QP must consume the shared ECN before selection");
+    expect(consumer._mrc_flow_metrics.shared_updates_consumed == 1 &&
+               consumer._mrc_flow_metrics.shared_updates_from_other_qps == 1,
+           "the consuming QP must attribute a shared update from another QP");
+    expect(outside._mrc_evs[ev].state == RoceSrc::MRC_PATH_ACTIVE,
+           "a QP on another source NIC must not consume the shared ECN");
+    expect(consumer._cc_cwnd_pkts == cwnd_before &&
+               consumer._rtx_queue.size() == rtx_before &&
+               consumer._last_acked == ack_before &&
+               consumer._bounded_inflight_pkts == inflight_before,
+           "shared MRC feedback must not mutate transport or CC state");
+
+    uint64_t deadline = consumer._mrc_evs[ev].cool_until_select_count;
+    consumer.consume_mrc_shared();
+    expect(consumer._mrc_evs[ev].cool_until_select_count == deadline,
+           "a shared generation must be consumed at most once per QP");
+
+    RoceSrc redundant(NULL, NULL, test_eventlist(), speedFromMbps(100000.0));
+    configure_identity(redundant, 1, 8, 103);
+    redundant._flow_lb_mode = RoceSrc::LB_MRC;
+    redundant.init_mrc_paths(4);
+    redundant.note_mrc_packet_ev(1, ev);
+    RoceAck* duplicate_discovery =
+        make_ack(redundant._flow, route, 1, ev, ECN_ECHO);
+    duplicate_discovery->set_mrc_ev(ev);
+    redundant.update_mrc_on_ack(*duplicate_discovery);
+    duplicate_discovery->free();
+    expect(redundant._mrc_flow_metrics.redundant_discoveries == 1,
+           "a later local signal must count prior cross-QP discovery");
+}
+
+static void test_mrc_shared_matches_mrc_without_feedback() {
+    reset_mrc_config(8);
+    RoceSrc::resetMrcSharedState();
+    for (uint32_t flow = 1; flow <= 4; flow++) {
+        RoceSrc mrc(NULL, NULL, test_eventlist(), speedFromMbps(100000.0));
+        RoceSrc shared(NULL, NULL, test_eventlist(), speedFromMbps(100000.0));
+        configure_identity(mrc, 1, 8, flow);
+        configure_identity(shared, 1, 8, flow);
+        expect(select_paths(mrc, RoceSrc::LB_MRC, 32) ==
+                   select_paths(shared, RoceSrc::LB_MRC_SHARED, 32),
+               "MRC-shared must match MRC when no feedback is published");
+    }
+}
+
+static void test_mrc_flow_mechanism_counters() {
+    reset_mrc_config(4);
+    RoceSrc src(NULL, NULL, test_eventlist(), speedFromMbps(100000.0));
+    configure_identity(src, 1, 8, 200);
+    src._flow_lb_mode = RoceSrc::LB_MRC;
+    src.init_mrc_paths(4);
+    src.reset_mrc_flow_metrics();
+    src._mrc_flow_metrics.active_evs = 4;
+    src._mrc_flow_metrics.initial_active.insert(
+        src._mrc_active.begin(), src._mrc_active.end());
+
+    for (uint32_t i = 0; i < 4; i++)
+        src.mrc_flow_note_new_selection(src._mrc_active[i]);
+    expect(src._mrc_flow_metrics.unique_active.size() == 4 &&
+               src._mrc_flow_metrics.full_sweeps == 1 &&
+               src._mrc_flow_metrics.first_full_sweep_set,
+           "MRC flow diagnostics must record EV coverage and first sweep");
+
+    src.mrc_flow_note_effective_update(
+        src._mrc_active[0], 1, false, false);
+    expect(src._mrc_flow_metrics.effective_state_updates == 1 &&
+               src._mrc_flow_metrics.actionable_feedback == 0,
+           "an update without a later new-data selection is not actionable");
+    src.mrc_flow_note_new_selection(src._mrc_active[1]);
+    expect(src._mrc_flow_metrics.actionable_feedback == 1 &&
+               src._mrc_flow_metrics.new_selections_after_first_update == 1,
+           "the next new-data selection must make a pending update actionable");
 }
 
 static void test_mrc_ecn_uses_echoed_ev() {
@@ -745,7 +889,11 @@ int main() {
     test_mrc_encoded_path_identity();
     test_mrc_deterministic_active_subset_and_unique_backups();
     test_rr_matches_healthy_mrc_order();
+    test_mrc_active_ev_override_and_rr_equivalence();
     test_rr_diverges_only_after_mrc_feedback();
+    test_mrc_shared_disseminates_only_path_feedback();
+    test_mrc_shared_matches_mrc_without_feedback();
+    test_mrc_flow_mechanism_counters();
     test_mrc_ecn_uses_echoed_ev();
     test_mrc_trim_soft_skips_exact_ev();
     test_dcqcn_variant_nacks_keep_natural_inflate();
