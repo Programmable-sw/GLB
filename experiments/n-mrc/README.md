@@ -339,6 +339,8 @@ runner 对每个 paired block 复用同一 traffic SHA-256，并在聚合前要�
 
 128 节点、102 个正式单元、三个 seed 的机制结论、图表和数据入口见
 [`mrc_inherent_limitations_and_evidence.md`](mrc_inherent_limitations_and_evidence.md)。
+高压力下从短流无收益到长流开始受益的聚焦复跑见
+[`mrc_pressure_transition_example.md`](mrc_pressure_transition_example.md)。
 该轮不包含路径失效或动态故障实验。
 
 OOO/SACK NACK 只进入 SP/SACK selective retransmission queue，不冷却、不 fail EV，也不触发 Go-Back-N replay。LOSS NACK 和能够归因到首个未确认 packet 的 RTO 才把对应 EV 标为 `FAILED`，从 active set 移除，并从剩余 unique backup path 中补入一个 EV。FAILED EV 等待 retry 时间后可以通过低频 probe 回到 active；backup replacement 不会引入 duplicate physical path。
