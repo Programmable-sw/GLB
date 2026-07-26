@@ -1,0 +1,31 @@
+load_pct,flow_granularity,metric,comparison,active_evs,value,flow_count
+40,Short (6–133 KiB),paired_fct_geomean_ratio,K4/K2,,1.017295306911952,26086
+40,Short (6–133 KiB),paired_fct_geomean_ratio,K8/K4,,1.002062874186243,26086
+40,Short (6–133 KiB),ev_coverage_fraction,,2,1.0,26086
+40,Short (6–133 KiB),ev_coverage_fraction,,4,0.8767154795675841,26086
+40,Short (6–133 KiB),ev_coverage_fraction,,8,0.7111141991873036,26086
+40,Medium (667 KiB–1.3 MiB),paired_fct_geomean_ratio,K4/K2,,0.989068237526743,8635
+40,Medium (667 KiB–1.3 MiB),paired_fct_geomean_ratio,K8/K4,,0.9987216632023035,8635
+40,Medium (667 KiB–1.3 MiB),ev_coverage_fraction,,2,1.0,8635
+40,Medium (667 KiB–1.3 MiB),ev_coverage_fraction,,4,1.0,8635
+40,Medium (667 KiB–1.3 MiB),ev_coverage_fraction,,8,1.0,8635
+40,Long (3.3–30 MiB),paired_fct_geomean_ratio,K4/K2,,0.9275652555634559,8736
+40,Long (3.3–30 MiB),paired_fct_geomean_ratio,K8/K4,,0.990437345674058,8736
+40,Long (3.3–30 MiB),ev_coverage_fraction,,2,1.0,8736
+40,Long (3.3–30 MiB),ev_coverage_fraction,,4,1.0,8736
+40,Long (3.3–30 MiB),ev_coverage_fraction,,8,1.0,8736
+80,Short (6–133 KiB),paired_fct_geomean_ratio,K4/K2,,1.1103504271883045,52089
+80,Short (6–133 KiB),paired_fct_geomean_ratio,K8/K4,,1.0645131363802824,52089
+80,Short (6–133 KiB),ev_coverage_fraction,,2,1.0,52089
+80,Short (6–133 KiB),ev_coverage_fraction,,4,0.8762790608381809,52089
+80,Short (6–133 KiB),ev_coverage_fraction,,8,0.7103227168884025,52089
+80,Medium (667 KiB–1.3 MiB),paired_fct_geomean_ratio,K4/K2,,1.0267905431630222,17504
+80,Medium (667 KiB–1.3 MiB),paired_fct_geomean_ratio,K8/K4,,1.0440315291981783,17504
+80,Medium (667 KiB–1.3 MiB),ev_coverage_fraction,,2,1.0,17504
+80,Medium (667 KiB–1.3 MiB),ev_coverage_fraction,,4,1.0,17504
+80,Medium (667 KiB–1.3 MiB),ev_coverage_fraction,,8,1.0,17504
+80,Long (3.3–30 MiB),paired_fct_geomean_ratio,K4/K2,,0.890583574348462,17355
+80,Long (3.3–30 MiB),paired_fct_geomean_ratio,K8/K4,,0.9754304857238354,17355
+80,Long (3.3–30 MiB),ev_coverage_fraction,,2,1.0,17355
+80,Long (3.3–30 MiB),ev_coverage_fraction,,4,1.0,17355
+80,Long (3.3–30 MiB),ev_coverage_fraction,,8,1.0,17355

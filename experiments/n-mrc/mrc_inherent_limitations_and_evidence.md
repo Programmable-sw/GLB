@@ -269,7 +269,13 @@ P16 中 shared 的重复发现还比独立 MRC 多 1.30%。这说明简单公共
 
 ### 对哪些输入的 FCT 产生影响
 
-下面直接配对同一 traffic 中的 MRC K4/K2 和 K8/K4；小于 1 表示增大 K 后 FCT 改善：
+下面直接配对同一 traffic 中的 MRC K4/K2 和 K8/K4。这里的数值不是算术平均 FCT、p99 或 max，而是：
+
+1. 按相同 `(seed, flow_id, src, dst, flow_size)` 严格配对；
+2. 对每条流计算 `FCT(K 较大) / FCT(K 较小)`；
+3. 对全部配对流的比值取几何均值。
+
+因此，小于 1 表示增大 K 后该组流的 FCT 总体改善，大于 1 表示总体变差。
 
 | 负载 | 流粒度 | K4/K2 FCT 几何均值 | K8/K4 FCT 几何均值 | 影响 |
 |---:|---|---:|---:|---|
@@ -279,6 +285,10 @@ P16 中 shared 的重复发现还比独立 MRC 多 1.30%。这说明简单公共
 | 80% | 6–133 KiB | **1.1104** | **1.0645** | 短流分别变差 11.0% 和 6.5% |
 | 80% | 667 KiB–1.3 MiB | **1.0268** | **1.0440** | 已有部分反馈机会，但增大 K 仍未形成净收益 |
 | 80% | 3.3–30 MiB | **0.8906** | **0.9754** | 长流分别改善 10.9% 和 2.5% |
+
+![不同流粒度下的配对 FCT 比值与 EV 覆盖率](output/mrc_inherent_limitations_128/figures/exp3_flow_size_fct_and_ev_coverage.png)
+
+图的上半部分是上述逐流配对几何均值，虚线 1.0 表示 FCT 不变；下半部分的 EV 覆盖率定义为 `unique_active_evs / K`。覆盖率达到 100% 只表示流至少使用过全部活跃 EV，不表示反馈及时到达并对该流后续选路产生了收益。
 
 这解释了为什么总体 p99 随 K 增加而改善，同时状态覆盖率和短流 FCT 却变差：总体 p99 主要落在少量大流上，更多 EV 为这些长流提供路径多样性；占多数的短流没有 actionable feedback，不能利用额外状态。
 
@@ -375,11 +385,13 @@ K=2 的 100% 覆盖不能解释为最好：它只需要选择两个 EV 就能“
 - 102 个单元状态：[`cells.csv`](output/mrc_inherent_limitations_128/cells.csv)；
 - 紧凑汇总：[`summary.csv`](output/mrc_inherent_limitations_128/summary.csv)；
 - 流大小汇总：[`flow_size_summary.csv`](output/mrc_inherent_limitations_128/flow_size_summary.csv)；
+- 实验 3 分流粒度 FCT 与 EV 覆盖率数据：[`ev_flow_granularity_summary.csv`](output/mrc_inherent_limitations_128/ev_flow_granularity_summary.csv)；
 - 总行数统计：[`report_stats.json`](output/mrc_inherent_limitations_128/report_stats.json)；
 - 自动生成的基础报告：[`mrc_inherent_limitations_report.md`](output/mrc_inherent_limitations_128/mrc_inherent_limitations_report.md)；
 - 实验 1 图：[`exp1_feedback_value_by_flow_size.png`](output/mrc_inherent_limitations_128/figures/exp1_feedback_value_by_flow_size.png)；
 - 实验 2 图：[`exp2_per_qp_repeated_exploration.png`](output/mrc_inherent_limitations_128/figures/exp2_per_qp_repeated_exploration.png)；
 - 实验 3 图：[`exp3_active_ev_coverage_and_fct.png`](output/mrc_inherent_limitations_128/figures/exp3_active_ev_coverage_and_fct.png)；
+- 实验 3 分流粒度 FCT 与 EV 覆盖图：[`exp3_flow_size_fct_and_ev_coverage.png`](output/mrc_inherent_limitations_128/figures/exp3_flow_size_fct_and_ev_coverage.png)，以及可缩放的 [`PDF`](output/mrc_inherent_limitations_128/figures/exp3_flow_size_fct_and_ev_coverage.pdf)；
 - 运行与聚合脚本：[`run_mrc_inherent_limitations.py`](run_mrc_inherent_limitations.py)。
 
 完整本地审计数据还包括：
