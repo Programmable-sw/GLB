@@ -22,6 +22,7 @@ METRICS = (
     "StorProfileDiag.stor_all_zero_profiles",
     "StorProfileDiag.stor_all_zero_selections",
 )
+SEEDS = {"13", "29", "47"}
 
 
 def geomean(values):
@@ -39,12 +40,26 @@ def write_csv(path, rows):
 
 def aggregate(rows):
     groups = {}
+    paired_hashes = {}
     for row in rows:
-        if row["all_flows_completed"] != "1":
-            continue
+        if row["all_flows_completed"] != "1" or row["config_ok"] != "1":
+            raise ValueError(
+                f"invalid row {row['scenario']}:{row['variant']}:"
+                f"seed{row['seed']}")
         groups.setdefault((row["scenario"], row["variant"]), []).append(row)
+        paired_hashes.setdefault(
+            (row["scenario"], row["seed"]), set()).add(
+                row["traffic_sha256"])
+    if any(len(values) != 1 for values in paired_hashes.values()):
+        raise ValueError("traffic hash differs within a scenario/seed pair")
     output = []
     for (scenario, variant), selected in sorted(groups.items()):
+        seeds = [row["seed"] for row in selected]
+        if len(seeds) != 3 or set(seeds) != SEEDS:
+            raise ValueError(
+                f"{scenario}:{variant} lacks exactly seeds 13/29/47")
+        if len({row["traffic_sha256"] for row in selected}) != 3:
+            raise ValueError(f"{scenario}:{variant} has duplicate traffic")
         item = {
             "scenario": scenario, "variant": variant,
             "primary_metric": selected[0]["primary_metric"],

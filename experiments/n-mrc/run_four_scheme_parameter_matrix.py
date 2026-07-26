@@ -119,12 +119,14 @@ def run(spec, artifact, args):
     case_dir.mkdir(parents=True, exist_ok=True)
     command = build_command(spec, args.sim, artifact, case_dir)
     command_text = " ".join(command)
+    sim_sha256 = base.file_sha256(args.sim)
     summary_path = case_dir / "summary.json"
     if summary_path.exists():
         cached = json.loads(summary_path.read_text())
         if (
                 cached.get("traffic_sha256") == artifact.sha256 and
                 cached.get("command") == command_text and
+                cached.get("sim_sha256") == sim_sha256 and
                 cached.get("config_ok") and
                 cached.get("all_flows_completed")):
             print(spec.scenario.name, spec.scheme, spec.seed, "cached",
@@ -143,6 +145,7 @@ def run(spec, artifact, args):
         "scenario": spec.scenario.name, "variant": spec.scheme,
         "lb": VARIANTS[spec.scheme][0], "seed": spec.seed,
         "traffic_sha256": artifact.sha256, "primary_metric": metric,
+        "sim_sha256": sim_sha256,
         "primary_us": primary, "returncode": process.returncode,
         "config_ok": config_ok(text, spec, process.returncode),
         "command": command_text, **parsed, **diag,
