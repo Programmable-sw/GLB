@@ -14,6 +14,7 @@
 #include <vector>
 #include <array>
 #include <ostream>
+#include <tuple>
 //#include "util.h"
 #include "math.h"
 #include "config.h"
@@ -38,7 +39,7 @@ class Switch;
 class RoceSrc : public BaseQueue, public TriggerTarget {
     friend class RoceSink;
 public:
-    typedef enum {LB_ECMP = 0, LB_REPS = 1, LB_CONWEAVE = 2, LB_NDP = 3, LB_RR = 4, LB_OPS = 5, LB_MRC = 6, LB_STOR = 7, LB_NETAWARE = 8, LB_NMRC = 9} lb_mode_t;
+    typedef enum {LB_ECMP = 0, LB_REPS = 1, LB_CONWEAVE = 2, LB_NDP = 3, LB_RR = 4, LB_OPS = 5, LB_MRC = 6, LB_STOR = 7, LB_NETAWARE = 8, LB_NMRC = 9, LB_MRC_SHARED = 10} lb_mode_t;
     typedef enum {
         CC_NONE = 0,
         CC_DCQCN_VARIANT = 1,
@@ -67,6 +68,21 @@ public:
         MRC_CONGESTION_ECN = 0,
         MRC_CONGESTION_TRIM = 1
     } mrc_congestion_signal_t;
+    typedef enum {
+        MRC_SHARED_ECN = 0,
+        MRC_SHARED_TRIM = 1,
+        MRC_SHARED_FAILURE = 2
+    } mrc_shared_signal_t;
+    struct MrcSharedEvent {
+        uint64_t generation;
+        mrc_shared_signal_t signal;
+        simtime_picosec published_at;
+        flowid_t publisher_flow;
+        MrcSharedEvent()
+            : generation(0), signal(MRC_SHARED_ECN), published_at(0),
+              publisher_flow(0) {}
+    };
+    typedef std::tuple<uint32_t, uint32_t, uint32_t> MrcSharedKey;
     typedef enum {
         NETAWARE_WRR_BUCKET = 0,
         NETAWARE_WRR_DIRECT = 1,
@@ -159,6 +175,7 @@ public:
     static void setHostsPerTor(uint32_t hosts) {_hosts_per_tor = hosts ? hosts : 1;}
     static void resetStorSharedState();
     static void resetNetawareSharedState();
+    static void resetMrcSharedState();
     static void setStorBinarySelector(bool enabled) {_stor_binary_selector = enabled;}
     static bool storBinarySelector() {return _stor_binary_selector;}
     static void setStorLevelWeights(uint32_t good, uint32_t degraded,
@@ -656,6 +673,14 @@ private:
     std::array<uint64_t, 64> fast_cnp_isolation_snapshot() const;
     void update_stor(const RoceAck& ack);
     void update_stor(const RoceNack& nack);
+    bool mrc_path_state_enabled() const {
+        return _flow_lb_mode == LB_MRC ||
+               _flow_lb_mode == LB_MRC_SHARED;
+    }
+    bool mrc_shared_feedback_enabled() const {
+        return _flow_lb_mode == LB_MRC_SHARED;
+    }
+    MrcSharedKey mrc_shared_key(uint32_t ev) const;
     std::vector<uint32_t> build_mrc_ev_order(uint32_t path_space) const;
     void reset_rr_paths();
     void init_rr_paths(uint32_t path_space);
@@ -674,6 +699,8 @@ private:
     MrcChoice choose_mrc_ev(uint32_t path_space);
     MrcChoice choose_mrc_retx_ev(uint32_t path_space,
                                  uint32_t original_logical_ev);
+    void publish_mrc_shared(uint32_t ev, mrc_shared_signal_t signal);
+    void consume_mrc_shared();
     void update_mrc_on_ack(const RoceAck& ack);
     void update_mrc_on_nack(const RoceNack& nack);
     void update_mrc_on_rto();
@@ -688,10 +715,10 @@ private:
     uint64_t mrc_current_cooldown_skip_selections() const;
     void mrc_activate_ev(uint32_t logical_ev);
     void mrc_remove_active_ev(uint32_t logical_ev);
-    void mrc_mark_congested(
+    bool mrc_mark_congested(
         uint32_t logical_ev,
         mrc_congestion_signal_t signal = MRC_CONGESTION_ECN);
-    void mrc_mark_failed(uint32_t logical_ev);
+    bool mrc_mark_failed(uint32_t logical_ev);
     void mrc_promote_backup(uint32_t path_space);
     uint32_t mrc_choose_probe_ev(uint32_t path_space);
     void mrc_note_clean_ack(RocePacket::seq_t ackno,
@@ -835,6 +862,7 @@ private:
     uint32_t _reps_explore_remaining;
     static std::map<std::pair<uint32_t, uint32_t>, SharedWeightedProfile> _stor_shared_profiles;
     static std::map<std::pair<uint32_t, uint32_t>, SharedWeightedProfile> _netaware_shared_profiles;
+    static std::map<MrcSharedKey, MrcSharedEvent> _mrc_shared_events;
     static std::array<uint32_t, 4> _stor_level_weights;
     static std::array<uint32_t, 4> _netaware_level_weights;
     static netaware_wrr_mode_t _netaware_wrr_mode;
@@ -869,6 +897,7 @@ private:
     uint32_t _mrc_path_space;
     bool _mrc_paths_ready;
     std::map<RocePacket::seq_t, uint32_t> _mrc_seq_ev;
+    std::map<uint32_t, uint64_t> _mrc_shared_consumed;
     std::vector<NmrcEv> _nmrc_evs;
     uint32_t _nmrc_cursor;
     uint32_t _nmrc_path_space;

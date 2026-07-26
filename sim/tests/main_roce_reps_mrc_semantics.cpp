@@ -345,6 +345,71 @@ static void test_rr_diverges_only_after_mrc_feedback() {
            "MRC must skip the EV after effective congestion feedback");
 }
 
+static void test_mrc_shared_disseminates_only_path_feedback() {
+    reset_mrc_config(4);
+    RoceSrc::setHostsPerTor(4);
+    RoceSrc::resetMrcSharedState();
+
+    RoceSrc publisher(NULL, NULL, test_eventlist(), speedFromMbps(100000.0));
+    RoceSrc consumer(NULL, NULL, test_eventlist(), speedFromMbps(100000.0));
+    RoceSrc outside(NULL, NULL, test_eventlist(), speedFromMbps(100000.0));
+    configure_identity(publisher, 1, 8, 100);
+    configure_identity(consumer, 1, 8, 101);
+    configure_identity(outside, 2, 8, 102);
+    publisher._flow_lb_mode = RoceSrc::LB_MRC_SHARED;
+    consumer._flow_lb_mode = RoceSrc::LB_MRC_SHARED;
+    outside._flow_lb_mode = RoceSrc::LB_MRC_SHARED;
+    publisher.init_mrc_paths(4);
+    consumer.init_mrc_paths(4);
+    outside.init_mrc_paths(4);
+
+    uint32_t ev = publisher._mrc_active[0];
+    publisher.note_mrc_packet_ev(1, ev);
+    Route route;
+    RoceAck* ecn = make_ack(publisher._flow, route, 1, ev, ECN_ECHO);
+    ecn->set_mrc_ev(ev);
+    publisher.update_mrc_on_ack(*ecn);
+    ecn->free();
+
+    expect(RoceSrc::_mrc_shared_events.size() == 1,
+           "a real MRC-shared ECN transition must publish one shared key");
+    double cwnd_before = consumer._cc_cwnd_pkts;
+    size_t rtx_before = consumer._rtx_queue.size();
+    uint64_t ack_before = consumer._last_acked;
+    uint64_t inflight_before = consumer._bounded_inflight_pkts;
+
+    consumer.choose_mrc_ev(4);
+    outside.consume_mrc_shared();
+    expect(consumer._mrc_evs[ev].state == RoceSrc::MRC_PATH_COOLING,
+           "an eligible QP must consume the shared ECN before selection");
+    expect(outside._mrc_evs[ev].state == RoceSrc::MRC_PATH_ACTIVE,
+           "a QP on another source NIC must not consume the shared ECN");
+    expect(consumer._cc_cwnd_pkts == cwnd_before &&
+               consumer._rtx_queue.size() == rtx_before &&
+               consumer._last_acked == ack_before &&
+               consumer._bounded_inflight_pkts == inflight_before,
+           "shared MRC feedback must not mutate transport or CC state");
+
+    uint64_t deadline = consumer._mrc_evs[ev].cool_until_select_count;
+    consumer.consume_mrc_shared();
+    expect(consumer._mrc_evs[ev].cool_until_select_count == deadline,
+           "a shared generation must be consumed at most once per QP");
+}
+
+static void test_mrc_shared_matches_mrc_without_feedback() {
+    reset_mrc_config(8);
+    RoceSrc::resetMrcSharedState();
+    for (uint32_t flow = 1; flow <= 4; flow++) {
+        RoceSrc mrc(NULL, NULL, test_eventlist(), speedFromMbps(100000.0));
+        RoceSrc shared(NULL, NULL, test_eventlist(), speedFromMbps(100000.0));
+        configure_identity(mrc, 1, 8, flow);
+        configure_identity(shared, 1, 8, flow);
+        expect(select_paths(mrc, RoceSrc::LB_MRC, 32) ==
+                   select_paths(shared, RoceSrc::LB_MRC_SHARED, 32),
+               "MRC-shared must match MRC when no feedback is published");
+    }
+}
+
 static void test_mrc_ecn_uses_echoed_ev() {
     DropSink drop;
     Route route;
@@ -779,6 +844,8 @@ int main() {
     test_rr_matches_healthy_mrc_order();
     test_mrc_active_ev_override_and_rr_equivalence();
     test_rr_diverges_only_after_mrc_feedback();
+    test_mrc_shared_disseminates_only_path_feedback();
+    test_mrc_shared_matches_mrc_without_feedback();
     test_mrc_ecn_uses_echoed_ev();
     test_mrc_trim_soft_skips_exact_ev();
     test_dcqcn_variant_nacks_keep_natural_inflate();

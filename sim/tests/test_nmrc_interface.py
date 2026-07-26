@@ -225,6 +225,28 @@ def main():
         "RoceSrc::resolvedMrcActiveEvs(path_space)",
         "MRC resolved active-EV diagnostics",
     )
+    assert_contains(main_roce, '"mrc-shared"', "MRC-shared CLI preset")
+    assert_contains(main_roce, "LB_MRC_SHARED", "MRC-shared load-balancing mode")
+    assert_contains(
+        main_roce,
+        "RoceSrc::resetMrcSharedState",
+        "per-simulation MRC-shared registry reset",
+    )
+    assert_contains(
+        main_roce,
+        "MrcSharedConfig enabled=1 key=source_nic,destination_tor,ev",
+        "MRC-shared canonical configuration",
+    )
+    assert_contains(
+        roce_cpp,
+        "publish_mrc_shared(ev, MRC_SHARED_ECN)",
+        "MRC-shared real ECN publication",
+    )
+    assert_contains(
+        roce_cpp,
+        "consume_mrc_shared();",
+        "MRC-shared lazy feedback consumption",
+    )
 
 
 if __name__ == "__main__":

@@ -763,7 +763,7 @@ const char* nmrc_network_decision_name(
 }
 
 void exit_error(char* progr) {
-    cout << "Usage " << progr << " [-nodes N] [-conns C] [-q queue_size] [-tm traffic_matrix_file]\\n\\t[-lb ecmp|ecmp_rr|adaptive-routing|sglb|drill|reps|avail|grade|mrc|netaware|n-mrc|n-mrc-fixed0.5|n-mrc-delta|rr|ops|conweave|ndp]\\n\\t[-cc none|dcqcn|dcqcn_variant|mprdma]" << endl;
+    cout << "Usage " << progr << " [-nodes N] [-conns C] [-q queue_size] [-tm traffic_matrix_file]\\n\\t[-lb ecmp|ecmp_rr|adaptive-routing|sglb|drill|reps|avail|grade|mrc|mrc-shared|netaware|n-mrc|n-mrc-fixed0.5|n-mrc-delta|rr|ops|conweave|ndp]\\n\\t[-cc none|dcqcn|dcqcn_variant|mprdma]" << endl;
     cout << "\t[-roce_sack_bitmap_bits 64|128]" << endl;
     cout << "\t[-roce_transport_semantics legacy|mrc_exact_bounded]" << endl;
     cout << "\t[-roce_trim_recovery cumulative|exact]" << endl;
@@ -1180,6 +1180,11 @@ int main(int argc, char **argv) {
                 FatTreeSwitch::set_strategy(FatTreeSwitch::ECMP);
                 roce_lb_mode = RoceSrc::LB_MRC;
                 lb_scheme_name = "mrc";
+            } else if (!strcmp(argv[i+1], "mrc-shared")) {
+                route_strategy = ECMP_FIB;
+                FatTreeSwitch::set_strategy(FatTreeSwitch::ECMP);
+                roce_lb_mode = RoceSrc::LB_MRC_SHARED;
+                lb_scheme_name = "mrc-shared";
             } else if (!strcmp(argv[i+1], "rr")) {
                 route_strategy = ECMP_FIB;
                 FatTreeSwitch::set_strategy(FatTreeSwitch::ECMP);
@@ -2528,13 +2533,15 @@ int main(int argc, char **argv) {
         cerr << "avail ECN-only override requires -lb avail" << endl;
         exit(1);
     }
-    if (mrc_cooldown_reference_user_set && lb_scheme_name != "mrc") {
-        cerr << "MRC cooldown reference override requires -lb mrc" << endl;
+    if (mrc_cooldown_reference_user_set &&
+        lb_scheme_name != "mrc" && lb_scheme_name != "mrc-shared") {
+        cerr << "MRC cooldown reference override requires -lb mrc or -lb mrc-shared" << endl;
         exit(1);
     }
     if (mrc_active_evs_user_set &&
-        lb_scheme_name != "mrc" && lb_scheme_name != "rr") {
-        cerr << "-mrc_active_evs requires -lb mrc or -lb rr" << endl;
+        lb_scheme_name != "mrc" && lb_scheme_name != "mrc-shared" &&
+        lb_scheme_name != "rr") {
+        cerr << "-mrc_active_evs requires -lb mrc, -lb mrc-shared, or -lb rr" << endl;
         exit(1);
     }
     if (nmrc_relative_delta_user_set &&
@@ -2716,7 +2723,8 @@ int main(int argc, char **argv) {
         sglb_bg_packet_size = packet_size;
     Packet::set_packet_size(packet_size);
 
-    if (roce_lb_mode == RoceSrc::LB_MRC) {
+    if (roce_lb_mode == RoceSrc::LB_MRC ||
+        roce_lb_mode == RoceSrc::LB_MRC_SHARED) {
         if (!queue_type_user_set) {
             qt = COMPOSITE_ECN_LB;
             cout << "MRC default queue_type composite_ecn_lb (trim + priority headers + ECN)" << endl;
@@ -2817,6 +2825,7 @@ int main(int argc, char **argv) {
                         roce_lb_mode == RoceSrc::LB_NETAWARE ||
                         roce_lb_mode == RoceSrc::LB_NMRC ||
                         roce_lb_mode == RoceSrc::LB_MRC ||
+                        roce_lb_mode == RoceSrc::LB_MRC_SHARED ||
                         roce_lb_mode == RoceSrc::LB_RR ||
                         roce_lb_mode == RoceSrc::LB_CONWEAVE ||
                         roce_lb_mode == RoceSrc::LB_NDP);
@@ -2988,6 +2997,7 @@ int main(int argc, char **argv) {
     }
 
     RoceSrc::setLoadBalancing(roce_lb_mode);
+    RoceSrc::resetMrcSharedState();
     RoceSrc::setPathEntropySize(path_entropy_size);
     RoceSrc::setSackBitmapBits(roce_sack_bitmap_bits);
     RoceSrc::setReceiveMode(roce_rx_mode);
@@ -3424,7 +3434,8 @@ int main(int argc, char **argv) {
                  << endl;
         }
     }
-    if (roce_lb_mode == RoceSrc::LB_MRC) {
+    if (roce_lb_mode == RoceSrc::LB_MRC ||
+        roce_lb_mode == RoceSrc::LB_MRC_SHARED) {
         const char* mrc_cooldown_mode_name =
             mrc_cooldown_mode == RoceSrc::MRC_COOLDOWN_ONE_CYCLE ?
             "one_cycle" : "cwnd_scaled";
@@ -3494,6 +3505,17 @@ int main(int argc, char **argv) {
              << (mrc_all_cooling_fallback ==
                  RoceSrc::MRC_ALL_COOLING_EARLIEST ?
                  "earliest" : "round_robin")
+             << endl;
+        if (roce_lb_mode == RoceSrc::LB_MRC_SHARED)
+            cout << "MrcSharedConfig enabled=1 key=source_nic,destination_tor,ev"
+                 << endl;
+    }
+    if (roce_lb_mode == RoceSrc::LB_RR) {
+        cout << "RR: stateless_mrc true"
+             << ", physical_path_space " << path_space
+             << ", active_evs "
+             << RoceSrc::resolvedMrcActiveEvs(path_space)
+             << ", ev_path_mapping encoded_identity"
              << endl;
     }
     RoceSrc::setMrcCooldownMode(mrc_cooldown_mode);

@@ -125,6 +125,8 @@ std::map<std::pair<uint32_t, uint32_t>, RoceSrc::SharedWeightedProfile>
     RoceSrc::_stor_shared_profiles;
 std::map<std::pair<uint32_t, uint32_t>, RoceSrc::SharedWeightedProfile>
     RoceSrc::_netaware_shared_profiles;
+std::map<RoceSrc::MrcSharedKey, RoceSrc::MrcSharedEvent>
+    RoceSrc::_mrc_shared_events;
 std::array<uint32_t, 4> RoceSrc::_stor_level_weights = {{4, 2, 1, 0}};
 std::array<uint32_t, 4> RoceSrc::_netaware_level_weights = {{4, 2, 1, 0}};
 RoceSrc::netaware_wrr_mode_t RoceSrc::_netaware_wrr_mode = NETAWARE_WRR_SHUFFLED_BUCKET;
@@ -1099,7 +1101,7 @@ void RoceSrc::startflow(){
         reset_reps_buffer();
     if (_flow_lb_mode == LB_RR)
         reset_rr_paths();
-    if (_flow_lb_mode == LB_MRC)
+    if (mrc_path_state_enabled())
         reset_mrc_paths();
     if (_flow_lb_mode == LB_NMRC)
         reset_nmrc_evs();
@@ -1487,6 +1489,53 @@ void RoceSrc::resetStorSharedState() {
 
 void RoceSrc::resetNetawareSharedState() {
     _netaware_shared_profiles.clear();
+}
+
+void RoceSrc::resetMrcSharedState() {
+    _mrc_shared_events.clear();
+}
+
+RoceSrc::MrcSharedKey RoceSrc::mrc_shared_key(uint32_t ev) const {
+    uint32_t hosts_per_tor = _hosts_per_tor ? _hosts_per_tor : 1;
+    uint32_t source_nic =
+        _srcaddr == UINT32_MAX ? _node_num : _srcaddr;
+    uint32_t destination =
+        _dstaddr == UINT32_MAX ? 0 : _dstaddr;
+    return std::make_tuple(source_nic, destination / hosts_per_tor, ev);
+}
+
+void RoceSrc::publish_mrc_shared(uint32_t ev,
+                                 mrc_shared_signal_t signal) {
+    if (!mrc_shared_feedback_enabled())
+        return;
+    MrcSharedEvent& shared = _mrc_shared_events[mrc_shared_key(ev)];
+    shared.generation++;
+    shared.signal = signal;
+    shared.published_at = eventlist().now();
+    shared.publisher_flow = flow_id();
+    _mrc_shared_consumed[ev] = shared.generation;
+}
+
+void RoceSrc::consume_mrc_shared() {
+    if (!mrc_shared_feedback_enabled())
+        return;
+    for (uint32_t ev = 0; ev < _mrc_evs.size(); ev++) {
+        std::map<MrcSharedKey, MrcSharedEvent>::const_iterator it =
+            _mrc_shared_events.find(mrc_shared_key(ev));
+        if (it == _mrc_shared_events.end())
+            continue;
+        const MrcSharedEvent& shared = it->second;
+        uint64_t consumed = _mrc_shared_consumed[ev];
+        if (shared.generation <= consumed)
+            continue;
+        _mrc_shared_consumed[ev] = shared.generation;
+        if (shared.signal == MRC_SHARED_FAILURE)
+            mrc_mark_failed(ev);
+        else
+            mrc_mark_congested(
+                ev, shared.signal == MRC_SHARED_TRIM ?
+                    MRC_CONGESTION_TRIM : MRC_CONGESTION_ECN);
+    }
 }
 
 RoceSrc::SharedWeightedProfile& RoceSrc::shared_stor_profile(
@@ -2603,6 +2652,7 @@ void RoceSrc::reset_mrc_paths() {
     _mrc_path_space = 0;
     _mrc_paths_ready = false;
     _mrc_seq_ev.clear();
+    _mrc_shared_consumed.clear();
     _mrc_select_counter = 0;
 }
 
@@ -2788,13 +2838,13 @@ void RoceSrc::mrc_promote_backup(uint32_t path_space) {
     sample_mrc_state_counts();
 }
 
-void RoceSrc::mrc_mark_congested(uint32_t logical_ev,
+bool RoceSrc::mrc_mark_congested(uint32_t logical_ev,
                                  mrc_congestion_signal_t signal) {
     if (logical_ev >= _mrc_evs.size())
-        return;
+        return false;
     MrcEv& ev = _mrc_evs[logical_ev];
     if (ev.state == MRC_PATH_FAILED)
-        return;
+        return false;
     bool cwnd_scaled_feedback =
         _mrc_cooldown_mode == MRC_COOLDOWN_CWND_SCALED;
     if (cwnd_scaled_feedback)
@@ -2803,7 +2853,7 @@ void RoceSrc::mrc_mark_congested(uint32_t logical_ev,
         _mrc_duplicate_feedback_ignored++;
         if (cwnd_scaled_feedback)
             _mrc_cwnd_scaled_duplicate_feedback_ignored++;
-        return;
+        return false;
     }
     if (ev.state == MRC_PATH_PROBING)
         _mrc_probe_fail_events++;
@@ -2817,7 +2867,7 @@ void RoceSrc::mrc_mark_congested(uint32_t logical_ev,
             ev.state = MRC_PATH_ACTIVE;
         ev.retry_after = 0;
         ev.cool_until_select_count = 0;
-        return;
+        return false;
     }
 
     ev.state = MRC_PATH_COOLING;
@@ -2828,13 +2878,16 @@ void RoceSrc::mrc_mark_congested(uint32_t logical_ev,
     _mrc_cooling_skip_selection_sum += skip;
     _mrc_cooling_skip_selection_events++;
     sample_mrc_state_counts();
+    return true;
 }
 
-void RoceSrc::mrc_mark_failed(uint32_t logical_ev) {
+bool RoceSrc::mrc_mark_failed(uint32_t logical_ev) {
     if (logical_ev >= _mrc_evs.size())
-        return;
+        return false;
 
     MrcEv& ev = _mrc_evs[logical_ev];
+    if (ev.state == MRC_PATH_FAILED)
+        return false;
     if (ev.state == MRC_PATH_PROBING)
         _mrc_probe_fail_events++;
     mrc_remove_active_ev(logical_ev);
@@ -2847,6 +2900,7 @@ void RoceSrc::mrc_mark_failed(uint32_t logical_ev) {
     _mrc_failure_backup_promotions +=
         _mrc_backup_replacement_events - replacements_before;
     sample_mrc_state_counts();
+    return true;
 }
 
 uint32_t RoceSrc::mrc_choose_probe_ev(uint32_t path_space) {
@@ -2902,6 +2956,7 @@ uint32_t RoceSrc::choose_mrc_path(uint32_t path_space) {
 
 RoceSrc::MrcChoice RoceSrc::choose_mrc_ev(uint32_t path_space) {
     init_mrc_paths(path_space);
+    consume_mrc_shared();
     sample_mrc_state_counts();
 
     uint32_t probe = mrc_choose_probe_ev(path_space);
@@ -3002,6 +3057,7 @@ RoceSrc::MrcChoice RoceSrc::choose_mrc_ev(uint32_t path_space) {
 RoceSrc::MrcChoice RoceSrc::choose_mrc_retx_ev(uint32_t path_space,
                                                uint32_t original_logical_ev) {
     init_mrc_paths(path_space);
+    consume_mrc_shared();
 
     if (original_logical_ev == UINT32_MAX ||
         original_logical_ev >= _mrc_evs.size())
@@ -3044,7 +3100,7 @@ RoceSrc::MrcChoice RoceSrc::choose_mrc_retx_ev(uint32_t path_space,
 }
 
 void RoceSrc::note_mrc_packet_ev(RocePacket::seq_t seqno, uint32_t logical_ev) {
-    if (_flow_lb_mode != LB_MRC)
+    if (!mrc_path_state_enabled())
         return;
     if (logical_ev == UINT32_MAX)
         return;
@@ -3052,7 +3108,7 @@ void RoceSrc::note_mrc_packet_ev(RocePacket::seq_t seqno, uint32_t logical_ev) {
 }
 
 void RoceSrc::clean_mrc_seq_evs() {
-    if (_flow_lb_mode != LB_MRC)
+    if (!mrc_path_state_enabled())
         return;
     while (!_mrc_seq_ev.empty()) {
         map<RocePacket::seq_t, uint32_t>::iterator it = _mrc_seq_ev.begin();
@@ -3125,7 +3181,7 @@ uint32_t RoceSrc::mrc_resolve_encoded_feedback_ev(
 }
 
 void RoceSrc::update_mrc_on_ack(const RoceAck& ack) {
-    if (_flow_lb_mode != LB_MRC)
+    if (!mrc_path_state_enabled())
         return;
 
     uint32_t path_space = _path_entropy_size ? _path_entropy_size : 1;
@@ -3137,8 +3193,9 @@ void RoceSrc::update_mrc_on_ack(const RoceAck& ack) {
         uint32_t ev = mrc_resolve_encoded_feedback_ev(
             ack.has_mrc_ev() ? ack.mrc_ev() : UINT32_MAX,
             ack.ackno(), ack.pathid());
-        if (ev != UINT32_MAX)
-            mrc_mark_congested(ev, MRC_CONGESTION_ECN);
+        if (ev != UINT32_MAX &&
+            mrc_mark_congested(ev, MRC_CONGESTION_ECN))
+            publish_mrc_shared(ev, MRC_SHARED_ECN);
     } else {
         mrc_note_clean_ack(
             ack.ackno(), ack.has_mrc_ev() ? ack.mrc_ev() : UINT32_MAX);
@@ -3149,7 +3206,7 @@ void RoceSrc::update_mrc_on_ack(const RoceAck& ack) {
 }
 
 void RoceSrc::update_mrc_on_nack(const RoceNack& nack) {
-    if (_flow_lb_mode != LB_MRC)
+    if (!mrc_path_state_enabled())
         return;
 
     uint32_t path_space = _path_entropy_size ? _path_entropy_size : 1;
@@ -3163,8 +3220,9 @@ void RoceSrc::update_mrc_on_nack(const RoceNack& nack) {
         uint32_t ev = mrc_resolve_encoded_feedback_ev(
             nack.has_mrc_ev() ? nack.mrc_ev() : UINT32_MAX,
             first_missing, nack.pathid());
-        if (ev != UINT32_MAX)
-            mrc_mark_congested(ev, MRC_CONGESTION_TRIM);
+        if (ev != UINT32_MAX &&
+            mrc_mark_congested(ev, MRC_CONGESTION_TRIM))
+            publish_mrc_shared(ev, MRC_SHARED_TRIM);
         sample_mrc_state_counts();
         return;
     }
@@ -3190,13 +3248,13 @@ void RoceSrc::update_mrc_on_nack(const RoceNack& nack) {
     uint32_t ev = mrc_resolve_encoded_feedback_ev(
         nack.has_mrc_ev() ? nack.mrc_ev() : UINT32_MAX,
         first_missing, nack.pathid());
-    if (ev != UINT32_MAX)
-        mrc_mark_failed(ev);
+    if (ev != UINT32_MAX && mrc_mark_failed(ev))
+        publish_mrc_shared(ev, MRC_SHARED_FAILURE);
     sample_mrc_state_counts();
 }
 
 void RoceSrc::update_mrc_on_rto() {
-    if (_flow_lb_mode != LB_MRC)
+    if (!mrc_path_state_enabled())
         return;
 
     uint32_t path_space = _path_entropy_size ? _path_entropy_size : 1;
@@ -3207,7 +3265,8 @@ void RoceSrc::update_mrc_on_rto() {
             _mrc_seq_ev.find(first_missing);
         if (it != _mrc_seq_ev.end() && it->second < _mrc_evs.size()) {
             _mrc_rto_fail_events++;
-            mrc_mark_failed(it->second);
+            if (mrc_mark_failed(it->second))
+                publish_mrc_shared(it->second, MRC_SHARED_FAILURE);
         }
         sample_mrc_state_counts();
     }
@@ -3294,7 +3353,7 @@ uint32_t RoceSrc::choose_path(Packet::PktPriority priority, bool retransmitted) 
         return path;
     }
 
-    if (_flow_lb_mode == LB_MRC) {
+    if (mrc_path_state_enabled()) {
         MrcChoice choice = choose_mrc_ev(path_space);
         record_path_selection(choice.logical_ev, choice.physical_path);
         return choice.physical_path;
@@ -3685,7 +3744,7 @@ bool RoceSrc::send_packet() {
     }
     uint32_t path = 0;
     uint32_t logical_ev = UINT32_MAX;
-    if (_flow_lb_mode == LB_MRC) {
+    if (mrc_path_state_enabled()) {
         uint32_t path_space = _path_entropy_size ? _path_entropy_size : 1;
         uint32_t original_physical = UINT32_MAX;
         uint32_t original_logical = UINT32_MAX;
