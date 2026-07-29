@@ -6,6 +6,7 @@ import concurrent.futures
 import csv
 import gzip
 import hashlib
+import io
 import json
 import math
 import os
@@ -393,11 +394,13 @@ def write_paired_gzip(path, rows):
     fields = list(rows[0])
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name("." + path.name + ".tmp")
-    with gzip.open(temporary, "wt", encoding="utf-8", newline="") as handle:
-        writer = csv.DictWriter(
-            handle, fieldnames=fields, lineterminator="\n")
-        writer.writeheader()
-        writer.writerows(rows)
+    buffer = io.StringIO(newline="")
+    writer = csv.DictWriter(
+        buffer, fieldnames=fields, lineterminator="\n")
+    writer.writeheader()
+    writer.writerows(rows)
+    temporary.write_bytes(gzip.compress(
+        buffer.getvalue().encode("utf-8"), mtime=0))
     os.replace(temporary, path)
 
 
@@ -444,7 +447,10 @@ def plot_summary(rows, out):
         fig.savefig(
             out / ("focused_transition." + suffix),
             dpi=220 if suffix == "png" else None,
-            facecolor="white", bbox_inches="tight")
+            facecolor="white", bbox_inches="tight",
+            metadata=(
+                {"CreationDate": None, "ModDate": None}
+                if suffix == "pdf" else None))
     plt.close(fig)
 
 

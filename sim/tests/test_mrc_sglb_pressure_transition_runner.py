@@ -117,3 +117,11 @@ def test_build_command_changes_only_lb_and_output_paths(tmp_path):
     assert command[command.index("-conns") + 1] == "11077"
     assert command[command.index("-slow_tor_uplinks") + 1] == "4"
     assert command[command.index("-slow_tor_uplink_divisor") + 1] == "2"
+
+
+def test_paired_gzip_has_deterministic_zero_mtime(tmp_path):
+    path = tmp_path / "paired.csv.gz"
+    runner.write_paired_gzip(path, [{"flow_id": 1, "fct_ratio": 0.9}])
+
+    # Bytes 4:8 of a gzip header are the little-endian modification time.
+    assert path.read_bytes()[4:8] == b"\0\0\0\0"
