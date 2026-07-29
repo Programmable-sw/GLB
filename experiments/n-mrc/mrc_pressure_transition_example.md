@@ -97,3 +97,4 @@
 - 结果图：[`focused_transition.png`](output/mrc_pressure_transition_examples_5ms/focused_transition.png)
 - 原始逐流诊断：`output/mrc_pressure_transition_examples_5ms/raw/`
 - 1 ms 校准结果：`output/mrc_pressure_transition_examples/focused_summary.csv`
+- 相同输入下 MRC 与 SGLB 的完整方案对比：[`mrc_sglb_pressure_transition_example.md`](mrc_sglb_pressure_transition_example.md)
