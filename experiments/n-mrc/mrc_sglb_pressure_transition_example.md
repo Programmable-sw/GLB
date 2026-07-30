@@ -26,6 +26,64 @@ MRC/RR 明显不同：
 表示 MRC 更快；下半部分仍是 MRC 自身的 actionable-flow 比例，只用于
 解释 MRC 反馈闭环何时具备作用机会，不是 SGLB 的反馈指标。
 
+## 条件性证明：SGLB 已有公共视角时，短流中的 MRC 明显处于劣势
+
+原混合 WebSearch 实验不能证明“极短流必然由 SGLB 获胜”。其中 80%
+负载的 6 KiB 点为 0.9903，MRC 反而快约 1%；SGLB 诊断也显示 88.5%
+的选路调用看到所有候选都是零质量压力，平均保留 7.81/8 个候选。也就是
+说，SGLB 虽然可以使用交换机状态，但在状态没有区分度时仍近似全路径喷洒，
+不是时刻都能有效改路。
+
+为验证更准确的条件命题，新增一个预热短流实验：
+
+- 128 节点、8 路、seeds 13/29/47；
+- 每个 seed 对 6/13/19/33/53/133 KiB 各生成 1,000 条流，共
+  18,000 条严格配对流；
+- 5 条固定 hot path 从 0 μs 开始承载 380 Gbit/s 背景，保留 3 条
+  clean path；
+- 前景短流从 100–600 μs 到达，晚于 SGLB 的 1 μs 本地和 5 μs
+  下游状态更新周期；
+- MRC 与 SGLB 复用同一 traffic、seed、背景、拓扑、传输和队列配置，
+  只改变 `-lb`。
+
+保留 3 条 clean path 是必要控制：SGLB 默认最少保留 3 个候选。如果只有
+2 条 clean path，它会继续把下一整个质量档加入候选，重新混入 hot path。
+
+![Warmed SGLB short-flow proof](output/mrc_sglb_warmed_short_flow/focused_proof.png)
+
+| 流大小 | 配对流 | MRC 收到质量反馈 | MRC actionable | 更新后新选择 | EV 覆盖 | MRC/SGLB FCT | seed 范围 | p99 比值 |
+|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 6 KiB | 3,000 | 74.2% | **0.0%** | 0.0 | 25.0% | **1.8768** | 1.849–1.928 | 3.55 |
+| 13 KiB | 3,000 | 84.4% | **0.0%** | 0.0 | 50.0% | **2.0676** | 2.034–2.102 | 3.62 |
+| 19 KiB | 3,000 | 84.9% | **0.0%** | 0.0 | 62.5% | **2.0631** | 2.022–2.138 | 3.58 |
+| 33 KiB | 3,000 | 86.8% | **0.0%** | 0.0 | 100% | **2.0165** | 1.998–2.026 | 3.31 |
+| 53 KiB | 3,000 | 87.7% | **0.0%** | 0.0 | 100% | **2.0290** | 1.986–2.091 | 3.45 |
+| 133 KiB | 3,000 | 90.2% | **0.0%** | 0.0 | 100% | **2.1563** | 2.119–2.183 | 3.50 |
+
+这里“没反馈”的准确说法不是完全没有 ACK/ECN/NACK。74%–90% 的 MRC
+流在完成前收到过质量反馈，平均产生 1.34–7.31 次有效状态更新；但所有
+大小的 `new_selections_after_first_update` 均为 0，所以这些更新来得太晚，
+没有任何一个 flow 能用它改变自己的新数据选路，actionable 比例为 0。
+
+与之对应，SGLB 的三个 seed 平均只保留 5.51/8 个候选，只有 18.1% 的
+选路调用仍看到全零质量状态。这说明交换机公共视角已经产生实际路径区分，
+不是只具备一个没有被使用的状态接口。
+
+因此本实验支持的结论是：
+
+> 当路径压力已经持续足够时间，使 SGLB 的共享 fabric 状态具有区分度，
+> 而当前 flow 在首次有效端到端反馈前已发完所有新数据时，per-QP、
+> 反馈驱动的 MRC 存在明确冷启动劣势。本实验中 MRC 的典型配对 FCT 是
+> SGLB 的 1.88–2.16 倍，三个 seed 方向完全一致。
+
+EV 完整覆盖也不能消除该问题。33–133 KiB 已经覆盖全部 8 个 EV，甚至完成
+多轮 sweep，但反馈后的新选择仍为 0；它们只是盲轮询过所有路径，没有来得及
+把已学状态用于当前 flow。这将“EV 探索”和“反馈学习生效”区分开来。
+
+这不是“SGLB 对所有极短流必胜”的证明。它是带前提的机制验证：
+SGLB 状态必须已经预热、能区分路径，且其 cache/控制传播成本在当前仿真中
+没有建模。若所有路径仍处于同一质量档，原混合实验中的 6 KiB 反例仍成立。
+
 ## 控制变量
 
 本轮直接复用原 MRC/RR 聚焦实验的输入：
@@ -106,7 +164,8 @@ FCT 分布分别取 p99 后再相除，两者不是同一个统计量。例如 6
 
 ## 实验限制
 
-- 本轮按“跑一组类似实验”的范围复用原聚焦实验，只使用 seed 13；
+- 原 5 ms 混合 WebSearch 矩阵只使用 seed 13；新增预热短流矩阵使用
+  seeds 13/29/47；
 - 30 MiB 点只有 90/131 条流，5.9%/3.1% 的差异需要三个 seed 才能判断
   是否稳定；
 - SGLB cache 通过仿真中的交换机对象共享，没有计入真实 GCN 控制报文的
@@ -124,3 +183,9 @@ FCT 分布分别取 p99 后再相除，两者不是同一个统计量。例如 6
 - PNG 图：[`focused_transition.png`](output/mrc_sglb_pressure_transition_examples_5ms/focused_transition.png)
 - PDF 图：[`focused_transition.pdf`](output/mrc_sglb_pressure_transition_examples_5ms/focused_transition.pdf)
 - SGLB 原始命令、stdout 和 cell summary：`output/mrc_sglb_pressure_transition_examples_5ms/raw/`
+- 预热短流运行脚本：[`run_mrc_sglb_warmed_short_flow.py`](run_mrc_sglb_warmed_short_flow.py)
+- 预热短流三 seed 汇总：[`summary.csv`](output/mrc_sglb_warmed_short_flow/summary.csv)
+- 预热短流逐 seed 汇总：[`seed_summary.csv`](output/mrc_sglb_warmed_short_flow/seed_summary.csv)
+- 预热 SGLB 路由诊断：[`sglb_route_summary.csv`](output/mrc_sglb_warmed_short_flow/sglb_route_summary.csv)
+- 预热短流图：[`focused_proof.png`](output/mrc_sglb_warmed_short_flow/focused_proof.png) 和 [`PDF`](output/mrc_sglb_warmed_short_flow/focused_proof.pdf)
+- 预热短流逐流数据：`output/mrc_sglb_warmed_short_flow/paired_flow_metrics.csv.gz`

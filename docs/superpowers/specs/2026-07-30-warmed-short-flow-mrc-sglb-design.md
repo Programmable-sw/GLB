@@ -17,7 +17,7 @@ that default SGLB frequently sees all paths in the same quality grade.
   133 KiB per seed.
 - Reuse the same traffic matrix for MRC and SGLB.
 - Start foreground flows uniformly from 100 to 600 μs.
-- From time zero, apply fixed-link background at 420 Gbit/s to the same five
+- From time zero, apply fixed-link background at 380 Gbit/s to the same five
   of eight spine choices in both directions, leaving exactly three clean
   choices. The background remains on for 1,000 μs.
 - Keep topology, queues, DCQCN, MTU, exact-bounded reliability, and latency
