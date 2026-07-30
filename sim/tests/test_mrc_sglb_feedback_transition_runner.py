@@ -18,7 +18,8 @@ def command_options(command):
 
 
 def test_transition_traffic_has_existing_sizes_and_adaptive_counts():
-    flows = runner.build_transition_flows(seed=13, sample_scale=0.01)
+    flows = runner.build_transition_flows(
+        seed=13, sample_scale=0.01, arrival_window_us=500)
 
     assert {row["flow_size"] for row in flows} == set(runner.SIZE_COUNTS)
     assert {
@@ -29,17 +30,35 @@ def test_transition_traffic_has_existing_sizes_and_adaptive_counts():
         for size, count in runner.SIZE_COUNTS.items()
     }
     assert min(row["start_us"] for row in flows) >= 100
-    assert max(row["start_us"] for row in flows) <= 5100
+    assert max(row["start_us"] for row in flows) <= 105
     assert all(row["src"] != row["dst"] for row in flows)
     assert [row["flow_id"] for row in flows] == list(
         range(1, len(flows) + 1))
+
+
+def test_sample_scaling_preserves_aggregate_arrival_intensity():
+    pilot = runner.build_transition_flows(
+        seed=13, sample_scale=0.05, arrival_window_us=500)
+    full = runner.build_transition_flows(
+        seed=13, sample_scale=1.0, arrival_window_us=500)
+
+    def input_rate(flows):
+        bits = sum(row["flow_size"] for row in flows) * 8
+        window_s = (
+            max(row["start_us"] for row in flows) -
+            min(row["start_us"] for row in flows)
+        ) * 1e-6
+        return bits / window_s
+
+    assert 0.8 <= input_rate(pilot) / input_rate(full) <= 1.2
 
 
 def test_three_commands_differ_only_by_lb_and_output(tmp_path):
     commands = {
         scheme: runner.build_command(
             Path("/sim/htsim_roce"), scheme, Path("/traffic.cm"),
-            tmp_path / (scheme + ".dat"), 100, 13, 340)
+            tmp_path / (scheme + ".dat"), 100, 13, 340,
+            hotspot_spines=5, hotspot_on_us=1000)
         for scheme in runner.SCHEMES
     }
     normalized = []
@@ -52,7 +71,7 @@ def test_three_commands_differ_only_by_lb_and_output(tmp_path):
     assert normalized[0] == normalized[1] == normalized[2]
     assert normalized[0]["-path_hotspot_spines"] == "5"
     assert normalized[0]["-path_hotspot_bg_rate_gbps"] == "340"
-    assert normalized[0]["-path_hotspot_bg_on_us"] == "40000"
+    assert normalized[0]["-path_hotspot_bg_on_us"] == "1000"
     assert normalized[0]["-end"] == "40000"
 
 
@@ -139,4 +158,3 @@ def test_strict_pairing_computes_both_ratios_and_phase_fraction():
     assert seed_rows[0]["actionable_fraction"] == 0.5
     assert seed_rows[0]["post_update_selection_fraction_mean"] == 0.375
     assert summary[0]["flow_count"] == 2
-

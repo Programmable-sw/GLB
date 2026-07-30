@@ -53,16 +53,21 @@ def scaled_count(count, sample_scale):
     return max(1, math.ceil(count * sample_scale))
 
 
-def build_transition_flows(seed, sample_scale=1.0):
+def build_transition_flows(
+        seed, sample_scale=1.0, arrival_window_us=500.0):
+    if sample_scale > 1.0:
+        raise ValueError("sample_scale must not exceed one")
     rng = random.Random(seed)
     flows = []
+    end_ps = 100_000_000 + round(
+        arrival_window_us * 1_000_000 * sample_scale)
     for flow_size, base_count in SIZE_COUNTS.items():
         for _ in range(scaled_count(base_count, sample_scale)):
             src = rng.randrange(128)
             dst = rng.randrange(127)
             if dst >= src:
                 dst += 1
-            start_ps = rng.randrange(100_000_000, 5_100_000_001)
+            start_ps = rng.randrange(100_000_000, end_ps + 1)
             flows.append({
                 "src": src,
                 "dst": dst,
@@ -90,7 +95,8 @@ def format_number(value):
 
 
 def build_command(
-        sim, scheme, traffic, output, connections, seed, hotspot_rate):
+        sim, scheme, traffic, output, connections, seed, hotspot_rate,
+        hotspot_spines=5, hotspot_on_us=1000.0):
     if scheme not in SCHEMES:
         raise ValueError("unsupported scheme " + repr(scheme))
     return [
@@ -115,9 +121,9 @@ def build_command(
         "-roce_trim_recovery", "exact",
         "-hop_latency", "0.5",
         "-switch_latency", "0.5",
-        "-path_hotspot_spines", "5",
+        "-path_hotspot_spines", str(hotspot_spines),
         "-path_hotspot_bg_rate_gbps", format_number(hotspot_rate),
-        "-path_hotspot_bg_on_us", "40000",
+        "-path_hotspot_bg_on_us", format_number(hotspot_on_us),
         "-path_hotspot_bg_off_us", "0",
     ]
 
@@ -315,13 +321,13 @@ def deterministic_gzip_text(path, text):
 
 def run_cell(
         seed, scheme, sim, out, traffic_path, connections, hotspot_rate,
-        force):
+        hotspot_spines, hotspot_on_us, force):
     cell = Path(out) / "raw" / "seed_{}".format(seed) / scheme
     cell.mkdir(parents=True, exist_ok=True)
     output = (cell / "logout.dat").resolve()
     command = build_command(
         Path(sim).resolve(), scheme, traffic_path.resolve(), output,
-        connections, seed, hotspot_rate)
+        connections, seed, hotspot_rate, hotspot_spines, hotspot_on_us)
     command_text = shlex.join(command)
     sim_sha = helper.file_sha256(sim)
     traffic_sha = helper.file_sha256(traffic_path)
@@ -352,8 +358,9 @@ def run_cell(
         "lb mode " + scheme,
         "RoceTransportConfig semantics=mrc_exact_bounded",
         "Path hotspot background installed",
-        "hot_spines 5 rate {}Gbps on 40000us off 0us".format(
-            format_number(hotspot_rate)),
+        "hot_spines {} rate {}Gbps on {}us off 0us".format(
+            hotspot_spines, format_number(hotspot_rate),
+            format_number(hotspot_on_us)),
     ]
     if scheme == "mrc":
         required.append("MRC: paths 8")
@@ -383,6 +390,8 @@ def run_cell(
         "scheme": scheme,
         "connections": connections,
         "hotspot_rate_gbps": hotspot_rate,
+        "hotspot_spines": hotspot_spines,
+        "hotspot_on_us": hotspot_on_us,
         "returncode": process.returncode,
         "valid": 1,
         "runtime_s": runtime,
@@ -494,6 +503,9 @@ def main():
     parser.add_argument("--sim", type=Path, default=DEFAULT_SIM)
     parser.add_argument("--out", type=Path, default=DEFAULT_OUT)
     parser.add_argument("--hotspot-rate", type=float, default=340.0)
+    parser.add_argument("--hotspot-spines", type=int, default=5)
+    parser.add_argument("--hotspot-on-us", type=float, default=1000.0)
+    parser.add_argument("--arrival-window-us", type=float, default=500.0)
     parser.add_argument("--sample-scale", type=float, default=1.0)
     parser.add_argument("--seeds", type=parse_seed_list, default=SEEDS)
     parser.add_argument("--force", action="store_true")
@@ -504,7 +516,8 @@ def main():
     traffic_by_seed = {}
     connections_by_seed = {}
     for seed in args.seeds:
-        flows = build_transition_flows(seed, args.sample_scale)
+        flows = build_transition_flows(
+            seed, args.sample_scale, args.arrival_window_us)
         traffic_path = args.out / "traffic" / "seed_{}.cm".format(seed)
         write_traffic(traffic_path, flows)
         traffic_by_seed[seed] = traffic_path
@@ -518,7 +531,8 @@ def main():
             executor.submit(
                 run_cell, seed, scheme, args.sim, args.out,
                 traffic_by_seed[seed], connections_by_seed[seed],
-                args.hotspot_rate, args.force): (seed, scheme)
+                args.hotspot_rate, args.hotspot_spines,
+                args.hotspot_on_us, args.force): (seed, scheme)
             for seed, scheme in specs
         }
         for future in concurrent.futures.as_completed(futures):
