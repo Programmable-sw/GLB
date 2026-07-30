@@ -17,6 +17,16 @@ def command_options(command):
     }
 
 
+def test_cell_metadata_has_stable_field_order():
+    metadata = runner.stable_metadata({
+        "runtime_s": 1.5,
+        "scheme": "mrc",
+        "connections": 20,
+    })
+
+    assert list(metadata) == ["connections", "runtime_s", "scheme"]
+
+
 def test_transition_traffic_has_existing_sizes_and_adaptive_counts():
     flows = runner.build_transition_flows(
         seed=13, sample_scale=0.01, arrival_window_us=500)

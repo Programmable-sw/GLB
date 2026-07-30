@@ -319,6 +319,10 @@ def deterministic_gzip_text(path, text):
     os.replace(temporary, path)
 
 
+def stable_metadata(metadata):
+    return {key: metadata[key] for key in sorted(metadata)}
+
+
 def run_cell(
         seed, scheme, sim, out, traffic_path, connections, hotspot_rate,
         hotspot_spines, hotspot_on_us, force):
@@ -342,7 +346,7 @@ def run_cell(
                 cached.get("traffic_sha256") == traffic_sha and
                 cached.get("command_sha256") == command_sha):
             with gzip.open(stdout_path, "rt", encoding="utf-8") as handle:
-                return handle.read(), cached
+                return handle.read(), stable_metadata(cached)
 
     helper.atomic_write_text(cell / "command.txt", command_text + "\n")
     raw = cell / ".stdout.running"
@@ -401,7 +405,7 @@ def run_cell(
     }
     helper.atomic_write_text(
         summary_path, json.dumps(metadata, indent=2, sort_keys=True) + "\n")
-    return text, metadata
+    return text, stable_metadata(metadata)
 
 
 def write_csv(path, rows):
