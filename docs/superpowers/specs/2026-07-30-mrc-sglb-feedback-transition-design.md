@@ -139,6 +139,22 @@ The mechanism claim is supported only if the final matrix shows all of:
 If any criterion fails, the report states the observed boundary instead of
 claiming the requested transition.
 
+## Final outcome
+
+The three-seed mixed-size matrix satisfied criteria 1–4 but not criterion 5.
+Short sizes had zero post-update new-data selections and MRC/SGLB of
+1.540–1.790. Once feedback became actionable, MRC/RR fell to 0.535–0.900,
+showing a real closed-loop benefit. MRC/SGLB peaked at 4.323 for 1.3 MiB and
+then fell to 1.629 for 30 MiB, so cold-start cost was being amortized but MRC
+had not caught SGLB.
+
+Two isolated-size sensitivity checks did not restore convergence. Without
+primer traffic, SGLB had no discriminative state for 6 KiB; with identical
+primer traffic, 6 KiB MRC/SGLB was 1.252 while 30 MiB was 3.547. The final
+report therefore supports "MRC feedback improves MRC relative to RR" but
+rejects "an actionable long-flow closed loop necessarily makes MRC/SGLB low"
+for the current implementation and tested flow range.
+
 ## Deliverables
 
 - Reproducible runner and unit tests.

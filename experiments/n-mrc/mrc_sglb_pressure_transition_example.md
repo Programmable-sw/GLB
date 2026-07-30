@@ -84,6 +84,101 @@ EV 完整覆盖也不能消除该问题。33–133 KiB 已经覆盖全部 8 个 
 SGLB 状态必须已经预热、能区分路径，且其 cache/控制传播成本在当前仿真中
 没有建模。若所有路径仍处于同一质量档，原混合实验中的 6 KiB 反例仍成立。
 
+## 反馈闭环转折：相对 RR 变好，不等于必然追平 SGLB
+
+### 技术结论
+
+进一步验证支持用户提出命题的前半部分，但不支持无条件的后半部分：
+
+> 短流或长 QP 的初始阶段，MRC 对后续新数据选路没有 actionable
+> feedback，可能落后于已有可区分公共视角的 SGLB。反馈开始作用后，
+> MRC 相对自身的无状态版本 RR 明显改善；但完整 FCT 相对 SGLB
+> 不会立即改善，也不能保证在现有最大 30 MiB 流上已经接近 1。
+
+这里必须把两个比较对象分开：
+
+- `MRC/RR` 隔离 MRC 反馈闭环的增量价值；小于 1 才能证明反馈让 MRC
+  自身变好。
+- `MRC/SGLB` 比较两个完整方案。SGLB 继续使用跨流共享、周期更新的
+  fabric 状态；MRC 闭环生效并不意味着它会获得比 SGLB 更新或更完整的
+  公共视角。
+
+### 三 seed 转折矩阵
+
+最终矩阵使用 128 节点、8 路、5 条 hot path、340 Gbit/s 背景压力，
+压力从 0 持续到 1,000 μs；所有 QP 从 100–600 μs 启动。MRC、SGLB
+和 RR 使用同一个 traffic、seed、拓扑、队列、DCQCN 和可靠性配置，只改变
+`-lb`。每个 seed 使用已有 WebSearch 离散流大小，共 20,430 条三方案
+严格配对流。
+
+![MRC feedback transition](output/mrc_sglb_feedback_transition/focused_transition.png)
+
+| 流大小 | 配对流 | MRC 收到质量反馈 | actionable flow | 更新后新选择 | MRC/SGLB FCT | seed 范围 | MRC/RR FCT |
+|---:|---:|---:|---:|---:|---:|---:|---:|
+| 6 KiB | 3,000 | 78.7% | **0.0%** | 0.0% | **1.540** | 1.528–1.549 | 0.987 |
+| 13 KiB | 3,000 | 88.7% | **0.0%** | 0.0% | **1.788** | 1.764–1.808 | 0.964 |
+| 19 KiB | 3,000 | 89.8% | **0.0%** | 0.0% | **1.790** | 1.770–1.803 | 0.931 |
+| 33 KiB | 3,000 | 90.5% | **0.0%** | 0.0% | **1.710** | 1.706–1.714 | 0.859 |
+| 53 KiB | 3,000 | 90.8% | **0.0%** | 0.0% | **1.690** | 1.654–1.713 | 0.822 |
+| 133 KiB | 3,000 | 91.5% | **0.0%** | 0.0% | **1.729** | 1.727–1.730 | 0.851 |
+| 667 KiB | 900 | 93.2% | 90.8% | 41.6% | **3.007** | 2.905–3.088 | **0.535** |
+| 1.3 MiB | 900 | 96.4% | 96.3% | 69.2% | **4.323** | 3.960–4.588 | **0.724** |
+| 3.3 MiB | 300 | 98.3% | 98.3% | 86.9% | 2.703 | 2.670–2.735 | **0.814** |
+| 6.7 MiB | 180 | 98.3% | 97.8% | 91.0% | 2.065 | 2.016–2.102 | **0.854** |
+| 20 MiB | 90 | 98.9% | 98.9% | 96.4% | 1.765 | 1.668–1.923 | **0.894** |
+| 30 MiB | 60 | 98.3% | 98.3% | 96.9% | **1.629** | 1.527–1.683 | **0.900** |
+
+图和表共同说明三个阶段：
+
+1. **冷启动阶段（6–133 KiB）**：更新后的新数据选择为 0，因此 MRC
+   无法把已学路径状态用于当前 flow 的后续新数据；SGLB 已经将平均候选集
+   缩到 5.38/8，只有 17.4% 的选路调用看到全零质量。MRC/SGLB 为
+   1.54–1.79。
+2. **闭环刚生效（667 KiB–1.3 MiB）**：actionable flow 快速升至
+   90.8%–96.3%，MRC/RR 降至 0.535–0.724，直接证明反馈让 MRC 比
+   无状态轮转好 27.6%–46.5%。但冷启动造成的排队、ECN、重传和降窗已经
+   发生，完整 FCT 不能被后来的反馈撤销，因此 MRC/SGLB 反而暂时升到
+   3.01–4.32。
+3. **长后反馈阶段（3.3–30 MiB）**：首次更新后的新数据选择占比从
+   86.9% 增至 96.9%，MRC/SGLB 从峰值 4.323 持续回落到 1.629。
+   这证明预热成本正在被更长的闭环阶段摊薄，但在本次 30 MiB 上仍比
+   SGLB 慢 62.9%，不能写成“已经追平”。
+
+### actionable 的严格含义
+
+当前 `actionable_feedback` 不是“QP 完成前收到一次反馈就计数”。它要求：
+
+1. MRC 收到反馈并产生一次有效路径状态更新；
+2. 此后同一 QP 至少还有一次**新数据**路径选择；
+3. 该更新才记为 actionable。
+
+因此 `actionable=0` 只能证明反馈没有作用于后续新数据选择，不能证明
+ACK/ECN/NACK 完全没有影响当前 flow。最终矩阵中，短流虽然 actionable
+为 0，MRC/RR 已达到 0.822–0.987；这说明反馈仍可能影响恢复/重传路径，
+而当前指标没有把这类作用计入 actionable。以后若需要使用“反馈完全没有
+作用”这一表述，必须新增恢复选择消费状态的诊断，不能沿用当前计数。
+
+### 稳健性检查与反例
+
+为排除“只是混合流大小互相干扰”，又做了两个端点检查：
+
+| 检查 | 6 KiB MRC/SGLB | 30 MiB MRC/SGLB | 结论 |
+|---|---:|---:|---|
+| 每个大小独立 cell，无 primer | 0.998 | 3.314 | 6 KiB 时 SGLB 100% 全零，公共视角没有信息 |
+| 独立 cell，加入相同 133 KiB primer | 1.252 | 3.547 | primer 使 SGLB 有区分度，但长 QP 仍未追平 |
+
+持续热点的 3-hot/5-hot 标定也得到相同边界：MRC 相对 RR 改善，但
+拥有持续公共视角的 SGLB 仍保持优势。这些反例阻止我们把“闭环生效”
+直接解释为“MRC/SGLB 必然接近 1”。
+
+较轻的原 WebSearch 稀疏慢路实验中，MRC/SGLB 长流比值确实约为
+1.00–1.01；但该场景下短流差距也只有约 0%–2%。因此可以写成场景结论：
+
+- 公共视角区分度弱或路径压力较轻时，两者 FCT 本来就接近；
+- 公共视角区分度强时，MRC 短流存在冷启动劣势；
+- MRC 闭环会让它相对 RR 变好，并在有限压力后逐步摊薄冷启动成本；
+- 但在持续、高并发、共享状态始终有效的输入中，长流也不保证追平 SGLB。
+
 ## 控制变量
 
 本轮直接复用原 MRC/RR 聚焦实验的输入：
@@ -189,3 +284,10 @@ FCT 分布分别取 p99 后再相除，两者不是同一个统计量。例如 6
 - 预热 SGLB 路由诊断：[`sglb_route_summary.csv`](output/mrc_sglb_warmed_short_flow/sglb_route_summary.csv)
 - 预热短流图：[`focused_proof.png`](output/mrc_sglb_warmed_short_flow/focused_proof.png) 和 [`PDF`](output/mrc_sglb_warmed_short_flow/focused_proof.pdf)
 - 预热短流逐流数据：`output/mrc_sglb_warmed_short_flow/paired_flow_metrics.csv.gz`
+- 反馈转折运行脚本：[`run_mrc_sglb_feedback_transition.py`](run_mrc_sglb_feedback_transition.py)
+- 反馈转折三 seed 汇总：[`summary.csv`](output/mrc_sglb_feedback_transition/summary.csv)
+- 反馈转折逐 seed 汇总：[`seed_summary.csv`](output/mrc_sglb_feedback_transition/seed_summary.csv)
+- 反馈转折 SGLB 路由诊断：[`sglb_route_summary.csv`](output/mrc_sglb_feedback_transition/sglb_route_summary.csv)
+- 反馈转折敏感性检查：[`sensitivity_checks.csv`](output/mrc_sglb_feedback_transition/sensitivity_checks.csv)
+- 反馈转折图：[`focused_transition.png`](output/mrc_sglb_feedback_transition/focused_transition.png) 和 [`PDF`](output/mrc_sglb_feedback_transition/focused_transition.pdf)
+- 反馈转折逐流数据：`output/mrc_sglb_feedback_transition/paired_flow_metrics.csv.gz`
