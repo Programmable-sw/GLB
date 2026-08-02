@@ -19,7 +19,7 @@
 - per-QP 独立维护 `GOOD/SKIP` 拥塞状态；
 - 默认 `skip-token`，显式支持 `skip-rotation`；
 - 当前 one-cycle deadline 与 `cwnd-scaled` 作为 legacy congestion-reaction ablation 保留；
-- 普通数据只使用当前 eligible/GOOD EV；
+- 普通数据只使用当前 eligible/GOOD EV，all-SKIP 由同一轮询与恢复规则自然处理；
 - 故障状态和 ProbePacket 只保留接口，默认实验中不启用；
 - Static MPR 延后到本轮拥塞/LB语义稳定之后。
 
@@ -34,8 +34,8 @@
 - 精确 EV feedback；
 - `skip-token` 与 `skip-rotation`；
 - SKIP 期间重复 ECN/TRIM feedback 不重新启动或延长 cooldown；
-- 移除新规范基线中的 all-cooling 强制 DATA fallback；
-- 检查 ACK/SACK reliability state 与 EV/LB state 的解耦；
+- 新规范基线不引入独立 all-cooling 检测或 fallback 机制；
+- 保留并回归验证现有 ACK/SACK reliability state 与 EV/LB state 解耦；
 - 预留 `ASSUMED_BAD` 和独立 ProbePacket 接口，但默认关闭；
 - 四策略消融及规模敏感性实验。
 
@@ -161,7 +161,7 @@ mrc_congestion_policy = skip_token
 | `one_cycle` | `MRC-timed-cooldown` | legacy selection-deadline 对照；名称保留实验连续性，但不是 wall-clock timer |
 | `cwnd_scaled` | `MRC-cwnd-scaled-cooldown` | legacy BDP/cwnd-scaled selection deadline 对照 |
 
-旧 `-mrc_cooldown_mode` 在过渡期可被解析为 deprecated alias，但新输出、runner 和文档只能写 `mrc_congestion_policy`。同一命令同时提供新旧参数必须拒绝，避免覆盖顺序造成不可复现。
+旧 `-mrc_cooldown_mode` 在过渡期可被解析为 deprecated alias，但新输出、runner 和文档只能写 `mrc_congestion_policy`。同一命令同时提供新旧参数必须拒绝，避免覆盖顺序造成不可复现。旧 all-cooling fallback 参数只服务于 legacy policy 复现；`skip_token` 与 `skip_rotation` 不读取该参数。
 
 ## 8. Shared Feedback Rule: No Rearm While SKIP
 
@@ -229,7 +229,7 @@ token 只能在 rotation cursor 真正到达该 EV 的 nominal slot 时消费。
 4. 将 EV 恢复为 GOOD，但本次 selector 调用不能回头选它；
 5. cursor 继续向后寻找本次 packet 可用的 GOOD EV。
 
-如果连续多个 EV 都有 token，cursor 对每个被实际经过的 nominal slot 分别消费一次 opportunity。若当前 rotation 的 64 个 EV 全部 SKIP，选择器走完剩余 rotation，进入下一 rotation 后才可选择刚恢复的 EV；不得选择仍带 token 的 EV，也不得调用 all-cooling fallback。
+如果连续多个 EV 都有 token，cursor 对每个被实际经过的 nominal slot 分别消费一次 opportunity。若当前 rotation 的 64 个 EV 全部 SKIP，选择器按相同规则走完剩余 rotation，进入下一 rotation 后选择刚恢复的 EV。这里没有额外的 all-cooling 分支：全 SKIP 只是普通轮询恰好连续经过 64 个 SKIP slot 的边界情况。
 
 这一定义保证 token 表示“失去一次本应属于该 EV 的发送机会”，而不是“被任意状态扫描看见一次”。
 
@@ -246,9 +246,9 @@ resume_rotation = R + 1
 
 rotation 10 后半段收到 EV17 的旧 ECN 时，`resume_rotation` 仍为 11，不能变成 12。进入 rotation 11 后，EV17 恢复；此后新 ECN 可创建下一次 SKIP episode。
 
-如果全部 EV 都在 SKIP，selector 完成当前 logical rotation并进入下一 rotation，使到期 EV 恢复。不得发送 DATA 到 SKIP EV，也不得使用 earliest-cooling 或 random fallback。
+如果全部 EV 都在 SKIP，selector 继续普通轮询，完成当前 logical rotation并进入下一 rotation，到期 EV 按既定规则恢复。该过程不需要识别“all-cooling episode”，也不需要 earliest-cooling、random selection 或其他额外 fallback。
 
-## 11. Selector Contract And All-SKIP Handling
+## 11. Selector Contract And Natural All-SKIP Progress
 
 选择器返回：
 
@@ -268,14 +268,16 @@ struct MrcSelection {
 - token 只能由 cursor 经过 nominal slot 时消费；
 - logical rotation 只由遍历完 64 个 nominal slot 推进；
 - 状态/诊断扫描不推进 cursor；
-- 新两种策略不调用现有 `mrc_all_cooling_fallback`；
-- 找不到 eligible EV 时，发送端推迟本次 DATA send，而不是随机选路。
+- `skip_token` 与 `skip_rotation` 始终使用同一 rotation cursor，不进入独立 all-cooling 处理路径；
+- 如果当前 rotation 暂无 eligible EV，cursor 自然推进到下一 rotation 的恢复边界，再按普通 GOOD 选择规则继续。
 
-正常 64-path 无故障实验中，all-SKIP 应非常罕见，但必须有确定、可测试且不突破 eligibility 的行为。
+正常 64-path 无故障实验中，all-SKIP 应非常罕见。它不是一个需要单独策略的异常状态，而是轮询状态机必须覆盖的边界输入：结果由 token 消费或 rotation 恢复规则唯一决定。
 
-## 12. SACK, ECN And LB-State Separation
+## 12. Preserve Existing SACK, ECN And LB-State Separation
 
-本阶段不重写已经可工作的 PSN bitmap 和 selective retransmission。反馈的逻辑抽象为：
+当前 MRC 已经在处理顺序上分离 reliability 与 LB：`processNack()` 先更新 cumulative ACK、SACK bitmap 和 selective retransmission queue，再调用 `update_mrc_on_nack()`；`processAck()` 先处理累计确认和 congestion control，再调用 `update_mrc_on_ack()`。本设计保留这条现有边界，不把它列为新的功能缺口。
+
+本阶段不重写已经可工作的 PSN bitmap 和 selective retransmission，只把新 skip policy 接到现有精确 EV feedback 入口。反馈的逻辑抽象仍可表示为：
 
 ```text
 SACK {
@@ -300,14 +302,14 @@ feedback_ev = 17
 mrc_action  = SKIP
 ```
 
-sender 按固定顺序处理：
+sender 继续按现有固定顺序处理：
 
 1. cumulative ACK 和 SACK bitmap 更新 reliability state；
 2. selective retransmission queue 只处理 PSN holes；
 3. `feedback_ev + mrc_action` 更新 LB state；
 4. congestion control 使用自身 ECN/ACK 信号更新 QP cwnd。
 
-reliability state 不得直接修改 EV eligibility；LB state 不得释放 PSN credit、确认字节或决定重传。TRIM NACK 可以同时驱动 selective recovery 和 `feedback_ev -> SKIP`，但两条状态路径必须独立调用。
+reliability state 不得直接修改 EV eligibility；LB state 不得释放 PSN credit、确认字节或决定重传。TRIM NACK 可以同时驱动 selective recovery 和 `feedback_ev -> SKIP`，但继续沿现有两条独立调用路径处理。实现工作是保持该边界并增加回归断言，不是重新设计可靠性状态机。
 
 精确 EV 优先级保持：显式 `feedback_ev` 优先；仅兼容旧包时才允许 `seqno -> EV` 回退。不得使用 cumulative ACK 指向的 EV 代替产生 ECN 的 EV。
 
@@ -383,7 +385,7 @@ mrc_probe_success_threshold=3
 ```text
 MrcTopologyDiag spine_count=64 leaf_uplinks=64 leaf_downlinks=64 hosts_per_leaf=64
 MrcEvProfileDiag profile_id=0 ev_count=64 path_count=64 mapping=identity backup_evs=0
-MrcPolicyDiag policy=skip_token no_rearm=1 all_cooling_fallback=disabled
+MrcPolicyDiag policy=skip_token no_rearm=1 all_skip_resolution=natural_rotation
 MrcFailureDiag enabled=0 assumed_bad=0 probe_packets=0 probe_success_threshold=3
 ```
 
@@ -395,7 +397,7 @@ per-flow/per-QP 聚合诊断：
 - rotation skips；
 - GOOD/SKIP 状态驻留选择次数；
 - 每个 EV 的 data selections、ECN/TRIM feedback 和 skip count；
-- all-SKIP episodes 与 selector nominal slots advanced；
+- 跨 rotation 的连续 SKIP slots 与 selector nominal slots advanced；
 - DATA-on-non-GOOD violations，必须为 0；
 - probe packets 和 ASSUMED_BAD transitions，正常实验必须为 0。
 
@@ -406,7 +408,7 @@ per-flow/per-QP 聚合诊断：
 - `min(path_space, 32)` active EV + backup；
 - `ACTIVE/COOLING` 作为默认拥塞状态名；
 - `one_cycle` 或 `cwnd_scaled` 作为默认策略；
-- earliest/round-robin all-cooling DATA fallback；
+- 新默认策略对 earliest/round-robin all-cooling DATA fallback 的依赖；
 - 普通业务包近似 probe；
 - LOSS/RTO 在无故障实验中自动驱动 failure state。
 
@@ -432,14 +434,14 @@ per-flow/per-QP 聚合诊断：
 4. cursor 到达 nominal slot 时恰好消费一次 token。
 5. 刚消费 token 的 EV 本次 packet 不可被选，后续机会可重新使用。
 6. 连续多个 token 按 cursor 顺序各消费一次。
-7. 全部 64 EV 带 token 时不向 SKIP EV 发送 DATA，也不调用 fallback。
+7. 全部 64 EV 带 token 时按普通 cursor 消费 slot 并跨入下一 rotation，不需要特殊 fallback。
 
 ### P0 `skip-rotation` tests
 
 1. rotation R 的拥塞设置 `resume_rotation=R+1`。
 2. rotation R 内重复反馈不延长到 R+2。
 3. R+1 选择前恢复 GOOD。
-4. all-SKIP 时逻辑 rotation 可以完成，但 DATA 不走 SKIP EV。
+4. all-SKIP 时仍按普通 cursor 完成 logical rotation并自然恢复，不触发独立处理分支。
 
 ### P0 feedback-attribution tests
 
@@ -450,7 +452,7 @@ per-flow/per-QP 聚合诊断：
 
 ### P1 reliability and failure-interface tests
 
-1. 现有 cumulative ACK、SACK bitmap、OOO hole 和 selective retransmission 回归通过。
+1. 现有 cumulative ACK、SACK bitmap、OOO hole、selective retransmission 以及其与 `update_mrc_on_ack/nack()` 的调用边界回归通过。
 2. 正常拥塞矩阵中 ASSUMED_BAD、ProbePacket、backup promotion 均为 0。
 3. 人工 ASSUMED_BAD 测试中 ProbePacket 不占 data PSN、bytes 或 cwnd。
 4. 恰好 N 次连续成功后恢复 GOOD；失败会重置连续成功计数。
@@ -486,7 +488,7 @@ MRC-cwnd-scaled-cooldown
 - ECN、TRIM、NACK、retransmission 和 RTO；
 - congestion episodes、ignored duplicate feedback、skip opportunities；
 - 每个 EV 的 selection share 和 feedback-to-action latency；
-- all-SKIP episode 计数；
+- 跨 rotation 的连续 SKIP slot 计数；
 - DATA-on-non-GOOD violation 计数。
 
 四策略结果必须同时报告性能与机制证据。不能只根据单一 CCT 或均值选择默认策略。
@@ -502,8 +504,8 @@ MRC-cwnd-scaled-cooldown
 5. SKIP 期间重复反馈不刷新 token、rotation 或 legacy deadline。
 6. `skip-token` 只在真实 nominal opportunity 消费 token。
 7. `skip-rotation` 恰好在下一 logical rotation 恢复。
-8. 新策略不调用 earliest/round-robin all-cooling fallback。
-9. SACK/PSN reliability state 与 EV/LB state 的测试证明两者解耦。
+8. 全 SKIP 输入由普通 rotation/token 规则自然收敛，不存在额外 all-cooling policy 分支。
+9. 回归测试证明现有 SACK/PSN reliability state 与 EV/LB state 的解耦在接入新策略后保持不变。
 10. 四策略使用相同 traffic matrix 和非策略配置完成至少三 seed 对照。
 11. 256/512/1024-node 阶段无配置漂移、未完成流和非零 violation counter。
 12. `MRC_IMPLEMENTATION.md`、experiment README、CLI help和运行时诊断在实现验证后同步更新。
@@ -512,7 +514,7 @@ MRC-cwnd-scaled-cooldown
 
 - **QP 同步风险：** 64 QP 都从 EV0 开始会制造人为碰撞；通过 per-QP deterministic order/offset 消除，同时保持 identity mapping。
 - **token 被扫描误消费：** 只有 rotation cursor 的 nominal-slot advancement 能修改 token，诊断和 eligibility scan 必须为只读。
-- **all-SKIP 死循环：** selector 必须限制每次最多推进到下一次可恢复边界，并有 bounded-iteration assert；禁止 random fallback。
+- **全 SKIP 轮询边界：** selector 必须限制一次选择最多推进到下一次可恢复 rotation，并用 bounded-iteration assert 证明普通轮询会自然收敛；不得另加 random/earliest fallback。
 - **策略状态串用：** 每个 policy 只读取自己的字段，初始化和切换时清理其他 policy 状态。
 - **旧 runner 静默漂移：** 历史 runner 显式固定 legacy policy，并校验运行时配置摘要。
 - **MPR 暂缓掩盖问题：** 每个实验记录最大 PSN span；接近假设 MPR 时停止扩展实验并先实现 Static MPR。
