@@ -12,10 +12,10 @@ BINARY = ROOT / "sim/datacenter/htsim_roce"
 def run(traffic, output, extra_args):
     command = [
         str(BINARY), "-o", str(output), "-tm", str(traffic),
-        "-nodes", "2", "-conns", "0", "-tiers", "2", "-lb", "mrc",
+        "-nodes", "256", "-conns", "0", "-tiers", "2", "-lb", "mrc",
         "-roce_rx_mode", "sp", "-queue_type", "composite_ecn_lb",
         "-host_queue_type", "prio", "-cc", "dcqcn_variant", "-end", "1",
-        "-linkspeed", "400000", "-paths", "128", *extra_args,
+        "-linkspeed", "400000", "-paths", "64", *extra_args,
     ]
     return subprocess.run(
         command, cwd=ROOT, text=True, stdout=subprocess.PIPE,
@@ -26,7 +26,7 @@ def main():
     with tempfile.TemporaryDirectory() as temp_dir:
         temp = Path(temp_dir)
         traffic = temp / "empty.cm"
-        traffic.write_text("Nodes 2\nConnections 0\n", encoding="utf-8")
+        traffic.write_text("Nodes 256\nConnections 0\n", encoding="utf-8")
         final = run(traffic, temp / "final.dat", [])
         if final.returncode != 0:
             raise AssertionError(final.stdout)
@@ -70,19 +70,11 @@ def main():
             raise AssertionError(
                 "bounded transport accepted cumulative Trim recovery")
         default_diag = (
-            "MrcCooldownDiag mrc_cooldown_mode=one_cycle "
-            "mrc_cooldown_reference=topology_bdp "
-            "mrc_cooldown_reference_pkts=86 "
-            "mrc_cwnd_scaled_rotations=86 "
-            "mrc_cwnd_scaled_skip_selections=86")
+            "MrcPolicyDiag policy=skip_token "
+            "all_skip_resolution=natural_rotation")
         if default_diag not in final.stdout:
             raise AssertionError(
-                f"missing default one-cycle config: {default_diag!r}")
-        fallback_diag = (
-            "MrcFallbackDiag mrc_all_cooling_fallback=earliest")
-        if fallback_diag not in final.stdout:
-            raise AssertionError(
-                f"missing default fallback config: {fallback_diag!r}")
+                f"missing default skip-token config: {default_diag!r}")
 
         scaled = run(
             traffic, temp / "scaled.dat",
@@ -93,8 +85,8 @@ def main():
             "MrcCooldownDiag mrc_cooldown_mode=cwnd_scaled "
             "mrc_cooldown_reference=topology_bdp "
             "mrc_cooldown_reference_pkts=86 "
-            "mrc_cwnd_scaled_rotations=86 "
-            "mrc_cwnd_scaled_skip_selections=86")
+            "mrc_cwnd_scaled_rotations=3 "
+            "mrc_cwnd_scaled_skip_selections=96")
         if scaled_diag not in scaled.stdout:
             raise AssertionError(
                 f"missing explicit cwnd-scaled config: {scaled_diag!r}")
@@ -109,15 +101,16 @@ def main():
             "MrcCooldownDiag mrc_cooldown_mode=cwnd_scaled "
             "mrc_cooldown_reference=explicit "
             "mrc_cooldown_reference_pkts=100 "
-            "mrc_cwnd_scaled_rotations=100 "
-            "mrc_cwnd_scaled_skip_selections=100")
+            "mrc_cwnd_scaled_rotations=4 "
+            "mrc_cwnd_scaled_skip_selections=128")
         if explicit_diag not in explicit.stdout:
             raise AssertionError(
                 f"missing explicit cooldown reference: {explicit_diag!r}")
 
         round_robin = run(
             traffic, temp / "round_robin.dat",
-            ["-mrc_all_cooling_fallback", "round_robin"])
+            ["-mrc_congestion_policy", "one_cycle",
+             "-mrc_all_cooling_fallback", "round_robin"])
         if round_robin.returncode != 0:
             raise AssertionError(round_robin.stdout)
         if "MrcFallbackDiag mrc_all_cooling_fallback=round_robin" not in (

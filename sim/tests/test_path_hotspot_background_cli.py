@@ -12,12 +12,12 @@ def main():
     with tempfile.TemporaryDirectory() as temp_dir:
         temp = Path(temp_dir)
         traffic = temp / "empty.cm"
-        traffic.write_text("Nodes 128\nConnections 0\n", encoding="utf-8")
+        traffic.write_text("Nodes 256\nConnections 0\n", encoding="utf-8")
         command = [
             str(SIM),
             "-o", str(temp / "logout.dat"),
             "-tm", str(traffic),
-            "-nodes", "128",
+            "-nodes", "256",
             "-conns", "0",
             "-tiers", "2",
             "-lb", "ops",
@@ -40,13 +40,14 @@ def main():
         if result.returncode != 0:
             raise AssertionError(result.stdout)
         expected = (
-            "Path hotspot background installed 64 fixed-link sources "
+            "Path hotspot background installed 16 fixed-link sources "
             "hot_spines 2 rate 1Gbps on 1us off 1us")
         if expected not in result.stdout:
             raise AssertionError(f"missing {expected!r}\n{result.stdout}")
 
         three_tier = list(command)
         three_tier[three_tier.index("-tiers") + 1] = "3"
+        three_tier[three_tier.index("-nodes") + 1] = "128"
         result = subprocess.run(
             three_tier, cwd=temp, text=True,
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT)

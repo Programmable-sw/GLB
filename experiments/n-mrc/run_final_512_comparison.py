@@ -2,7 +2,7 @@
 """Run the approved final OPS/REPS/MRC/SGLB/n-MRC comparison matrix.
 
 The runner attempts one 512-node resource gate.  If that gate cannot finish,
-the entire experiment is rebuilt at 128 nodes; result sets never mix scales.
+the entire experiment is rebuilt at 256 nodes; result sets never mix scales.
 """
 
 import argparse
@@ -93,8 +93,8 @@ class TrafficArtifact(NamedTuple):
 
 
 def scenario_catalog(nodes):
-    if nodes not in (128, 512):
-        raise ValueError("final comparison scale must be 128 or 512")
+    if nodes not in (256, 512):
+        raise ValueError("final comparison scale must be 256 or 512")
     scenarios = []
     for family, degraded in (
             ("healthy_p2p", False), ("asymmetric_p2p", True)):
@@ -147,7 +147,7 @@ def make_case_specs(nodes, seeds):
 
 
 def choose_scale(gate_succeeded):
-    return 512 if gate_succeeded else 128
+    return 512 if gate_succeeded else 256
 
 
 def file_sha256(path):
@@ -695,7 +695,7 @@ def parse_args(argv=None):
         "--gate-runtime-budget", type=int, default=300,
         help="maximum practical runtime in seconds for the smallest 512 A2A gate",
     )
-    parser.add_argument("--nodes", choices=("auto", "128", "512"), default="auto")
+    parser.add_argument("--nodes", choices=("auto", "256", "512"), default="auto")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--force", action="store_true")
     return parser.parse_args(argv)
@@ -717,7 +717,7 @@ def main(argv=None):
         gate = run_resource_gate(args)
         nodes = gate["selected_nodes"]
     else:
-        nodes = 512 if args.nodes in ("auto", "512") else 128
+        nodes = 512 if args.nodes in ("auto", "512") else 256
         gate = {
             "status": "skipped_dry_run" if args.dry_run else "forced",
             "reason": f"nodes={nodes}", "selected_nodes": nodes,

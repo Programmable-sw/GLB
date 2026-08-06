@@ -53,11 +53,14 @@ def test_topologies(module):
         128: module.Topology(128, 64, 2, 64),
         256: module.Topology(256, 64, 4, 64),
         512: module.Topology(512, 64, 8, 64),
+        1024: module.Topology(1024, 64, 16, 64),
         2048: module.Topology(2048, 64, 32, 64),
+        4096: module.Topology(4096, 64, 64, 64),
+        8192: module.Topology(8192, 64, 128, 64),
     }
     assert [module.TOPOLOGIES[nodes].paths
-            for nodes in (128, 256, 512, 2048)] == [
-        64, 64, 64, 64
+            for nodes in (256, 512, 1024, 2048, 4096, 8192)] == [
+        64, 64, 64, 64, 64, 64
     ]
     try:
         module.TOPOLOGIES[128].nodes = 1

@@ -10,7 +10,7 @@
 
 - `sim/`：htsim C++ 离散事件仿真器。
 - `sim/datacenter/htsim_roce`：编译后的 RoCE 仿真程序。
-- `experiments/n-mrc/run_final_512_comparison.py`：128 节点多场景主实验脚本。文件名保留了开发阶段的 512-node resource gate 命名；正式运行时通过 `--nodes 128` 固定实验规模。
+- `experiments/n-mrc/run_final_512_comparison.py`：256 节点多场景主实验脚本。文件名保留了开发阶段的 512-node resource gate 命名；正式运行时通过 `--nodes 256` 固定实验规模。
 - `experiments/n-mrc/feedback_eval_common.py`：主实验使用的拓扑参数和 traffic matrix 生成函数。
 - `experiments/n-mrc/experiment_metrics.py`：主实验使用的仿真日志和诊断指标解析函数。
 
@@ -91,12 +91,13 @@ leaves         = nodes / 64
 physical_paths = 64
 ```
 
-因此 128、512、2048 节点分别对应 2、8、32 台 Leaf，Spine 数和物理路径数
-始终为 64。`-paths` 小于 64 只允许用于明确标注的 EV/候选集消融，不能解释
-为物理拓扑路径数。小于 64 节点或节点数不是 64 倍数的拓扑仅用于单元测试，
-不属于标准实验结果。
+默认规模为 256 节点。自动生成的二层拓扑只接受
+256/512/1024/2048/4096/8192 节点，分别对应 4/8/16/32/64/128 台 Leaf；
+Spine 数和物理路径数始终为 64。其他规模会直接报错，不再回退到旧拓扑。
+`-paths` 小于 64 只允许用于明确标注的 EV/候选集消融，不能解释为物理拓扑
+路径数。显式拓扑配置文件仍可定义自定义结构。
 
-## 128 节点主实验
+## 256 节点主实验
 
 主实验固定比较 `ops`、`reps`、`mrc`、`sglb` 和 `n-mrc`，使用 seeds `13,29,47`。健康 P2P 额外运行 `ecmp`，用于计算相对 ECMP 的加速比。
 
@@ -161,11 +162,11 @@ python3 -m py_compile \
 
 ## 运行实验
 
-先用 dry-run 检查 128 节点、三 seed 的 690 条命令。dry-run 不启动仿真：
+先用 dry-run 检查 256 节点、三 seed 的 690 条命令。dry-run 不启动仿真：
 
 ```bash
 python3 experiments/n-mrc/run_final_512_comparison.py \
-  --nodes 128 \
+  --nodes 256 \
   --seeds 13,29,47 \
   --dry-run \
   --out experiments/n-mrc/output/n-mrc-results
@@ -175,7 +176,7 @@ python3 experiments/n-mrc/run_final_512_comparison.py \
 
 ```bash
 python3 experiments/n-mrc/run_final_512_comparison.py \
-  --nodes 128 \
+  --nodes 256 \
   --seeds 13,29,47 \
   --workers 4 \
   --timeout 3600 \
@@ -186,7 +187,7 @@ python3 experiments/n-mrc/run_final_512_comparison.py \
 
 ```bash
 python3 experiments/n-mrc/run_final_512_comparison.py \
-  --nodes 128 \
+  --nodes 256 \
   --seeds 13,29,47 \
   --workers 4 \
   --timeout 3600 \
@@ -210,7 +211,7 @@ python3 experiments/n-mrc/run_final_512_comparison.py \
 
 ## 核心代码
 
-- `experiments/n-mrc/run_final_512_comparison.py`：128 节点主场景矩阵、命令拼接、断点复用和结果校验。
+- `experiments/n-mrc/run_final_512_comparison.py`：256 节点主场景矩阵、命令拼接、断点复用和结果校验。
 - `experiments/n-mrc/feedback_eval_common.py`：拓扑参数及 permutation、tornado、WebSearch、All-to-All traffic 生成。
 - `experiments/n-mrc/experiment_metrics.py`：RoCE、队列和 n-MRC 诊断指标解析。
 - `sim/datacenter/main_roce.cpp`：RoCE CLI 参数、LB 模式选择、EV 空间按拓扑自动校准。

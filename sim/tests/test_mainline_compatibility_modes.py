@@ -12,11 +12,11 @@ BINARY = ROOT / "sim/datacenter/htsim_roce"
 def run(traffic, output, scheme, extra_args=()):
     command = [
         str(BINARY), "-o", str(output), "-tm", str(traffic),
-        "-nodes", "2", "-conns", "0", "-tiers", "2",
+        "-nodes", "256", "-conns", "0", "-tiers", "2",
         "-lb", scheme, "-queue_type", "composite_ecn_lb",
         "-host_queue_type", "prio", "-roce_rx_mode", "sp",
         "-cc", "dcqcn_variant", "-end", "1",
-        "-linkspeed", "400000", "-paths", "1", *extra_args,
+        "-linkspeed", "400000", "-paths", "64", *extra_args,
     ]
     return subprocess.run(
         command, cwd=ROOT, text=True, stdout=subprocess.PIPE,
@@ -44,7 +44,7 @@ def main():
     with tempfile.TemporaryDirectory() as temp_dir:
         temp = Path(temp_dir)
         traffic = temp / "empty.cm"
-        traffic.write_text("Nodes 2\nConnections 0\n", encoding="utf-8")
+        traffic.write_text("Nodes 256\nConnections 0\n", encoding="utf-8")
 
         canonical = run(traffic, temp / "nmrc.dat", "n-mrc")
         require(

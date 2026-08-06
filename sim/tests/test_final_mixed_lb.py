@@ -25,12 +25,12 @@ def run_case(temp, mixed):
             f"{src}->{dst} id {flow_id} start 0 size 4096"
         )
     traffic.write_text(
-        "Nodes 128\nConnections 20\n" + "\n".join(flows) + "\n",
+        "Nodes 256\nConnections 20\n" + "\n".join(flows) + "\n",
         encoding="utf-8",
     )
     command = [
         str(BINARY), "-o", str(temp / ("mixed.dat" if mixed else "plain.dat")),
-        "-tm", str(traffic), "-nodes", "128", "-conns", "20",
+        "-tm", str(traffic), "-nodes", "256", "-conns", "20",
         "-tiers", "2", "-lb", "reps", "-linkspeed", "400000",
         "-queue_type", "composite_ecn_lb", "-host_queue_type", "prio",
         "-mtu", "4096", "-end", "1000", "-paths", "8", "-seed", "13",

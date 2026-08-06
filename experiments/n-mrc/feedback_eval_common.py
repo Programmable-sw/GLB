@@ -182,10 +182,14 @@ class Topology:
 
 
 TOPOLOGIES = MappingProxyType({
+    # Retained for reading archived results; generated two-tier runs start at 256.
     128: Topology(128, 64, 2, 64),
     256: Topology(256, 64, 4, 64),
     512: Topology(512, 64, 8, 64),
+    1024: Topology(1024, 64, 16, 64),
     2048: Topology(2048, 64, 32, 64),
+    4096: Topology(4096, 64, 64, 64),
+    8192: Topology(8192, 64, 128, 64),
 })
 
 

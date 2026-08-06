@@ -47,7 +47,7 @@
 #include "main.h"
 
 uint32_t RTT = 1; // retained for legacy logfile metadata
-int DEFAULT_NODES = 432;
+int DEFAULT_NODES = 256;
 #define DEFAULT_QUEUE_SIZE 100
 #define REPS_LINKSPEED_MBPS 400000
 #define REPS_MTU_BYTES 4096
@@ -59,6 +59,20 @@ int DEFAULT_NODES = 432;
 #define FIRST_FIT_INTERVAL 100
 
 EventList eventlist;
+
+static bool is_canonical_two_tier_scale(uint32_t nodes) {
+    switch (nodes) {
+    case 256:
+    case 512:
+    case 1024:
+    case 2048:
+    case 4096:
+    case 8192:
+        return true;
+    default:
+        return false;
+    }
+}
 
 struct QueueDiag {
     uint64_t lossless_overflows;
@@ -3372,7 +3386,13 @@ int main(int argc, char **argv) {
         top = FatTreeTopology::load(topo_file, qlf, eventlist, queuesize, qt, snd_type);
     } else {
         FatTreeTopology::set_tiers(tiers);
-        if (tiers == 2 && no_of_nodes >= 64 && no_of_nodes % 64 == 0) {
+        if (tiers == 2) {
+            if (!is_canonical_two_tier_scale(no_of_nodes)) {
+                cerr << "Generated 2-tier leaf-spine supports node counts: "
+                     << "256, 512, 1024, 2048, 4096, 8192; got "
+                     << no_of_nodes << endl;
+                exit(1);
+            }
             FatTreeTopology::set_two_tier_leaf_spine_radix(64);
         }
         FatTreeTopology::set_slow_link_divisor(slow_core_downlink_divisor);

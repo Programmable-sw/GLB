@@ -19,7 +19,7 @@ def main():
         traffic = temp / "traffic.cm"
         traffic.write_text(
             "\n".join((
-                "Nodes 128",
+                "Nodes 256",
                 "Connections 4",
                 "0->64 id 1 start 0 size 4194304",
                 "1->65 id 2 start 0 size 4194304",
@@ -33,7 +33,7 @@ def main():
             str(BINARY),
             "-o", str(temp / "logout.dat"),
             "-tm", str(traffic),
-            "-nodes", "128",
+            "-nodes", "256",
             "-conns", "4",
             "-tiers", "2",
             "-lb", "ecmp_rr",

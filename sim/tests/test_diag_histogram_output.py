@@ -53,13 +53,13 @@ def main():
     with tempfile.TemporaryDirectory() as temp_dir:
         temp = Path(temp_dir)
         traffic = temp / "empty.cm"
-        traffic.write_text("Nodes 128\nConnections 0\n", encoding="utf-8")
+        traffic.write_text("Nodes 256\nConnections 0\n", encoding="utf-8")
         result = subprocess.run(
             [
                 str(SIM),
                 "-o", str(temp / "logout.dat"),
                 "-tm", str(traffic),
-                "-nodes", "128",
+                "-nodes", "256",
                 "-conns", "0",
                 "-tiers", "2",
                 "-lb", "mrc",
