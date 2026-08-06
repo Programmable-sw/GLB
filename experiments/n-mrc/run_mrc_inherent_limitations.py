@@ -28,7 +28,7 @@ import experiment_metrics as metrics  # noqa: E402
 
 
 NODES = 128
-PATHS = 8
+PATHS = 64
 CANONICAL_SEEDS = (13, 29, 47)
 WEBSEARCH_DURATION_US = 10000
 WEBSEARCH_END_US = 40000
@@ -491,7 +491,7 @@ def config_ok(text, case):
     if case.scheme == "rr":
         required += ("RR: stateless_mrc true",)
     else:
-        required += ("MRC: paths 8",)
+        required += ("MRC: paths 64",)
     if case.scheme == "mrc-shared":
         required += (
             "MrcSharedConfig enabled=1 key=source_nic,destination_tor,ev",

@@ -16,17 +16,17 @@ independent per-QP learning under pre-existing congestion.
 - MRC uses canonical `skip_token`; RR is its stateless selector.
 - SGLB uses real 256-byte high-priority GCN packets, dToR profiles, 15 us
   remote cadence, exact-min24 candidate fallback, and shuffled RR.
-- Start with paired seed 13. Add seed 29 only when sampling noise, an ambiguous
-  curve, or an apparent contradiction prevents a defensible conclusion.
-  Traffic files are identical across MRC, RR, and SGLB within a seed and
-  condition.
+- Use paired seeds 13, 29, and 47. Traffic files are identical across MRC, RR,
+  and SGLB within each seed and condition; conclusions must survive all three
+  seeds rather than relying on one favorable path hash.
 
 ## Traffic and pressure
 
 Foreground traffic is an open-loop WebSearch-like mixture. Short flows
 (6/33/133 KiB) contribute 10% offered load and long flows (3.3/6.5 MiB)
-contribute 60%. Measurement probes at 256/512/667 KiB and 1/1.3/2 MiB fill
-the transition region. Arrivals are Poisson over 50--1150 us; only flows
+contribute 56%. Measurement probes at 256/512/667 KiB and 1/1.3/2 MiB fill
+the transition region and contribute about 4.3%, keeping total foreground near
+70%. Arrivals are Poisson over 50--1150 us; only flows
 starting in the 250--950 us steady window are measured, so every measured QP
 starts after fabric pressure has formed.
 

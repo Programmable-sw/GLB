@@ -95,7 +95,7 @@ def main():
         selected_args = runner.parse_args([
             "--dry-run",
             "--quick",
-            "--nodes", "32",
+            "--nodes", "128",
             "--seeds", "13",
             "--variants",
             ("nmrc_encoded_better_ge3,netaware,sglb,adaptive_routing,"
@@ -150,7 +150,7 @@ def main():
             str(RUNNER),
             "--dry-run",
             "--quick",
-            "--nodes", "32",
+            "--nodes", "128",
             "--seeds", "13",
             "--out", str(output),
         ]

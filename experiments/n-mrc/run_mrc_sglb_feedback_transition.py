@@ -96,7 +96,7 @@ def format_number(value):
 
 def build_command(
         sim, scheme, traffic, output, connections, seed, hotspot_rate,
-        hotspot_spines=5, hotspot_on_us=1000.0):
+        hotspot_spines=16, hotspot_on_us=1000.0):
     if scheme not in SCHEMES:
         raise ValueError("unsupported scheme " + repr(scheme))
     return [
@@ -112,7 +112,7 @@ def build_command(
         "-host_queue_type", "prio",
         "-mtu", "4096",
         "-end", "40000",
-        "-paths", "8",
+        "-paths", "64",
         "-seed", str(seed),
         "-cc", "dcqcn_variant",
         "-roce_rx_mode", "sp",
@@ -367,7 +367,7 @@ def run_cell(
             format_number(hotspot_on_us)),
     ]
     if scheme == "mrc":
-        required.append("MRC: paths 8")
+        required.append("MRC: paths 64")
         if len(parse_mrc_phase_diags(text)) != connections:
             raise ValueError("MRC diagnostic count mismatch")
     elif scheme == "sglb":
@@ -378,8 +378,8 @@ def run_cell(
         warmed.parse_sglb_route_diag(text)
     else:
         required.append(
-            "RR: stateless_mrc true, physical_path_space 8, "
-            "active_evs 8, ev_path_mapping encoded_identity")
+            "RR: stateless_mrc true, physical_path_space 64, "
+            "active_evs 64, ev_path_mapping encoded_identity")
     missing = [token for token in required if token not in text]
     if process.returncode or missing or len(completions) != connections:
         raise RuntimeError(
@@ -507,7 +507,7 @@ def main():
     parser.add_argument("--sim", type=Path, default=DEFAULT_SIM)
     parser.add_argument("--out", type=Path, default=DEFAULT_OUT)
     parser.add_argument("--hotspot-rate", type=float, default=340.0)
-    parser.add_argument("--hotspot-spines", type=int, default=5)
+    parser.add_argument("--hotspot-spines", type=int, default=16)
     parser.add_argument("--hotspot-on-us", type=float, default=1000.0)
     parser.add_argument("--arrival-window-us", type=float, default=500.0)
     parser.add_argument("--sample-scale", type=float, default=1.0)

@@ -748,6 +748,7 @@ bool ConnectionMatrix::load(istream& file){
             c->dst = stoi(tokens[0].substr(dstix));
             c->priority = 2000000;
             c->rate_mbps = 0;
+            c->ecmp_override = false;
             c->start = NO_START;
 
             c->addOnTriggerSignal=false; // 
@@ -800,6 +801,14 @@ bool ConnectionMatrix::load(istream& file){
                 } else if (tokens[i] == "rate_mbps") {
                     i++;
                     c->rate_mbps = stoi(tokens[i]);
+                } else if (tokens[i] == "lb") {
+                    i++;
+                    if (i >= tokens.size() || tokens[i] != "ecmp") {
+                        cerr << "Error: connection lb must be ecmp at line "
+                             << linecount << endl;
+                        exit(1);
+                    }
+                    c->ecmp_override = true;
                 } else {
                     cerr << "Error: unknown token: " << tokens[i] << " at line "
                          << linecount << endl;

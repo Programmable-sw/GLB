@@ -42,14 +42,19 @@ protected:
 class RouteTable {
 public:
     RouteTable() {};
-    void addRoute(int destination, Route* port, int cost, packet_direction direction);  
-    void addHostRoute(int destination, Route* port, int flowid);  
-    void setRoutes(int destination, vector<FibEntry*>* routes);  
+    void addRoute(int destination, Route* port, int cost, packet_direction direction);
+    void addHostRoute(int destination, Route* port, int flowid);
+    void setRoutes(int destination, vector<FibEntry*>* routes);
     vector <FibEntry*>* getRoutes(int destination);
+    void addLeafRoute(int destination_leaf, Route* port, int cost,
+                      packet_direction direction);
+    void setLeafRoutes(int destination_leaf, vector<FibEntry*>* routes);
+    vector<FibEntry*>* getLeafRoutes(int destination_leaf);
     HostFibEntry* getHostRoute(int destination, int flowid);
-    
+
 private:
     unordered_map<int,vector<FibEntry*>* > _fib;
+    unordered_map<int,vector<FibEntry*>* > _leaf_fib;
     unordered_map<int,unordered_map<int,HostFibEntry*>*> _hostfib;
 };
 

@@ -25,6 +25,7 @@ extern void tokenize(string const &str, const char delim, vector<string> &out);
 
 // default to 3-tier topology.  Change this with set_tiers() before calling the constructor.
 uint32_t FatTreeTopology::_tiers = 3;
+uint32_t FatTreeTopology::_two_tier_leaf_spine_radix = 0;
 simtime_picosec FatTreeTopology::_link_latencies[] = {0,0,0};
 simtime_picosec FatTreeTopology::_switch_latencies[] = {0,0,0};
 uint32_t FatTreeTopology::_hosts_per_pod = 0;
@@ -639,6 +640,34 @@ void FatTreeTopology::set_params(uint32_t no_of_nodes) {
             cout << "Tier " << tier << " QueueSize Up " << _queue_up[tier] << " bytes" << endl;
     }
     _no_of_nodes = 0;
+    if (_tiers == 2 && _two_tier_leaf_spine_radix != 0) {
+        const uint32_t radix = _two_tier_leaf_spine_radix;
+        if (no_of_nodes % radix != 0) {
+            cerr << "Standard 2-tier leaf-spine requires node count to be a multiple of "
+                 << radix << endl;
+            exit(1);
+        }
+        NSRV = no_of_nodes;
+        NTOR = no_of_nodes / radix;
+        NAGG = radix;
+        NPOD = 1;
+        NCORE = 0;
+        _no_of_nodes = no_of_nodes;
+        _hosts_per_pod = no_of_nodes;
+        _tor_switches_per_pod = NTOR;
+        _agg_switches_per_pod = NAGG;
+        _radix_down[TOR_TIER] = radix;
+        _radix_up[TOR_TIER] = radix;
+        _radix_down[AGG_TIER] = NTOR;
+        _radix_up[AGG_TIER] = 0;
+        cout << "Standard 2-tier leaf-spine: nodes " << NSRV
+             << " leaves " << NTOR
+             << " spines " << NAGG
+             << " downlinks_per_leaf " << radix
+             << " uplinks_per_leaf " << radix << endl;
+        alloc_vectors();
+        return;
+    }
     int K = 0;
     if (_tiers == 3) {
         while (_no_of_nodes < no_of_nodes) {
@@ -898,7 +927,7 @@ void FatTreeTopology::init_network(){
 
                 queues_ns_nlp[srv][tor][b]->setRemoteEndpoint(switches_lp[tor]);
 
-                assert(switches_lp[tor]->addPort(queues_nlp_ns[tor][srv][b]) < 96);
+                assert(switches_lp[tor]->addPort(queues_nlp_ns[tor][srv][b]) < 128);
 
                 if (_qt==LOSSLESS_INPUT || _qt == LOSSLESS_INPUT_ECN){
                     //no virtual queue needed at server
@@ -988,7 +1017,7 @@ void FatTreeTopology::init_network(){
                 //cout << queues_nlp_nup[tor][agg][b]->str() << endl;
                 //if (logfile) logfile->writeName(*(queues_nlp_nup[tor][agg]));
 
-                assert(switches_lp[tor]->addPort(queues_nlp_nup[tor][agg][b]) < 96);
+                assert(switches_lp[tor]->addPort(queues_nlp_nup[tor][agg][b]) < 128);
                 assert(switches_up[agg]->addPort(queues_nup_nlp[agg][tor][b]) < 64);
                 queues_nlp_nup[tor][agg][b]->setRemoteEndpoint(switches_up[agg]);
                 queues_nup_nlp[agg][tor][b]->setRemoteEndpoint(switches_lp[tor]);

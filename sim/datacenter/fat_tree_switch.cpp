@@ -8,12 +8,74 @@
 #include "compositequeue.h"
 #include "ecnqueue.h"
 #include "rocepacket.h"
+#include "sglbpacket.h"
 #include "ecn.h"
 #include <algorithm>
 #include <cmath>
 #include <limits>
 
 unordered_map<BaseQueue*,uint32_t> FatTreeSwitch::_port_flow_counts;
+
+static uint64_t paper_sglb_remote_key(uint32_t spine, uint32_t destination_tor) {
+    return (static_cast<uint64_t>(spine) << 32) | destination_tor;
+}
+
+static FatTreeSwitch::PaperSglbFactors paper_sglb_remote_factors(
+    FatTreeTopology* top, uint32_t spine, uint32_t destination_tor) {
+    FatTreeSwitch::PaperSglbFactors factors;
+    if (!top || spine >= top->queues_nup_nlp.size() ||
+        destination_tor >= top->queues_nup_nlp[spine].size()) {
+        factors.remote_queue = 1.0;
+        factors.remote_utilization = 1.0;
+        factors.remote_busyness = 1.0;
+        return factors;
+    }
+
+    const vector<BaseQueue*>& lag = top->queues_nup_nlp[spine][destination_tor];
+    double queue_sum = 0.0;
+    double utilization_sum = 0.0;
+    uint32_t lag_ports = 0;
+    for (size_t i = 0; i < lag.size(); ++i) {
+        BaseQueue* queue = lag[i];
+        if (!queue || queue->maxsize() == 0)
+            continue;
+        queue_sum += static_cast<double>(queue->queuesize()) / queue->maxsize();
+        utilization_sum +=
+            static_cast<double>(queue->peek_average_utilization()) / 100.0;
+        ++lag_ports;
+    }
+    if (lag_ports == 0) {
+        factors.remote_queue = 1.0;
+        factors.remote_utilization = 1.0;
+    } else {
+        factors.remote_queue = queue_sum / lag_ports;
+        factors.remote_utilization = utilization_sum / lag_ports;
+    }
+
+    double busy_sum = 0.0;
+    uint32_t busy_ports = 0;
+    for (size_t destination = 0;
+         destination < top->queues_nup_nlp[spine].size(); ++destination) {
+        const vector<BaseQueue*>& output = top->queues_nup_nlp[spine][destination];
+        for (size_t bundle = 0; bundle < output.size(); ++bundle) {
+            BaseQueue* queue = output[bundle];
+            if (!queue || queue->maxsize() == 0)
+                continue;
+            busy_sum += static_cast<double>(queue->queuesize()) / queue->maxsize();
+            ++busy_ports;
+        }
+    }
+    factors.remote_busyness = busy_ports ? busy_sum / busy_ports : 1.0;
+    return factors;
+}
+
+static bool paper_sglb_remote_factors_equal(
+    const FatTreeSwitch::PaperSglbFactors& left,
+    const FatTreeSwitch::PaperSglbFactors& right) {
+    return left.remote_queue == right.remote_queue &&
+        left.remote_utilization == right.remote_utilization &&
+        left.remote_busyness == right.remote_busyness;
+}
 
 class SglbGcnTimer : public EventSource {
 public:
@@ -29,6 +91,23 @@ public:
 
 private:
     FatTreeSwitch* _sw;
+};
+
+class SglbRealGcnTimer : public EventSource {
+public:
+    SglbRealGcnTimer(EventList& eventlist, FatTreeSwitch* sw,
+                     uint32_t destination)
+        : EventSource(eventlist, "sglb_real_gcn_timer"), _sw(sw),
+          _destination(destination) {}
+
+    void doNextEvent() {
+        if (_sw)
+            _sw->sglb_real_gcn_timer_fired(_destination);
+    }
+
+private:
+    FatTreeSwitch* _sw;
+    uint32_t _destination;
 };
 
 class NetawareExportTimer : public EventSource {
@@ -60,10 +139,25 @@ FatTreeSwitch::FatTreeSwitch(EventList& eventlist, string s, switch_type t, uint
     _sglb_gcn_timer_pending = false;
     _netaware_export_timer = NULL;
     _netaware_export_timer_pending = false;
+    _paper_sglb_gcn_flow = NULL;
+    _paper_sglb_gcn_last_sent = 0;
+    _paper_sglb_gcn_version = 0;
+    _paper_sglb_gcn_dirty = false;
+    _paper_sglb_gcn_has_sent = false;
     _fib = new RouteTable();
 }
 
 void FatTreeSwitch::receivePacket(Packet& pkt){
+    if (pkt.type() == SGLB_GCN) {
+        SglbGcnPacket* gcn = dynamic_cast<SglbGcnPacket*>(&pkt);
+        assert(gcn);
+        if (_strategy == SGLB && sglb_ofat_uses_real_gcn_profiles())
+            receive_sglb_real_gcn(*gcn);
+        else
+            receive_paper_sglb_gcn(*gcn);
+        gcn->free();
+        return;
+    }
     if (pkt.type()==ETH_PAUSE){
         EthPausePacket* p = (EthPausePacket*)&pkt;
         //I must be in lossless mode!
@@ -361,6 +455,551 @@ void FatTreeSwitch::permute_paths(vector<FibEntry *>* uproutes) {
 }
 
 FatTreeSwitch::routing_strategy FatTreeSwitch::_strategy = FatTreeSwitch::NIX;
+
+static double paper_sglb_clamp01(double value) {
+    return std::max(0.0, std::min(1.0, value));
+}
+
+double FatTreeSwitch::paper_sglb_value(const PaperSglbFactors& factors) {
+    if (_paper_sglb_ablation == PAPER_SGLB_ABLATION_LEGACY_NOISY_OR)
+        return paper_sglb_noisy_or(factors.local_queue,
+                                   factors.remote_queue);
+    if (_paper_sglb_ablation == PAPER_SGLB_ABLATION_LEGACY_QUEUE_PRESSURE)
+        return paper_sglb_clamp01(
+            0.5 * paper_sglb_queue_pressure(factors.local_queue) +
+            0.5 * paper_sglb_queue_pressure(factors.remote_queue));
+    const double value =
+        _paper_sglb_weight_local_queue * paper_sglb_clamp01(factors.local_queue) +
+        _paper_sglb_weight_local_util * paper_sglb_clamp01(factors.local_utilization) +
+        _paper_sglb_weight_remote_queue * paper_sglb_clamp01(factors.remote_queue) +
+        _paper_sglb_weight_remote_util * paper_sglb_clamp01(factors.remote_utilization) +
+        _paper_sglb_weight_remote_busy * paper_sglb_clamp01(factors.remote_busyness);
+    return paper_sglb_clamp01(value);
+}
+
+uint8_t FatTreeSwitch::paper_sglb_ar_level(double value) {
+    value = paper_sglb_clamp01(value);
+    if (_paper_sglb_ablation == PAPER_SGLB_ABLATION_LEGACY_LEVELS) {
+        if (value < 0.10) return 0;
+        if (value < 0.40) return 1;
+        if (value < 0.60) return 2;
+        return 3;
+    }
+    if (value < 0.05)
+        return 0;
+    if (value < 0.10)
+        return 1;
+    if (value < 0.20)
+        return 2;
+    return 3;
+}
+
+vector<uint32_t> FatTreeSwitch::paper_sglb_best_level(
+    const vector<uint8_t>& levels, const vector<bool>& available,
+    uint32_t min_choices) {
+    vector<uint32_t> choices;
+    const size_t count = std::min(levels.size(), available.size());
+    uint8_t best = 255;
+    for (size_t i = 0; i < count; ++i) {
+        if (available[i] && levels[i] < best)
+            best = levels[i];
+    }
+    const uint32_t required = min_choices ? min_choices : 1;
+    for (uint32_t level = best;
+         level <= 255 && choices.size() < required; ++level) {
+        for (uint32_t i = 0; i < count; ++i) {
+            if (available[i] && levels[i] == level)
+                choices.push_back(i);
+        }
+        if (level == 255)
+            break;
+    }
+    return choices;
+}
+
+vector<uint32_t> FatTreeSwitch::paper_sglb_exact_min_by_level(
+    const vector<uint8_t>& levels, const vector<bool>& available,
+    const vector<uint64_t>& tie_keys, uint32_t min_choices) {
+    vector<uint32_t> choices;
+    const size_t count = std::min(
+        levels.size(), std::min(available.size(), tie_keys.size()));
+    uint8_t best = 255;
+    for (size_t i = 0; i < count; ++i) {
+        if (available[i] && levels[i] < best)
+            best = levels[i];
+    }
+    for (uint32_t i = 0; i < count; ++i) {
+        if (available[i])
+            choices.push_back(i);
+    }
+    std::sort(choices.begin(), choices.end(), [&](uint32_t a, uint32_t b) {
+        if (levels[a] != levels[b])
+            return levels[a] < levels[b];
+        if (tie_keys[a] != tie_keys[b])
+            return tie_keys[a] < tie_keys[b];
+        return a < b;
+    });
+
+    const uint32_t required = min_choices ? min_choices : 1;
+    size_t best_count = 0;
+    while (best_count < choices.size() && levels[choices[best_count]] == best)
+        ++best_count;
+    const size_t keep = std::max(best_count,
+                                 std::min<size_t>(required, choices.size()));
+    choices.resize(keep);
+    return choices;
+}
+
+uint32_t FatTreeSwitch::sglb_shuffled_rr_select(
+    const vector<uint32_t>& candidates, uint32_t switch_id,
+    uint32_t dst_tor, uint64_t quality_signature,
+    SglbShuffledRrState& state) {
+    if (candidates.empty())
+        return UINT32_MAX;
+
+    vector<uint32_t> members = candidates;
+    std::sort(members.begin(), members.end());
+    const bool changed = !state.valid || state.members != members ||
+        state.quality_signature != quality_signature;
+    if (changed) {
+        state.members = members;
+        state.quality_signature = quality_signature;
+        state.cursor = 0;
+        state.generation++;
+        state.valid = true;
+    } else if (state.cursor >= state.order.size()) {
+        state.cursor = 0;
+        state.generation++;
+    }
+
+    if (changed || state.order.empty() || state.cursor == 0) {
+        state.order = state.members;
+        const uint32_t generation_low =
+            static_cast<uint32_t>(state.generation);
+        const uint32_t generation_high =
+            static_cast<uint32_t>(state.generation >> 32);
+        std::sort(state.order.begin(), state.order.end(),
+                  [&](uint32_t a, uint32_t b) {
+            uint32_t ah = freeBSDHash(
+                switch_id ^ generation_high, dst_tor ^ generation_low, a);
+            uint32_t bh = freeBSDHash(
+                switch_id ^ generation_high, dst_tor ^ generation_low, b);
+            if (ah != bh)
+                return ah < bh;
+            return a < b;
+        });
+    }
+    return state.order[state.cursor++];
+}
+
+vector<uint32_t> FatTreeSwitch::paper_sglb_topk_by_level(
+    const vector<uint8_t>& levels, const vector<bool>& available,
+    const vector<uint64_t>& tie_keys, uint32_t k) {
+    vector<uint32_t> choices;
+    const size_t count = std::min(
+        levels.size(), std::min(available.size(), tie_keys.size()));
+    for (uint32_t i = 0; i < count; ++i) {
+        if (available[i])
+            choices.push_back(i);
+    }
+    std::sort(choices.begin(), choices.end(), [&](uint32_t a, uint32_t b) {
+        if (levels[a] != levels[b])
+            return levels[a] < levels[b];
+        if (tie_keys[a] != tie_keys[b])
+            return tie_keys[a] < tie_keys[b];
+        return a < b;
+    });
+    if (choices.size() > k)
+        choices.resize(k);
+    return choices;
+}
+
+bool FatTreeSwitch::paper_sglb_snapshot_refresh_due(
+    bool valid, simtime_picosec last_update, simtime_picosec now,
+    simtime_picosec interval) {
+    return !valid || interval == 0 || now < last_update ||
+        now - last_update >= interval;
+}
+
+bool FatTreeSwitch::paper_sglb_emit_due(
+    bool has_sent, simtime_picosec last_sent, simtime_picosec now,
+    simtime_picosec interval) {
+    return !has_sent || interval == 0 || now < last_sent ||
+        now - last_sent >= interval;
+}
+
+double FatTreeSwitch::paper_sglb_noisy_or(double local, double remote) {
+    local = std::max(0.0, std::min(1.0, local));
+    remote = std::max(0.0, std::min(1.0, remote));
+    return 1.0 - (1.0 - local) * (1.0 - remote);
+}
+
+double FatTreeSwitch::paper_sglb_queue_pressure(double queue_fraction) {
+    if (_paper_sglb_q_high <= _paper_sglb_q_low)
+        return queue_fraction >= _paper_sglb_q_high ? 1.0 : 0.0;
+    return std::max(0.0, std::min(
+        1.0, (queue_fraction - _paper_sglb_q_low) /
+                 (_paper_sglb_q_high - _paper_sglb_q_low)));
+}
+
+uint8_t FatTreeSwitch::paper_sglb_quantized_level(double score,
+                                                   uint32_t levels) {
+    if (levels == 0)
+        return 0;
+    score = std::max(0.0, std::min(1.0, score));
+    uint32_t level = static_cast<uint32_t>(score * levels);
+    if (level >= levels)
+        level = levels - 1;
+    return static_cast<uint8_t>(level);
+}
+
+vector<uint32_t> FatTreeSwitch::paper_sglb_strict_topk(
+    const vector<uint8_t>& levels, const vector<double>& scores,
+    const vector<bool>& available, const vector<uint64_t>& stable_keys,
+    uint32_t k) {
+    vector<uint32_t> choices;
+    const size_t n = std::min(
+        std::min(levels.size(), scores.size()),
+        std::min(available.size(), stable_keys.size()));
+    for (uint32_t i = 0; i < n; ++i) {
+        if (available[i])
+            choices.push_back(i);
+    }
+    std::sort(choices.begin(), choices.end(),
+              [&](uint32_t a, uint32_t b) {
+                  if (levels[a] != levels[b]) return levels[a] < levels[b];
+                  if (scores[a] != scores[b]) return scores[a] < scores[b];
+                  if (stable_keys[a] != stable_keys[b])
+                      return stable_keys[a] < stable_keys[b];
+                  return a < b;
+              });
+    if (choices.size() > k)
+        choices.resize(k);
+    return choices;
+}
+
+bool FatTreeSwitch::paper_sglb_accept_gcn(
+    PaperSglbRemoteState& state, bool link_up, double remote_queue,
+    double remote_utilization, double remote_busyness, uint8_t level,
+    uint64_t version, simtime_picosec received_at) {
+    if (_paper_sglb_ablation != PAPER_SGLB_ABLATION_NO_VERSION &&
+        state.valid && version <= state.version)
+        return false;
+    state.level = level;
+    state.version = version;
+    state.link_up = link_up;
+    state.remote_queue = paper_sglb_clamp01(remote_queue);
+    state.remote_utilization = paper_sglb_clamp01(remote_utilization);
+    state.remote_busyness = paper_sglb_clamp01(remote_busyness);
+    state.received_at = received_at;
+    state.valid = true;
+    return true;
+}
+
+void FatTreeSwitch::initialize_paper_sglb(
+    FatTreeTopology* topology, simtime_picosec propagation_delay) {
+    const bool shadow_gcn = _strategy == SGLB &&
+        _sglb_ofat_factor == SGLB_OFAT_SHADOW_GCN;
+    if (_strategy != PAPER_SGLB && !shadow_gcn)
+        return;
+    if (!topology || FatTreeTopology::get_tiers() != 2) {
+        cerr << "sglb-paper requires a two-tier Clos topology" << endl;
+        abort();
+    }
+    if (_paper_sglb_k == 0) {
+        cerr << "invalid sglb-paper top-K configuration" << endl;
+        abort();
+    }
+    _paper_sglb_gcn_delay = propagation_delay;
+    const simtime_picosec now = topology->_eventlist->now();
+    for (size_t source = 0; source < topology->switches_lp.size(); ++source) {
+        FatTreeSwitch* tor = dynamic_cast<FatTreeSwitch*>(
+            topology->switches_lp[source]);
+        if (!tor)
+            continue;
+        for (uint32_t spine = 0; spine < topology->getNAGG(); ++spine) {
+            const vector<BaseQueue*>& lag =
+                topology->queues_nlp_nup[source][spine];
+            for (size_t bundle = 0; bundle < lag.size(); ++bundle) {
+                BaseQueue* queue = lag[bundle];
+                PaperSglbLocalState state;
+                state.queue = queue && queue->maxsize() ?
+                    static_cast<double>(queue->queuesize()) /
+                        queue->maxsize() : 1.0;
+                state.utilization = queue ?
+                    static_cast<double>(queue->peek_average_utilization()) /
+                        100.0 : 1.0;
+                state.last_update = now;
+                state.valid = true;
+                tor->_paper_sglb_local[queue] = state;
+            }
+        }
+    }
+    for (uint32_t spine = 0; spine < topology->getNAGG(); ++spine) {
+        FatTreeSwitch* producer_switch = dynamic_cast<FatTreeSwitch*>(
+            topology->switches_up[spine]);
+        assert(producer_switch);
+        if (!producer_switch->_paper_sglb_gcn_flow)
+            producer_switch->_paper_sglb_gcn_flow = new PacketFlow(NULL);
+
+        for (uint32_t receiver = 0;
+             receiver < topology->switches_lp.size(); ++receiver) {
+            vector<Route*>& routes =
+                producer_switch->_paper_sglb_gcn_routes[receiver];
+            const vector<BaseQueue*>& queues =
+                topology->queues_nup_nlp[spine][receiver];
+            const vector<Pipe*>& pipes =
+                topology->pipes_nup_nlp[spine][receiver];
+            for (size_t bundle = 0;
+                 bundle < queues.size() && bundle < pipes.size(); ++bundle) {
+                if (!queues[bundle] || !pipes[bundle])
+                    continue;
+                Route* route = new Route();
+                route->push_back(queues[bundle]);
+                route->push_back(pipes[bundle]);
+                route->push_back(queues[bundle]->getRemoteEndpoint());
+                routes.push_back(route);
+            }
+        }
+
+        for (uint32_t dst_tor = 0;
+             dst_tor < topology->switches_lp.size(); ++dst_tor) {
+            const PaperSglbFactors factors = paper_sglb_remote_factors(
+                topology, spine, dst_tor);
+            PaperSglbFactors remote_only = factors;
+            const uint8_t level = paper_sglb_ar_level(
+                paper_sglb_value(remote_only));
+            for (size_t source = 0;
+                 source < topology->switches_lp.size(); ++source) {
+                FatTreeSwitch* tor = dynamic_cast<FatTreeSwitch*>(
+                    topology->switches_lp[source]);
+                if (tor && _paper_sglb_ablation !=
+                               PAPER_SGLB_ABLATION_LAZY_INIT)
+                    paper_sglb_accept_gcn(
+                        tor->_paper_sglb_remote[
+                            paper_sglb_remote_key(spine, dst_tor)],
+                        true, factors.remote_queue,
+                        factors.remote_utilization,
+                        factors.remote_busyness, level, 0,
+                        tor->eventlist().now());
+            }
+            PaperSglbProducerState& producer =
+                producer_switch->_paper_sglb_producers[dst_tor];
+            producer.current = factors;
+            producer.advertised = factors;
+            producer.last_sample = now;
+            producer.valid = true;
+        }
+        producer_switch->_paper_sglb_gcn_dirty = true;
+        producer_switch->_paper_sglb_gcn_has_sent = false;
+        producer_switch->_paper_sglb_gcn_version = 0;
+        producer_switch->_paper_sglb_gcn_last_sent = 0;
+    }
+}
+
+void FatTreeSwitch::paper_sglb_observe_remote_on_lookup(
+    uint32_t destination_tor) {
+    const bool shadow_gcn = _strategy == SGLB &&
+        _sglb_ofat_factor == SGLB_OFAT_SHADOW_GCN;
+    if ((_strategy != PAPER_SGLB && !shadow_gcn) || _type != AGG || !_ft)
+        return;
+    PaperSglbProducerState& producer = _paper_sglb_producers[destination_tor];
+    const simtime_picosec now = eventlist().now();
+    if (paper_sglb_snapshot_refresh_due(
+            producer.valid, producer.last_sample, now,
+            _paper_sglb_sample_interval)) {
+        const PaperSglbFactors observed = paper_sglb_remote_factors(
+            _ft, _id, destination_tor);
+        producer.current = observed;
+        producer.last_sample = now;
+        producer.valid = true;
+        if (!paper_sglb_remote_factors_equal(
+                producer.current, producer.advertised))
+            _paper_sglb_gcn_dirty = true;
+    }
+    paper_sglb_emit_if_due();
+}
+
+void FatTreeSwitch::paper_sglb_emit_if_due() {
+    const simtime_picosec now = eventlist().now();
+    if (!_paper_sglb_gcn_dirty ||
+        !paper_sglb_emit_due(_paper_sglb_gcn_has_sent,
+                             _paper_sglb_gcn_last_sent, now,
+                             _paper_sglb_gcn_interval))
+        return;
+
+    ++_paper_sglb_gcn_version;
+    vector<SglbGcnRecord> records;
+    records.reserve(_paper_sglb_producers.size());
+    for (unordered_map<uint32_t,PaperSglbProducerState>::const_iterator it =
+             _paper_sglb_producers.begin();
+         it != _paper_sglb_producers.end(); ++it) {
+        if (!it->second.valid)
+            continue;
+        const PaperSglbFactors& factors = it->second.current;
+        const uint8_t port_quality = paper_sglb_ar_level(
+            paper_sglb_value(factors));
+        records.push_back(SglbGcnRecord(
+            it->first, it->first, true, factors.remote_queue,
+            factors.remote_utilization, factors.remote_busyness,
+            port_quality));
+    }
+    std::sort(records.begin(), records.end(),
+              [](const SglbGcnRecord& left, const SglbGcnRecord& right) {
+                  return left.destination_switch_id <
+                      right.destination_switch_id;
+              });
+    for (uint32_t receiver = 0;
+         receiver < _ft->switches_lp.size(); ++receiver) {
+        vector<Route*>& routes = _paper_sglb_gcn_routes[receiver];
+        if (routes.empty())
+            continue;
+        Route* route = routes[
+            (_paper_sglb_gcn_version + receiver) % routes.size()];
+        SglbGcnPacket* packet = SglbGcnPacket::newpkt(
+            *_paper_sglb_gcn_flow, *route, _id, records,
+            _paper_sglb_gcn_version, now,
+            _paper_sglb_ablation ==
+                    PAPER_SGLB_ABLATION_NO_CONTROL_BANDWIDTH ?
+                0 : SglbGcnPacket::PACKET_SIZE);
+        ++_paper_sglb_diag_gcn_packets;
+        _paper_sglb_diag_gcn_bytes += packet->size();
+        packet->sendOn();
+    }
+    for (unordered_map<uint32_t,PaperSglbProducerState>::iterator it =
+             _paper_sglb_producers.begin();
+         it != _paper_sglb_producers.end(); ++it)
+        it->second.advertised = it->second.current;
+    _paper_sglb_gcn_last_sent = now;
+    _paper_sglb_gcn_has_sent = true;
+    _paper_sglb_gcn_dirty = false;
+    ++_paper_sglb_diag_gcn_updates;
+}
+
+void FatTreeSwitch::receive_paper_sglb_gcn(SglbGcnPacket& packet) {
+    uint64_t accepted = 0;
+    for (size_t i = 0; i < packet.record_count(); ++i) {
+        const SglbGcnRecord& record = packet.record(i);
+        if (paper_sglb_accept_gcn(
+                _paper_sglb_remote[paper_sglb_remote_key(
+                    packet.sender_switch_id(),
+                    record.destination_switch_id)],
+                record.link_up, record.remote_queue,
+                record.remote_utilization, record.remote_busyness,
+                record.port_quality, packet.version(), eventlist().now()))
+            ++accepted;
+    }
+    if (accepted) {
+        ++_paper_sglb_diag_gcn_deliveries;
+        _paper_sglb_diag_gcn_profile_updates += accepted;
+    } else {
+        ++_paper_sglb_diag_gcn_stale;
+    }
+}
+
+const char* FatTreeSwitch::paper_sglb_remote_mode_name() {
+    return _paper_sglb_remote_mode == PAPER_SGLB_REMOTE_DIRECT ?
+        "direct" : "gcn-profile";
+}
+
+const char* FatTreeSwitch::paper_sglb_ablation_name() {
+    static const char* names[] = {
+        "none", "legacy_candidates", "legacy_noisy_or",
+        "legacy_queue_pressure", "legacy_levels",
+        "legacy_remote_semantics", "legacy_transport", "lazy_init",
+        "no_version", "all_switch_decisions", "legacy_background",
+        "no_control_bandwidth"
+    };
+    const uint32_t value = static_cast<uint32_t>(_paper_sglb_ablation);
+    return value < sizeof(names) / sizeof(names[0]) ? names[value] : "invalid";
+}
+
+uint32_t FatTreeSwitch::paper_sglb_route(vector<FibEntry*>* ecmp_set,
+                                         Packet& pkt) {
+    ++_paper_sglb_diag_route_calls;
+    const uint32_t dst_tor = _ft->HOST_POD_SWITCH(pkt.dst());
+    vector<uint8_t> levels(ecmp_set->size(), 255);
+    vector<bool> available(ecmp_set->size(), false);
+    vector<uint64_t> tie_keys(ecmp_set->size(), 0);
+    const simtime_picosec now = eventlist().now();
+    for (uint32_t i = 0; i < ecmp_set->size(); ++i) {
+        FibEntry* entry = (*ecmp_set)[i];
+        Route* route = entry ? entry->getEgressPort() : NULL;
+        BaseQueue* local = route && route->size() > 0 ?
+            dynamic_cast<BaseQueue*>(route->at(0)) : NULL;
+        const uint32_t spine = sglb_next_hop_id(entry);
+        available[i] = local && spine != UINT32_MAX &&
+            sglb_entry_available(entry);
+        if (!available[i])
+            continue;
+
+        PaperSglbLocalState& local_sample = _paper_sglb_local[local];
+        if (paper_sglb_snapshot_refresh_due(
+                local_sample.valid, local_sample.last_update, now,
+                _paper_sglb_sample_interval)) {
+            local_sample.queue = local->maxsize() ?
+                static_cast<double>(local->queuesize()) / local->maxsize() : 1.0;
+            local_sample.utilization =
+                static_cast<double>(local->peek_average_utilization()) / 100.0;
+            local_sample.last_update = now;
+            local_sample.valid = true;
+        }
+
+        unordered_map<uint64_t,PaperSglbRemoteState>::const_iterator remote =
+            _paper_sglb_remote.find(
+                paper_sglb_remote_key(spine, dst_tor));
+        PaperSglbFactors factors;
+        factors.local_queue = local_sample.queue;
+        factors.local_utilization = local_sample.utilization;
+        if (_paper_sglb_ablation ==
+                PAPER_SGLB_ABLATION_LEGACY_REMOTE_SEMANTICS) {
+            const SglbPathState* legacy = sglb_neighbor_snapshot(
+                entry, pkt.dst());
+            if (legacy) {
+                factors.remote_queue = legacy->queue_fraction;
+                factors.remote_utilization = 0.0;
+                factors.remote_busyness = legacy->avg_busy;
+            } else {
+                factors.remote_queue = 0.0;
+                factors.remote_utilization = 0.0;
+                factors.remote_busyness = 0.0;
+            }
+        } else if (_paper_sglb_remote_mode == PAPER_SGLB_REMOTE_DIRECT ||
+                   _paper_sglb_ablation ==
+                       PAPER_SGLB_ABLATION_LEGACY_TRANSPORT) {
+            const PaperSglbFactors observed = paper_sglb_remote_factors(
+                _ft, spine, dst_tor);
+            factors.remote_queue = observed.remote_queue;
+            factors.remote_utilization = observed.remote_utilization;
+            factors.remote_busyness = observed.remote_busyness;
+        } else if (remote == _paper_sglb_remote.end() ||
+                   !remote->second.valid) {
+            factors.remote_queue = 1.0;
+            factors.remote_utilization = 1.0;
+            factors.remote_busyness = 1.0;
+            ++_paper_sglb_diag_remote_missing;
+        } else {
+            factors.remote_queue = remote->second.remote_queue;
+            factors.remote_utilization = remote->second.remote_utilization;
+            factors.remote_busyness = remote->second.remote_busyness;
+            available[i] = available[i] && remote->second.link_up;
+        }
+        levels[i] = paper_sglb_ar_level(paper_sglb_value(factors));
+        tie_keys[i] = (static_cast<uint64_t>(random()) << 32) ^ random();
+    }
+    vector<uint32_t> candidates =
+        _paper_sglb_ablation == PAPER_SGLB_ABLATION_LEGACY_CANDIDATES ?
+        paper_sglb_best_level(levels, available, 3) :
+        _paper_sglb_selection_mode == PAPER_SGLB_TOPK ?
+        paper_sglb_topk_by_level(
+            levels, available, tie_keys, _paper_sglb_k) :
+        paper_sglb_best_level(levels, available, _paper_sglb_k);
+    _paper_sglb_diag_candidate_sum += candidates.size();
+    if (candidates.empty())
+        return pathid_ecmp_choice(
+            pkt, ecmp_set->size(), (*ecmp_set)[0]->getDirection());
+    return candidates[random() % candidates.size()];
+}
 uint16_t FatTreeSwitch::_ar_fraction = 0;
 uint16_t FatTreeSwitch::_ar_sticky = FatTreeSwitch::PER_PACKET;
 simtime_picosec FatTreeSwitch::_sticky_delta = timeFromUs((uint32_t)10);
@@ -377,12 +1016,42 @@ uint32_t FatTreeSwitch::_sglb_max_quality = 7;
 simtime_picosec FatTreeSwitch::_sglb_update_interval = timeFromUs(1.0);
 uint32_t FatTreeSwitch::_sglb_quality_levels = 8;
 uint32_t FatTreeSwitch::_sglb_min_choices = 3;
-simtime_picosec FatTreeSwitch::_sglb_gcn_update_interval = timeFromUs(5.0);
+simtime_picosec FatTreeSwitch::_sglb_gcn_update_interval = timeFromUs(15.0);
 simtime_picosec FatTreeSwitch::_sglb_gcn_aging_interval = timeFromUs(30.0);
+simtime_picosec FatTreeSwitch::_paper_sglb_sample_interval = timeFromUs(1.0);
+simtime_picosec FatTreeSwitch::_paper_sglb_gcn_interval = timeFromUs(15.0);
+simtime_picosec FatTreeSwitch::_paper_sglb_gcn_delay = 0;
+double FatTreeSwitch::_paper_sglb_weight_local_queue = 0.5;
+double FatTreeSwitch::_paper_sglb_weight_local_util = 0.0;
+double FatTreeSwitch::_paper_sglb_weight_remote_queue = 0.5;
+double FatTreeSwitch::_paper_sglb_weight_remote_util = 0.0;
+double FatTreeSwitch::_paper_sglb_weight_remote_busy = 0.0;
+FatTreeSwitch::PaperSglbSelectionMode FatTreeSwitch::_paper_sglb_selection_mode =
+    FatTreeSwitch::PAPER_SGLB_BEST_LEVEL;
+FatTreeSwitch::PaperSglbRemoteMode FatTreeSwitch::_paper_sglb_remote_mode =
+    FatTreeSwitch::PAPER_SGLB_REMOTE_GCN_PROFILE;
+FatTreeSwitch::PaperSglbAblation FatTreeSwitch::_paper_sglb_ablation =
+    FatTreeSwitch::PAPER_SGLB_ABLATION_NONE;
+uint32_t FatTreeSwitch::_paper_sglb_levels = 4;
+uint32_t FatTreeSwitch::_paper_sglb_k = 8;
+double FatTreeSwitch::_paper_sglb_q_low = 0.20;
+double FatTreeSwitch::_paper_sglb_q_high = 0.80;
+uint64_t FatTreeSwitch::_paper_sglb_diag_route_calls = 0;
+uint64_t FatTreeSwitch::_paper_sglb_diag_candidate_sum = 0;
+uint64_t FatTreeSwitch::_paper_sglb_diag_remote_missing = 0;
+uint64_t FatTreeSwitch::_paper_sglb_diag_gcn_updates = 0;
+uint64_t FatTreeSwitch::_paper_sglb_diag_gcn_deliveries = 0;
+uint64_t FatTreeSwitch::_paper_sglb_diag_gcn_packets = 0;
+uint64_t FatTreeSwitch::_paper_sglb_diag_gcn_bytes = 0;
+uint64_t FatTreeSwitch::_paper_sglb_diag_gcn_stale = 0;
+uint64_t FatTreeSwitch::_paper_sglb_diag_gcn_profile_updates = 0;
 bool FatTreeSwitch::_sglb_normalize_scores = false;
 bool FatTreeSwitch::_sglb_local_damping = false;
 FatTreeSwitch::SglbScoreMode FatTreeSwitch::_sglb_score_mode =
     FatTreeSwitch::SGLB_SCORE_NMRC_QUANTIZED_TOPK;
+FatTreeSwitch::SglbOfatFactor FatTreeSwitch::_sglb_ofat_factor =
+    FatTreeSwitch::SGLB_OFAT_BASELINE;
+simtime_picosec FatTreeSwitch::_sglb_ofat_message_delay = timeFromUs(0.5);
 double FatTreeSwitch::_sglb_nmrc_q_min = 0.20;
 double FatTreeSwitch::_sglb_nmrc_q_max = 0.80;
 double FatTreeSwitch::_sglb_nmrc_degraded_threshold = 0.10;
@@ -1050,11 +1719,71 @@ double FatTreeSwitch::sglb_nmrc_queue_pressure(double queue_fraction) {
                                     _sglb_nmrc_q_max);
 }
 
+bool FatTreeSwitch::sglb_gcn_export_changed(
+    const SglbPathState& advertised,
+    const SglbPathState& observed) {
+    return advertised.valid != observed.valid ||
+        advertised.link_available != observed.link_available ||
+        advertised.queue_fraction != observed.queue_fraction ||
+        advertised.avg_busy != observed.avg_busy ||
+        advertised.quality != observed.quality;
+}
+
+bool FatTreeSwitch::sglb_gcn_observe_export(
+    SglbGcnProducerState& producer,
+    const SglbPathState& observed,
+    simtime_picosec now,
+    simtime_picosec sample_interval) {
+    if (producer.valid && sample_interval > 0 &&
+        now >= producer.last_sample &&
+        now - producer.last_sample < sample_interval)
+        return false;
+
+    producer.current = observed;
+    producer.last_sample = now;
+    producer.valid = true;
+    producer.dirty = sglb_gcn_export_changed(
+        producer.advertised, producer.current);
+    return true;
+}
+
+void FatTreeSwitch::sglb_gcn_mark_advertised(
+    SglbGcnProducerState& producer,
+    simtime_picosec now) {
+    ++producer.version;
+    producer.current.version = producer.version;
+    producer.advertised = producer.current;
+    producer.last_sent = now;
+    producer.has_sent = true;
+    producer.dirty = false;
+}
+
 double FatTreeSwitch::sglb_nmrc_noisy_or(double local, double remote) {
     return 1.0 - (1.0 - local) * (1.0 - remote);
 }
 
+double FatTreeSwitch::sglb_nmrc_queue_signal(double queue_fraction) {
+    if (sglb_ofat_uses_raw_queue())
+        return std::max(0.0, std::min(1.0, queue_fraction));
+    return sglb_nmrc_queue_pressure(queue_fraction);
+}
+
+double FatTreeSwitch::sglb_nmrc_couple(double local, double remote) {
+    if (sglb_ofat_uses_linear_score())
+        return 0.5 * local + 0.5 * remote;
+    return sglb_nmrc_noisy_or(local, remote);
+}
+
 uint8_t FatTreeSwitch::sglb_nmrc_level(double score) {
+    if (sglb_ofat_uses_paper_levels()) {
+        if (score < 0.05)
+            return STOR_LEVEL_GOOD;
+        if (score < 0.10)
+            return STOR_LEVEL_DEGRADED;
+        if (score < 0.20)
+            return STOR_LEVEL_BAD;
+        return STOR_LEVEL_AVOID;
+    }
     if (score < _sglb_nmrc_degraded_threshold)
         return STOR_LEVEL_GOOD;
     if (score < _sglb_nmrc_bad_threshold)
@@ -1083,6 +1812,108 @@ const char* FatTreeSwitch::sglb_score_mode_name() {
     if (_sglb_score_mode == SGLB_SCORE_NMRC_QUANTIZED_TOPK)
         return "nmrc_quantized_topk";
     return "legacy";
+}
+
+const char* FatTreeSwitch::sglb_ofat_factor_name() {
+    static const char* names[] = {
+        "baseline", "topk8", "linear_score", "raw_queue",
+        "paper_levels", "remote_mean", "change_triggered",
+        "delayed_message", "eager_init", "versioned", "no_aging",
+        "source_leaf_only", "background_sglb", "shadow_gcn",
+        "raw_queue_topk8", "raw_paper_levels_topk8",
+        "raw_linear_paper_levels_topk8", "real_gcn_profiles",
+        "real_gcn_raw_linear"
+    };
+    const uint32_t value = static_cast<uint32_t>(_sglb_ofat_factor);
+    return value < sizeof(names) / sizeof(names[0]) ? names[value] : "invalid";
+}
+
+void FatTreeSwitch::configure_sglb_scheme_defaults(bool legacy) {
+    _sglb_score_mode = SGLB_SCORE_NMRC_QUANTIZED_TOPK;
+    _sglb_nmrc_levels = 4;
+    _sglb_gcn_update_interval = timeFromUs(15.0);
+    _sglb_gcn_aging_interval = timeFromUs(30.0);
+
+    if (legacy) {
+        _sglb_ofat_factor = SGLB_OFAT_BASELINE;
+        _sglb_min_choices = 3;
+        _sglb_nmrc_degraded_threshold = 0.10;
+        _sglb_nmrc_bad_threshold = 0.40;
+        _sglb_nmrc_avoid_threshold = 0.60;
+        return;
+    }
+
+    _sglb_ofat_factor = SGLB_OFAT_REAL_GCN_RAW_LINEAR;
+    _sglb_min_choices = 24;
+    _sglb_nmrc_degraded_threshold = 0.05;
+    _sglb_nmrc_bad_threshold = 0.10;
+    _sglb_nmrc_avoid_threshold = 0.20;
+}
+
+bool FatTreeSwitch::sglb_ofat_uses_topk8() {
+    return _sglb_ofat_factor == SGLB_OFAT_TOPK8 ||
+           _sglb_ofat_factor == SGLB_OFAT_RAW_QUEUE_TOPK8 ||
+           _sglb_ofat_factor == SGLB_OFAT_RAW_PAPER_LEVELS_TOPK8 ||
+           _sglb_ofat_factor == SGLB_OFAT_RAW_LINEAR_PAPER_LEVELS_TOPK8;
+}
+
+bool FatTreeSwitch::sglb_ofat_uses_raw_queue() {
+    return _sglb_ofat_factor == SGLB_OFAT_RAW_QUEUE ||
+           _sglb_ofat_factor == SGLB_OFAT_RAW_QUEUE_TOPK8 ||
+           _sglb_ofat_factor == SGLB_OFAT_RAW_PAPER_LEVELS_TOPK8 ||
+           _sglb_ofat_factor == SGLB_OFAT_RAW_LINEAR_PAPER_LEVELS_TOPK8 ||
+           _sglb_ofat_factor == SGLB_OFAT_REAL_GCN_RAW_LINEAR;
+}
+
+bool FatTreeSwitch::sglb_ofat_uses_linear_score() {
+    return _sglb_ofat_factor == SGLB_OFAT_LINEAR_SCORE ||
+           _sglb_ofat_factor == SGLB_OFAT_RAW_LINEAR_PAPER_LEVELS_TOPK8 ||
+           _sglb_ofat_factor == SGLB_OFAT_REAL_GCN_RAW_LINEAR;
+}
+
+bool FatTreeSwitch::sglb_ofat_uses_paper_levels() {
+    return _sglb_ofat_factor == SGLB_OFAT_PAPER_LEVELS ||
+           _sglb_ofat_factor == SGLB_OFAT_RAW_PAPER_LEVELS_TOPK8 ||
+           _sglb_ofat_factor == SGLB_OFAT_RAW_LINEAR_PAPER_LEVELS_TOPK8;
+}
+
+bool FatTreeSwitch::sglb_ofat_uses_real_gcn_profiles() {
+    return _sglb_ofat_factor == SGLB_OFAT_REAL_GCN_PROFILES ||
+           _sglb_ofat_factor == SGLB_OFAT_REAL_GCN_RAW_LINEAR;
+}
+
+bool FatTreeSwitch::sglb_uses_leaf_profiles() const {
+    return _ft && _strategy == SGLB &&
+           sglb_ofat_uses_real_gcn_profiles() &&
+           FatTreeTopology::get_tiers() == 2;
+}
+
+uint32_t FatTreeSwitch::sglb_profile_destination(uint32_t dst) const {
+    return sglb_uses_leaf_profiles() ? _ft->HOST_POD_SWITCH(dst) : dst;
+}
+
+uint32_t FatTreeSwitch::sglb_profile_observation_destination(
+    uint32_t profile) const {
+    return sglb_uses_leaf_profiles() ?
+        profile * _ft->radix_down(TOR_TIER) : profile;
+}
+
+bool FatTreeSwitch::sglb_accept_real_gcn_profile(
+    SglbPathState& state, const SglbGcnRecord& record,
+    uint64_t version, simtime_picosec received_at) {
+    if (state.valid && version <= state.version)
+        return false;
+    state.queue_fraction = paper_sglb_clamp01(record.remote_queue);
+    state.queue_pressure = sglb_nmrc_queue_pressure(state.queue_fraction);
+    state.avg_busy = std::max(0.0, record.remote_busyness);
+    state.best_score = state.queue_pressure;
+    state.score = state.queue_pressure;
+    state.quality = record.port_quality;
+    state.version = version;
+    state.last_update = received_at;
+    state.valid = true;
+    state.link_available = record.link_up;
+    return true;
 }
 
 void FatTreeSwitch::sglb_candidate_queues(uint32_t dst, vector<BaseQueue*>& queues) {
@@ -1160,6 +1991,7 @@ FatTreeSwitch::SglbPathState FatTreeSwitch::sglb_compute_export_state(uint32_t d
 
     double best = std::numeric_limits<double>::max();
     double best_queue_fraction = std::numeric_limits<double>::max();
+    double queue_fraction_sum = 0.0;
     double busy = 0.0;
     for (uint32_t i = 0; i < queues.size(); i++) {
         double queue_fraction = sglb_queue_fraction(queues[i]);
@@ -1168,14 +2000,17 @@ FatTreeSwitch::SglbPathState FatTreeSwitch::sglb_compute_export_state(uint32_t d
             best = score;
         if (queue_fraction < best_queue_fraction)
             best_queue_fraction = queue_fraction;
+        queue_fraction_sum += queue_fraction;
         busy += _sglb_normalize_scores ? sglb_queue_fraction(queues[i]) : (double)sglb_queue_kbytes(queues[i]);
     }
 
     double avg_busy = busy / queues.size();
     if (best_queue_fraction == std::numeric_limits<double>::max())
         best_queue_fraction = 0.0;
+    if (_sglb_ofat_factor == SGLB_OFAT_REMOTE_MEAN)
+        best_queue_fraction = queue_fraction_sum / queues.size();
     state.queue_fraction = best_queue_fraction;
-    state.queue_pressure = sglb_nmrc_queue_pressure(best_queue_fraction);
+    state.queue_pressure = sglb_nmrc_queue_signal(best_queue_fraction);
     state.best_score = best == std::numeric_limits<double>::max() ? 0.0 : best;
     state.avg_busy = avg_busy;
     if (_sglb_score_mode == SGLB_SCORE_LEGACY) {
@@ -1193,26 +2028,48 @@ FatTreeSwitch::SglbPathState FatTreeSwitch::sglb_compute_export_state(uint32_t d
 }
 
 void FatTreeSwitch::sglb_maybe_refresh_export(uint32_t dst) {
+    dst = sglb_profile_destination(dst);
+    if (sglb_ofat_uses_real_gcn_profiles()) {
+        sglb_observe_real_gcn_export(dst);
+        return;
+    }
     simtime_picosec now = eventlist().now();
     SglbPathState& cached = _sglb_exported_state[dst];
     if (cached.valid && _sglb_gcn_update_interval > 0 &&
         now >= cached.last_update &&
         now - cached.last_update < _sglb_gcn_update_interval) {
-        sglb_schedule_periodic_gcn();
+        if (_sglb_ofat_factor != SGLB_OFAT_CHANGE_TRIGGERED)
+            sglb_schedule_periodic_gcn();
         return;
     }
 
-    SglbPathState state = sglb_compute_export_state(dst);
+    SglbPathState state = sglb_compute_export_state(
+        sglb_profile_observation_destination(dst));
+    if (_sglb_ofat_factor == SGLB_OFAT_CHANGE_TRIGGERED && cached.valid &&
+        state.valid == cached.valid && state.score == cached.score &&
+        state.queue_fraction == cached.queue_fraction &&
+        state.link_available == cached.link_available) {
+        return;
+    }
+    if (cached.valid)
+        _sglb_previous_exported_state[dst] = cached;
+    state.version = (_sglb_ofat_factor == SGLB_OFAT_VERSIONED ||
+                     sglb_ofat_uses_real_gcn_profiles()) ?
+        cached.version + 1 : 0;
     state.last_update = now;
     cached = state;
-    sglb_schedule_periodic_gcn();
+    if (_sglb_ofat_factor != SGLB_OFAT_CHANGE_TRIGGERED)
+        sglb_schedule_periodic_gcn();
 }
 
 void FatTreeSwitch::sglb_schedule_periodic_gcn() {
     if (_strategy != SGLB || _sglb_gcn_update_interval == 0 ||
+        _sglb_ofat_factor == SGLB_OFAT_CHANGE_TRIGGERED ||
         _sglb_gcn_timer_pending || _sglb_exported_state.empty()) {
         return;
     }
+    if (sglb_ofat_uses_real_gcn_profiles() && _type != AGG)
+        return;
 
     if (!_sglb_gcn_timer)
         _sglb_gcn_timer = new SglbGcnTimer(eventlist(), this);
@@ -1235,11 +2092,274 @@ void FatTreeSwitch::sglb_periodic_refresh_exports() {
     }
 
     for (size_t i = 0; i < dsts.size(); i++) {
-        SglbPathState state = sglb_compute_export_state(dsts[i]);
+        SglbPathState state = sglb_compute_export_state(
+            sglb_profile_observation_destination(dsts[i]));
+        SglbPathState& cached = _sglb_exported_state[dsts[i]];
+        if (cached.valid)
+            _sglb_previous_exported_state[dsts[i]] = cached;
+        state.version = (_sglb_ofat_factor == SGLB_OFAT_VERSIONED ||
+                         sglb_ofat_uses_real_gcn_profiles()) ?
+            cached.version + 1 : 0;
         state.last_update = now;
-        _sglb_exported_state[dsts[i]] = state;
+        cached = state;
     }
     sglb_schedule_periodic_gcn();
+}
+
+void FatTreeSwitch::sglb_observe_real_gcn_export(uint32_t destination) {
+    if (_type != AGG || !_ft)
+        return;
+
+    const simtime_picosec now = eventlist().now();
+    SglbGcnProducerState& producer = _sglb_gcn_producers[destination];
+    SglbPathState observed = sglb_compute_export_state(
+        sglb_profile_observation_destination(destination));
+    observed.version = producer.version;
+    observed.last_update = now;
+    if (!sglb_gcn_observe_export(
+            producer, observed, now, _sglb_update_interval) ||
+        !producer.dirty)
+        return;
+
+    if (!producer.has_sent || _sglb_gcn_update_interval == 0 ||
+        now < producer.last_sent ||
+        now - producer.last_sent >= _sglb_gcn_update_interval) {
+        sglb_emit_real_gcn(destination);
+        return;
+    }
+
+    sglb_schedule_real_gcn(
+        destination,
+        _sglb_gcn_update_interval - (now - producer.last_sent));
+}
+
+void FatTreeSwitch::sglb_schedule_real_gcn(
+    uint32_t destination, simtime_picosec delay) {
+    SglbGcnProducerState& producer = _sglb_gcn_producers[destination];
+    if (producer.timer_pending)
+        return;
+    SglbRealGcnTimer*& timer = _sglb_real_gcn_timers[destination];
+    if (!timer)
+        timer = new SglbRealGcnTimer(eventlist(), this, destination);
+    eventlist().sourceIsPendingRel(*timer, delay);
+    producer.timer_pending = true;
+}
+
+void FatTreeSwitch::sglb_real_gcn_timer_fired(uint32_t destination) {
+    SglbGcnProducerState& producer = _sglb_gcn_producers[destination];
+    producer.timer_pending = false;
+    if (!producer.dirty)
+        return;
+
+    const simtime_picosec now = eventlist().now();
+    if (producer.has_sent && _sglb_gcn_update_interval > 0 &&
+        now >= producer.last_sent &&
+        now - producer.last_sent < _sglb_gcn_update_interval) {
+        sglb_schedule_real_gcn(
+            destination,
+            _sglb_gcn_update_interval - (now - producer.last_sent));
+        return;
+    }
+    sglb_emit_real_gcn(destination);
+}
+
+void FatTreeSwitch::sglb_emit_real_gcn(uint32_t destination) {
+    if (!sglb_ofat_uses_real_gcn_profiles() || _type != AGG || !_ft ||
+        !_paper_sglb_gcn_flow)
+        return;
+
+    unordered_map<uint32_t,SglbGcnProducerState>::iterator found =
+        _sglb_gcn_producers.find(destination);
+    if (found == _sglb_gcn_producers.end() || !found->second.valid ||
+        !found->second.dirty)
+        return;
+    SglbGcnProducerState& producer = found->second;
+    const uint64_t next_version = producer.version + 1;
+
+    vector<SglbGcnRecord> records;
+    records.push_back(SglbGcnRecord(
+        destination, destination, producer.current.link_available,
+        producer.current.queue_fraction, 0.0, producer.current.avg_busy,
+        producer.current.quality));
+
+    for (uint32_t receiver = 0; receiver < _ft->switches_lp.size(); ++receiver) {
+        vector<Route*>& routes = _paper_sglb_gcn_routes[receiver];
+        if (routes.empty())
+            continue;
+        Route* route = routes[
+            (next_version + receiver + destination) % routes.size()];
+        SglbGcnPacket* packet = SglbGcnPacket::newpkt(
+            *_paper_sglb_gcn_flow, *route, _id, records,
+            next_version, eventlist().now());
+        ++_paper_sglb_diag_gcn_packets;
+        _paper_sglb_diag_gcn_bytes += packet->size();
+        packet->sendOn();
+    }
+    sglb_gcn_mark_advertised(producer, eventlist().now());
+    producer.advertised.last_update = eventlist().now();
+    _sglb_exported_state[destination] = producer.advertised;
+    ++_paper_sglb_diag_gcn_updates;
+}
+
+void FatTreeSwitch::receive_sglb_real_gcn(SglbGcnPacket& packet) {
+    if (!_ft)
+        return;
+    uint64_t accepted = 0;
+    for (size_t i = 0; i < packet.record_count(); ++i) {
+        const SglbGcnRecord& record = packet.record(i);
+        if (sglb_accept_real_gcn_profile(
+                _sglb_received_profiles[paper_sglb_remote_key(
+                    packet.sender_switch_id(),
+                    record.destination_switch_id)],
+                record, packet.version(), eventlist().now()))
+            ++accepted;
+    }
+    if (accepted) {
+        ++_paper_sglb_diag_gcn_deliveries;
+        _paper_sglb_diag_gcn_profile_updates += accepted;
+    } else {
+        ++_paper_sglb_diag_gcn_stale;
+    }
+}
+
+void FatTreeSwitch::initialize_sglb_ofat(FatTreeTopology* topology) {
+    if (!topology || _strategy != SGLB ||
+        _sglb_ofat_factor != SGLB_OFAT_EAGER_INIT)
+        return;
+    vector<FatTreeSwitch*> switches;
+    for (size_t i = 0; i < topology->switches_lp.size(); ++i) {
+        FatTreeSwitch* sw = dynamic_cast<FatTreeSwitch*>(topology->switches_lp[i]);
+        if (sw)
+            switches.push_back(sw);
+    }
+    for (size_t i = 0; i < topology->switches_up.size(); ++i) {
+        FatTreeSwitch* sw = dynamic_cast<FatTreeSwitch*>(topology->switches_up[i]);
+        if (sw)
+            switches.push_back(sw);
+    }
+    for (size_t i = 0; i < switches.size(); ++i) {
+        for (uint32_t dst = 0; dst < topology->no_of_nodes(); ++dst)
+            switches[i]->sglb_maybe_refresh_export(dst);
+    }
+}
+
+void FatTreeSwitch::initialize_sglb_real_gcn_profiles(
+    FatTreeTopology* topology) {
+    if (!topology || _strategy != SGLB ||
+        !sglb_ofat_uses_real_gcn_profiles())
+        return;
+    if (FatTreeTopology::get_tiers() != 2) {
+        cerr << "real-GCN SGLB profiles require a two-tier Clos topology"
+             << endl;
+        abort();
+    }
+
+    const simtime_picosec now = topology->_eventlist->now();
+    vector<FatTreeSwitch*> switches;
+    for (size_t i = 0; i < topology->switches_lp.size(); ++i) {
+        FatTreeSwitch* sw = dynamic_cast<FatTreeSwitch*>(
+            topology->switches_lp[i]);
+        if (sw)
+            switches.push_back(sw);
+    }
+    for (size_t i = 0; i < topology->switches_up.size(); ++i) {
+        FatTreeSwitch* sw = dynamic_cast<FatTreeSwitch*>(
+            topology->switches_up[i]);
+        if (sw)
+            switches.push_back(sw);
+    }
+
+    // Phase 1: install one export per destination leaf before profiles read it.
+    for (size_t i = 0; i < switches.size(); ++i) {
+        for (uint32_t dst_leaf = 0;
+             dst_leaf < topology->switches_lp.size(); ++dst_leaf) {
+            const uint32_t representative =
+                dst_leaf * topology->radix_down(TOR_TIER);
+            SglbPathState state =
+                switches[i]->sglb_compute_export_state(representative);
+            state.version = 0;
+            state.last_update = now;
+            switches[i]->_sglb_exported_state[dst_leaf] = state;
+        }
+    }
+
+    // Build real spine-to-leaf control paths and preinstall received profiles.
+    for (uint32_t spine = 0; spine < topology->getNAGG(); ++spine) {
+        FatTreeSwitch* producer = dynamic_cast<FatTreeSwitch*>(
+            topology->switches_up[spine]);
+        assert(producer);
+        if (!producer->_paper_sglb_gcn_flow)
+            producer->_paper_sglb_gcn_flow = new PacketFlow(NULL);
+        producer->_paper_sglb_gcn_version = 0;
+
+        for (uint32_t dst_leaf = 0;
+             dst_leaf < topology->switches_lp.size(); ++dst_leaf) {
+            SglbGcnProducerState& state =
+                producer->_sglb_gcn_producers[dst_leaf];
+            state.current = producer->_sglb_exported_state[dst_leaf];
+            state.advertised = state.current;
+            state.last_sample = now;
+            state.last_sent = 0;
+            state.version = 0;
+            state.valid = true;
+            state.dirty = false;
+            state.has_sent = false;
+            state.timer_pending = false;
+        }
+
+        for (uint32_t receiver = 0;
+             receiver < topology->switches_lp.size(); ++receiver) {
+            vector<Route*>& routes =
+                producer->_paper_sglb_gcn_routes[receiver];
+            const vector<BaseQueue*>& queues =
+                topology->queues_nup_nlp[spine][receiver];
+            const vector<Pipe*>& pipes =
+                topology->pipes_nup_nlp[spine][receiver];
+            for (size_t bundle = 0;
+                 bundle < queues.size() && bundle < pipes.size(); ++bundle) {
+                if (!queues[bundle] || !pipes[bundle])
+                    continue;
+                Route* route = new Route();
+                route->push_back(queues[bundle]);
+                route->push_back(pipes[bundle]);
+                route->push_back(queues[bundle]->getRemoteEndpoint());
+                routes.push_back(route);
+            }
+        }
+
+        for (size_t source = 0; source < topology->switches_lp.size(); ++source) {
+            FatTreeSwitch* leaf = dynamic_cast<FatTreeSwitch*>(
+                topology->switches_lp[source]);
+            assert(leaf);
+            for (uint32_t dst_leaf = 0;
+                 dst_leaf < topology->switches_lp.size(); ++dst_leaf) {
+                SglbPathState initial =
+                    producer->_sglb_exported_state[dst_leaf];
+                initial.version = 0;
+                initial.last_update = now;
+                leaf->_sglb_received_profiles[
+                    paper_sglb_remote_key(spine, dst_leaf)] = initial;
+            }
+        }
+    }
+
+    // Phase 2: materialize every source-leaf candidate quality profile.
+    for (size_t source = 0; source < topology->switches_lp.size(); ++source) {
+        FatTreeSwitch* leaf = dynamic_cast<FatTreeSwitch*>(
+            topology->switches_lp[source]);
+        assert(leaf);
+        for (uint32_t dst_leaf = 0;
+             dst_leaf < topology->switches_lp.size(); ++dst_leaf) {
+            vector<FibEntry*>* routes =
+                leaf->_fib->getLeafRoutes(dst_leaf);
+            if (!routes)
+                continue;
+            const uint32_t dst =
+                dst_leaf * topology->radix_down(TOR_TIER);
+            for (size_t candidate = 0; candidate < routes->size(); ++candidate)
+                leaf->sglb_quality_snapshot(routes->at(candidate), dst, 1);
+        }
+    }
 }
 
 uint32_t FatTreeSwitch::sglb_next_hop_id(FibEntry* entry) const {
@@ -1279,12 +2399,41 @@ const FatTreeSwitch::SglbPathState* FatTreeSwitch::sglb_neighbor_snapshot(FibEnt
     if (!next)
         return NULL;
 
-    unordered_map<uint32_t,SglbPathState>::const_iterator it = next->_sglb_exported_state.find(dst);
+    if (sglb_ofat_uses_real_gcn_profiles()) {
+        const uint32_t profile = sglb_profile_destination(dst);
+        unordered_map<uint64_t,SglbPathState>::const_iterator received =
+            _sglb_received_profiles.find(
+                paper_sglb_remote_key(next->getID(), profile));
+        if (received == _sglb_received_profiles.end())
+            return NULL;
+        const simtime_picosec now = eventlist().now();
+        if (!sglb_snapshot_usable(
+                received->second, now, _sglb_gcn_aging_interval))
+            return NULL;
+        return &received->second;
+    }
+
+    const uint32_t profile = sglb_profile_destination(dst);
+    unordered_map<uint32_t,SglbPathState>::const_iterator it =
+        next->_sglb_exported_state.find(profile);
     if (it == next->_sglb_exported_state.end())
         return NULL;
 
     simtime_picosec now = eventlist().now();
-    if (!sglb_snapshot_usable(it->second, now, _sglb_gcn_aging_interval))
+    const simtime_picosec aging =
+        _sglb_ofat_factor == SGLB_OFAT_NO_AGING ? 0 :
+        _sglb_gcn_aging_interval;
+    if (_sglb_ofat_factor == SGLB_OFAT_DELAYED_MESSAGE &&
+        now >= it->second.last_update &&
+        now - it->second.last_update < _sglb_ofat_message_delay) {
+        unordered_map<uint32_t,SglbPathState>::const_iterator previous =
+            next->_sglb_previous_exported_state.find(profile);
+        if (previous == next->_sglb_previous_exported_state.end() ||
+            !sglb_snapshot_usable(previous->second, now, aging))
+            return NULL;
+        return &previous->second;
+    }
+    if (!sglb_snapshot_usable(it->second, now, aging))
         return NULL;
 
     return &it->second;
@@ -1350,13 +2499,14 @@ double FatTreeSwitch::sglb_compute_nmrc_score(FibEntry* entry, uint32_t dst,
         *local_valid = true;
 
     double local_fraction = sglb_queue_fraction(q);
-    double local_pressure = sglb_nmrc_queue_pressure(local_fraction);
+    double local_pressure = sglb_nmrc_queue_signal(local_fraction);
     double remote_pressure = 0.0;
     if (depth > 0) {
         const SglbPathState* remote = sglb_neighbor_snapshot(entry, dst);
         if (remote) {
             _sglb_diag_remote_snapshot_used++;
-            remote_pressure = remote->queue_pressure;
+            remote_pressure = sglb_ofat_uses_raw_queue() ?
+                remote->queue_fraction : remote->queue_pressure;
             if (downstream_valid)
                 *downstream_valid = true;
             if (downstream_last_update)
@@ -1365,18 +2515,20 @@ double FatTreeSwitch::sglb_compute_nmrc_score(FibEntry* entry, uint32_t dst,
             _sglb_diag_remote_snapshot_missing++;
         }
     }
-    return sglb_nmrc_noisy_or(local_pressure, remote_pressure);
+    return sglb_nmrc_couple(local_pressure, remote_pressure);
 }
 
 const FatTreeSwitch::SglbQualitySnapshot&
 FatTreeSwitch::sglb_quality_snapshot(FibEntry* entry, uint32_t dst, uint32_t depth) {
     simtime_picosec now = eventlist().now();
-    SglbQualitySnapshot& cached = _sglb_quality_table[dst][entry];
+    SglbQualitySnapshot& cached =
+        _sglb_quality_table[sglb_profile_destination(dst)][entry];
 
     if (cached.valid && _sglb_update_interval > 0 &&
         now >= cached.last_update &&
         now - cached.last_update < _sglb_update_interval) {
         if (depth > 0 && cached.downstream_valid &&
+            _sglb_ofat_factor != SGLB_OFAT_NO_AGING &&
             _sglb_gcn_aging_interval > 0 &&
             (now < cached.downstream_last_update ||
              now - cached.downstream_last_update >
@@ -2246,7 +3398,9 @@ uint32_t FatTreeSwitch::nmrc_maybe_reroute(
 }
 
 uint32_t FatTreeSwitch::sglb_best_score(uint32_t dst, uint32_t depth) {
-    vector<FibEntry*> *available_hops = _fib->getRoutes(dst);
+    vector<FibEntry*> *available_hops = sglb_uses_leaf_profiles() ?
+        _fib->getLeafRoutes(_ft->HOST_POD_SWITCH(dst)) :
+        _fib->getRoutes(dst);
     if (!available_hops || available_hops->empty())
         return 0;
 
@@ -2308,21 +3462,68 @@ uint32_t FatTreeSwitch::sglb_route(vector<FibEntry*>* ecmp_set, uint32_t dst) {
     }
 
     vector<uint32_t> best_choices;
-    uint32_t min_choices = _sglb_min_choices ? _sglb_min_choices : 1;
-    uint32_t levels = _sglb_score_mode == SGLB_SCORE_LEGACY ?
-        (_sglb_quality_levels ? _sglb_quality_levels :
-         (_sglb_max_quality + 1)) : _sglb_nmrc_levels;
-    for (uint32_t q = best_quality;
-         q < levels && best_choices.size() < min_choices; q++) {
-        for (uint32_t i = 0; i < ecmp_set->size(); i++) {
-            if (available[i] && qualities[i] == q)
-                best_choices.push_back(i);
+    bool use_shuffled_rr = false;
+    uint32_t rr_dst_tor = dst;
+    uint64_t rr_quality_signature = 0;
+    if (sglb_ofat_uses_topk8()) {
+        vector<uint64_t> tie_keys(ecmp_set->size(), 0);
+        for (uint32_t i = 0; i < ecmp_set->size(); ++i)
+            tie_keys[i] = (static_cast<uint64_t>(random()) << 32) ^ random();
+        best_choices = paper_sglb_topk_by_level(
+            qualities, available, tie_keys, 8);
+    } else {
+        uint32_t min_choices = _sglb_min_choices ? _sglb_min_choices : 1;
+        if (_sglb_score_mode == SGLB_SCORE_NMRC_QUANTIZED_TOPK &&
+            _sglb_ofat_factor == SGLB_OFAT_REAL_GCN_RAW_LINEAR) {
+            use_shuffled_rr = true;
+            rr_dst_tor = sglb_profile_destination(dst);
+            vector<uint64_t> tie_keys(ecmp_set->size(), 0);
+            for (uint32_t i = 0; i < ecmp_set->size(); ++i) {
+                uint64_t path_state =
+                    (static_cast<uint64_t>(i) << 16) |
+                    (static_cast<uint64_t>(available[i] ? 1 : 0) << 8) |
+                    qualities[i];
+                rr_quality_signature ^= path_state;
+                rr_quality_signature *= 1099511628211ULL;
+            }
+            SglbShuffledRrState& rr_state =
+                _sglb_shuffled_rr_states[rr_dst_tor];
+            const bool next_cycle = !rr_state.valid ||
+                rr_state.quality_signature != rr_quality_signature ||
+                rr_state.cursor >= rr_state.order.size();
+            const uint64_t candidate_generation =
+                rr_state.generation + (next_cycle ? 1 : 0);
+            for (uint32_t i = 0; i < ecmp_set->size(); ++i) {
+                uint32_t low = freeBSDHash(
+                    _id ^ static_cast<uint32_t>(candidate_generation >> 32),
+                    rr_dst_tor ^ static_cast<uint32_t>(candidate_generation),
+                    i);
+                uint32_t high = freeBSDHash(
+                    rr_dst_tor, i, _id ^ low);
+                tie_keys[i] = (static_cast<uint64_t>(high) << 32) | low;
+            }
+            best_choices = paper_sglb_exact_min_by_level(
+                qualities, available, tie_keys, min_choices);
+        } else {
+            uint32_t levels = _sglb_quality_levels ? _sglb_quality_levels :
+                (_sglb_max_quality + 1);
+            for (uint32_t q = best_quality;
+                 q < levels && best_choices.size() < min_choices; q++) {
+                for (uint32_t i = 0; i < ecmp_set->size(); i++) {
+                    if (available[i] && qualities[i] == q)
+                        best_choices.push_back(i);
+                }
+            }
         }
     }
 
     if (best_choices.empty())
         return random() % ecmp_set->size();
-    uint32_t selected = best_choices[random() % best_choices.size()];
+    uint32_t selected = use_shuffled_rr ?
+        sglb_shuffled_rr_select(
+            best_choices, _id, rr_dst_tor, rr_quality_signature,
+            _sglb_shuffled_rr_states[rr_dst_tor]) :
+        best_choices[random() % best_choices.size()];
     _sglb_diag_route_calls++;
     _sglb_diag_available_choices += available_count;
     _sglb_diag_candidate_choices += best_choices.size();
@@ -3248,12 +4449,32 @@ void FatTreeSwitch::maybe_update_stor_feedback(Packet& pkt) {
 
 Route* FatTreeSwitch::getNextHop(Packet& pkt, BaseQueue* ingress_port){
     if (_strategy == SGLB ||
-        (_nmrc_hybrid_enabled && pkt.type() == ROCE))
+        (_nmrc_hybrid_enabled && pkt.type() == ROCE) ||
+        (_strategy == PAPER_SGLB &&
+         _paper_sglb_ablation ==
+             PAPER_SGLB_ABLATION_LEGACY_REMOTE_SEMANTICS))
         sglb_maybe_refresh_export(pkt.dst());
 
-    vector<FibEntry*> * available_hops = _fib->getRoutes(pkt.dst());
+    const bool leaf_routing =
+        _ft && FatTreeTopology::get_tiers() == 2;
+    const uint32_t destination_leaf =
+        leaf_routing ? _ft->HOST_POD_SWITCH(pkt.dst()) : 0;
+    const bool directly_connected =
+        leaf_routing && _type == TOR && destination_leaf == _id;
+    vector<FibEntry*> * available_hops =
+        leaf_routing && !directly_connected ?
+            _fib->getLeafRoutes(destination_leaf) :
+            _fib->getRoutes(pkt.dst());
 
     if (available_hops){
+        if ((_strategy == PAPER_SGLB ||
+             (_strategy == SGLB &&
+              _sglb_ofat_factor == SGLB_OFAT_SHADOW_GCN)) &&
+            _type == AGG &&
+            !available_hops->empty() &&
+            (*available_hops)[0]->getDirection() == DOWN)
+            paper_sglb_observe_remote_on_lookup(
+                _ft->HOST_POD_SWITCH(pkt.dst()));
         //implement a form of ECMP hashing; might need to revisit based on measured performance.
         uint32_t ecmp_choice = 0;
         if (available_hops->size()>1)
@@ -3326,12 +4547,38 @@ Route* FatTreeSwitch::getNextHop(Packet& pkt, BaseQueue* ingress_port){
                 
                 break;
             case SGLB:
-                if (pkt.flow().background_traffic())
+                if (pkt.flow().background_traffic() &&
+                    _sglb_ofat_factor != SGLB_OFAT_BACKGROUND_SGLB)
                     ecmp_choice = freeBSDHash(
                         pkt.flow_id(), pkt.pathid(), _hash_salt
                     ) % available_hops->size();
+                else if (_sglb_ofat_factor == SGLB_OFAT_SOURCE_LEAF_ONLY &&
+                         !(_type == TOR &&
+                           (*available_hops)[0]->getDirection() == UP))
+                    ecmp_choice = pathid_ecmp_choice(
+                        pkt, available_hops->size(),
+                        (*available_hops)[0]->getDirection());
                 else
                     ecmp_choice = sglb_route(available_hops, pkt.dst());
+                break;
+            case PAPER_SGLB:
+                if (pkt.flow().background_traffic() &&
+                    _paper_sglb_ablation ==
+                        PAPER_SGLB_ABLATION_LEGACY_BACKGROUND) {
+                    ecmp_choice = freeBSDHash(
+                        pkt.flow_id(), pkt.pathid(), _hash_salt) %
+                        available_hops->size();
+                } else if (_type == TOR &&
+                    (*available_hops)[0]->getDirection() == UP) {
+                    ecmp_choice = paper_sglb_route(available_hops, pkt);
+                } else if (_paper_sglb_ablation ==
+                               PAPER_SGLB_ABLATION_ALL_SWITCH_DECISIONS) {
+                    ecmp_choice = paper_sglb_route(available_hops, pkt);
+                } else {
+                    ecmp_choice = pathid_ecmp_choice(
+                        pkt, available_hops->size(),
+                        (*available_hops)[0]->getDirection());
+                }
                 break;
             case DRILL:
                 ecmp_choice = drill_route(available_hops, pkt.dst());
@@ -3357,7 +4604,10 @@ Route* FatTreeSwitch::getNextHop(Packet& pkt, BaseQueue* ingress_port){
         } else {
             //route packet up!
             if (_uproutes)
-                _fib->setRoutes(pkt.dst(),_uproutes);
+                if (leaf_routing)
+                    _fib->setLeafRoutes(destination_leaf, _uproutes);
+                else
+                    _fib->setRoutes(pkt.dst(),_uproutes);
             else {
                 uint32_t podid,agg_min,agg_max;
 
@@ -3379,7 +4629,10 @@ Route* FatTreeSwitch::getNextHop(Packet& pkt, BaseQueue* ingress_port){
 
                         r->push_back(_ft->pipes_nlp_nup[_id][k][b]);
                         r->push_back(_ft->queues_nlp_nup[_id][k][b]->getRemoteEndpoint());
-                        _fib->addRoute(pkt.dst(),r,1,UP);
+                        if (leaf_routing)
+                            _fib->addLeafRoute(destination_leaf, r, 1, UP);
+                        else
+                            _fib->addRoute(pkt.dst(),r,1,UP);
                     }
 
                     /*
@@ -3387,7 +4640,9 @@ Route* FatTreeSwitch::getNextHop(Packet& pkt, BaseQueue* ingress_port){
                       assert (next->getType()==AGG && next->getID() == k);
                     */
                 }
-                _uproutes = _fib->getRoutes(pkt.dst());
+                _uproutes = leaf_routing ?
+                    _fib->getLeafRoutes(destination_leaf) :
+                    _fib->getRoutes(pkt.dst());
                 permute_paths(_uproutes);
             }
         }
@@ -3404,7 +4659,10 @@ Route* FatTreeSwitch::getNextHop(Packet& pkt, BaseQueue* ingress_port){
                 r->push_back(_ft->pipes_nup_nlp[_id][target_tor][b]);          
                 r->push_back(_ft->queues_nup_nlp[_id][target_tor][b]->getRemoteEndpoint());
 
-                _fib->addRoute(pkt.dst(),r,1, DOWN);
+                if (leaf_routing)
+                    _fib->addLeafRoute(destination_leaf, r, 1, DOWN);
+                else
+                    _fib->addRoute(pkt.dst(),r,1, DOWN);
             }
         } else {
             //go up!
@@ -3464,7 +4722,10 @@ Route* FatTreeSwitch::getNextHop(Packet& pkt, BaseQueue* ingress_port){
         cerr << "Route lookup on switch with no proper type: " << _type << endl;
         abort();
     }
-    if (!_fib->getRoutes(pkt.dst()))
+    if (leaf_routing && !directly_connected) {
+        if (!_fib->getLeafRoutes(destination_leaf))
+            return NULL;
+    } else if (!_fib->getRoutes(pkt.dst()))
         return NULL;
 
     //FIB has been filled in; return choice. 

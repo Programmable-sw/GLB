@@ -12,7 +12,7 @@ make -C sim -j2
 -tm experiments/n-mrc/evidence/full_global_p16_256mib_background_off_seed13.cm
 -nodes 128 -conns 16256 -tiers 2 -linkspeed 400000
 -queue_type composite_ecn_lb -host_queue_type prio -mtu 4096
--end 100000 -paths 8 -seed 13 -cc dcqcn_variant
+-end 100000 -paths 64 -seed 13 -cc dcqcn_variant
 -roce_rx_mode sp -roce_sack_bitmap_bits 64
 -roce_transport_semantics mrc_exact_bounded -roce_trim_recovery exact
 -hop_latency 0.5 -switch_latency 0.5 -queue_cv_sample_us 100

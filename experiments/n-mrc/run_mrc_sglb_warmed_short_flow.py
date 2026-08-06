@@ -80,7 +80,7 @@ def build_command(sim, scheme, traffic, output, connections, seed):
         "-host_queue_type", "prio",
         "-mtu", "4096",
         "-end", "10000",
-        "-paths", "8",
+        "-paths", "64",
         "-seed", str(seed),
         "-cc", "dcqcn_variant",
         "-roce_rx_mode", "sp",
@@ -89,7 +89,7 @@ def build_command(sim, scheme, traffic, output, connections, seed):
         "-roce_trim_recovery", "exact",
         "-hop_latency", "0.5",
         "-switch_latency", "0.5",
-        "-path_hotspot_spines", "5",
+        "-path_hotspot_spines", "16",
         "-path_hotspot_bg_rate_gbps", "380",
         "-path_hotspot_bg_on_us", "1000",
         "-path_hotspot_bg_off_us", "0",
@@ -344,10 +344,10 @@ def run_cell(seed, scheme, sim, out, traffic_path, connections, force):
         "lb mode " + scheme,
         "RoceTransportConfig semantics=mrc_exact_bounded",
         "Path hotspot background installed",
-        "hot_spines 5 rate 380Gbps on 1000us off 0us",
+        "hot_spines 16 rate 380Gbps on 1000us off 0us",
     ]
     if scheme == "mrc":
-        required.append("MRC: paths 8")
+        required.append("MRC: paths 64")
         if len(parse_mrc_flow_diags(text)) != connections:
             raise ValueError("MRC diagnostic count mismatch")
     else:

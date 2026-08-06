@@ -23,7 +23,7 @@ def run(traffic, output, extra_args):
         stderr=subprocess.STDOUT, check=False)
 
 
-def require_config(result, score_mode, levels):
+def require_config(result, score_mode, levels, min_choices=24):
     if result.returncode != 0:
         raise AssertionError(result.stdout)
     expected = f"SGLB effective config: score mode {score_mode}"
@@ -31,8 +31,9 @@ def require_config(result, score_mode, levels):
         raise AssertionError(f"missing score mode {expected!r}")
     if f"nmrc_levels {levels}" not in result.stdout:
         raise AssertionError(f"missing n-MRC level count {levels}")
-    if "min choices 3" not in result.stdout:
-        raise AssertionError("SGLB top-K minimum is not 3")
+    if f"min choices {min_choices}" not in result.stdout:
+        raise AssertionError(
+            f"SGLB candidate minimum is not {min_choices}")
 
 
 def main():

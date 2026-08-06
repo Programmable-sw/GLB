@@ -66,6 +66,7 @@ static void reset_mrc_config(uint32_t paths) {
     RoceSrc::setReceiveMode(RoceSrc::RX_SP_RETX_QUEUE);
     RoceSrc::setCongestionControl(RoceSrc::CC_NONE);
     RoceSrc::setPathEntropySize(paths);
+    RoceSrc::setMrcCongestionPolicy(RoceSrc::MRC_POLICY_ONE_CYCLE);
     RoceSrc::setMrcCooldownMode(RoceSrc::MRC_COOLDOWN_ONE_CYCLE);
     RoceSrc::setMrcCooldownReferencePkts(86);
     RoceSrc::setMrcAllCoolingFallback(
@@ -317,6 +318,22 @@ static void test_mrc_active_ev_override_and_rr_equivalence() {
                    select_paths(mrc, RoceSrc::LB_MRC, active_evs * 4),
                "RR must match MRC for each active-EV setting");
     }
+
+    reset_mrc_config(64);
+    RoceSrc::setMrcActiveEvs(64);
+    RoceSrc rr64(NULL, NULL, test_eventlist(),
+                 speedFromMbps((uint64_t)100000));
+    RoceSrc mrc64(NULL, NULL, test_eventlist(),
+                  speedFromMbps((uint64_t)100000));
+    configure_identity(rr64, 11, 27, 806);
+    configure_identity(mrc64, 11, 27, 806);
+    mrc64.init_mrc_paths(64);
+    expect(mrc64._mrc_active.size() == 64 &&
+               mrc64._mrc_backup.empty(),
+           "explicit 64-active override must use the full EV universe");
+    expect(select_paths(rr64, RoceSrc::LB_RR, 128) ==
+               select_paths(mrc64, RoceSrc::LB_MRC, 128),
+           "RR must match healthy MRC with all 64 EVs active");
     RoceSrc::setMrcActiveEvs(0);
 }
 

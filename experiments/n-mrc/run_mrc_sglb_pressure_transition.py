@@ -199,7 +199,7 @@ def build_sglb_command(sim, traffic, output, connections, seed=SEED):
         "-host_queue_type", "prio",
         "-mtu", "4096",
         "-end", "40000",
-        "-paths", "8",
+        "-paths", "64",
         "-seed", str(seed),
         "-cc", "dcqcn_variant",
         "-roce_rx_mode", "sp",

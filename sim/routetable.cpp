@@ -31,6 +31,26 @@ vector<FibEntry*>* RouteTable::getRoutes(int destination){
         return _fib[destination];
 }
 
+void RouteTable::addLeafRoute(int destination_leaf, Route* port, int cost,
+                              packet_direction direction) {
+    if (_leaf_fib.find(destination_leaf) == _leaf_fib.end())
+        _leaf_fib[destination_leaf] = new vector<FibEntry*>();
+    assert(port != NULL);
+    _leaf_fib[destination_leaf]->push_back(
+        new FibEntry(port, cost, direction));
+}
+
+vector<FibEntry*>* RouteTable::getLeafRoutes(int destination_leaf) {
+    if (_leaf_fib.find(destination_leaf) == _leaf_fib.end())
+        return NULL;
+    return _leaf_fib[destination_leaf];
+}
+
+void RouteTable::setLeafRoutes(int destination_leaf,
+                               vector<FibEntry*>* routes) {
+    _leaf_fib[destination_leaf] = routes;
+}
+
 HostFibEntry* RouteTable::getHostRoute(int destination,int flowid){
     if (_hostfib.find(destination) == _hostfib.end() ||
         _hostfib[destination]->find(flowid) == _hostfib[destination]->end())

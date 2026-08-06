@@ -30,10 +30,10 @@ def main():
 
     assert runner.NODES == 512
     assert runner.TIERS == 2
-    assert runner.HOSTS_PER_LEAF == 16
-    assert runner.LEAVES == 32
-    assert runner.SPINES == 16
-    assert runner.HOT_SPINES == 4
+    assert runner.HOSTS_PER_LEAF == 64
+    assert runner.LEAVES == 8
+    assert runner.SPINES == 64
+    assert runner.HOT_SPINES == 16
     assert runner.expected_hotspot_background_sources() == 256
     original_leaves = runner.LEAVES
     original_hot_spines = runner.HOT_SPINES
@@ -95,14 +95,14 @@ def main():
         degraded_cmd = runner.build_command(
             by_name["degraded_tornado_1m"], scheme, tm, dat,
             len(runner.make_flows(by_name["degraded_tornado_1m"])))
-        assert option_value(degraded_cmd, "-slow_tor_uplinks") == "12"
+        assert option_value(degraded_cmd, "-slow_tor_uplinks") == "16"
         assert option_value(degraded_cmd, "-slow_tor_uplink_divisor") == "2"
         assert option_value(degraded_cmd, "-slow_tor_uplink_select") == "random-sparse"
 
         hotspot_cmd = runner.build_command(
             by_name["path_hotspot_1m"], scheme, tm, dat,
             len(runner.make_flows(by_name["path_hotspot_1m"])))
-        assert option_value(hotspot_cmd, "-path_hotspot_spines") == "4"
+        assert option_value(hotspot_cmd, "-path_hotspot_spines") == "16"
         assert option_value(hotspot_cmd, "-path_hotspot_bg_rate_gbps") == "300"
         assert option_value(hotspot_cmd, "-path_hotspot_bg_on_us") == "1000"
         assert option_value(hotspot_cmd, "-path_hotspot_bg_off_us") == "0"
@@ -118,6 +118,7 @@ def main():
                 command = runner.build_command(workload, scheme, tm, dat, len(flows))
                 assert option_value(command, "-nodes") == "512"
                 assert option_value(command, "-tiers") == "2"
+                assert option_value(command, "-paths") == "64"
                 assert option_value(command, "-linkspeed") == "400000"
                 assert option_value(command, "-queue_type") == "composite_ecn_lb"
                 assert option_value(command, "-host_queue_type") == "prio"

@@ -22,6 +22,7 @@ struct connection{
     simtime_picosec start;
     int priority;
     uint32_t rate_mbps;
+    bool ecmp_override = false;
     bool addOnTriggerSignal; // 
 };
 

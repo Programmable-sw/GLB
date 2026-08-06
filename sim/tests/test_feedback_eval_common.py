@@ -50,12 +50,14 @@ def delete_item(mapping, key):
 def test_topologies(module):
     assert is_dataclass(module.Topology)
     assert module.TOPOLOGIES == {
-        128: module.Topology(128, 8, 16, 8),
-        512: module.Topology(512, 16, 32, 16),
-        2048: module.Topology(2048, 32, 64, 32),
+        128: module.Topology(128, 64, 2, 64),
+        256: module.Topology(256, 64, 4, 64),
+        512: module.Topology(512, 64, 8, 64),
+        2048: module.Topology(2048, 64, 32, 64),
     }
-    assert [module.TOPOLOGIES[nodes].paths for nodes in (128, 512, 2048)] == [
-        8, 16, 32
+    assert [module.TOPOLOGIES[nodes].paths
+            for nodes in (128, 256, 512, 2048)] == [
+        64, 64, 64, 64
     ]
     try:
         module.TOPOLOGIES[128].nodes = 1
@@ -405,7 +407,7 @@ def test_topology_derived_network_conditions(module):
     assert [module.slow_uplink_count(module.TOPOLOGIES[nodes])
             for nodes in (128, 512, 2048)] == [4, 16, 62]
     assert [module.hot_spine_count(module.TOPOLOGIES[nodes])
-            for nodes in (128, 512, 2048)] == [2, 4, 8]
+            for nodes in (128, 512, 2048)] == [16, 16, 16]
     assert [module.expected_hotspot_sources(module.TOPOLOGIES[nodes])
             for nodes in (128, 512, 2048)] == [64, 256, 1024]
 
@@ -425,7 +427,7 @@ def test_topology_derived_network_conditions(module):
         hotspot_on_us=100, hotspot_off_us=100,
     )
     assert module.network_condition_args(hotspot, topology) == [
-        "-path_hotspot_spines", "4",
+        "-path_hotspot_spines", "16",
         "-path_hotspot_bg_rate_gbps", "300",
         "-path_hotspot_bg_on_us", "100",
         "-path_hotspot_bg_off_us", "100",

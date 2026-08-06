@@ -182,9 +182,10 @@ class Topology:
 
 
 TOPOLOGIES = MappingProxyType({
-    128: Topology(128, 8, 16, 8),
-    512: Topology(512, 16, 32, 16),
-    2048: Topology(2048, 32, 64, 32),
+    128: Topology(128, 64, 2, 64),
+    256: Topology(256, 64, 4, 64),
+    512: Topology(512, 64, 8, 64),
+    2048: Topology(2048, 64, 32, 64),
 })
 
 

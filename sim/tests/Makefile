@@ -8,7 +8,12 @@ CFLAGS += -O2
 SGLB_DATACENTER_OBJ_NAMES=firstfit.o vl2_topology.o fat_tree_topology.o bcube_topology.o connection_matrix.o oversubscribed_fat_tree_topology.o shortflows.o multihomed_fat_tree_topology.o star_topology.o fat_tree_switch.o
 SGLB_DATACENTER_OBJS=$(addprefix ../datacenter/,$(SGLB_DATACENTER_OBJ_NAMES))
 
-all:	htsim_dumbell_ndp htsim_dumbell_ndptunnel htsim_dumbell_tcp htsim_dumbell_swift htsim_multihop_swift htsim_multihop_swift2 htsim_bidir_swift htsim_bidir_ndp htsim_multipath_swift htsim_trigger_test htsim_dumbell_roce htsim_roce_gbn_ooo htsim_roce_sack_fields htsim_roce_sp_sack_correctness htsim_roce_exact_bounded_recovery htsim_roce_schedule htsim_roce_reps_warmup htsim_roce_reps_mrc_semantics htsim_hybrid_nmrc htsim_sglb_quality htsim_nmrc_score htsim_nmrc_shuffled_bucket htsim_stor_feedback htsim_stor_score_trace htsim_composite_ecn htsim_lossless_ecn_counter htsim_dumbell_hpcc htsim_dumbell_strack
+all:	htsim_dumbell_ndp htsim_dumbell_ndptunnel htsim_dumbell_tcp htsim_dumbell_swift htsim_multihop_swift htsim_multihop_swift2 htsim_bidir_swift htsim_bidir_ndp htsim_multipath_swift htsim_trigger_test htsim_dumbell_roce htsim_roce_gbn_ooo htsim_roce_sack_fields htsim_roce_sp_sack_correctness htsim_roce_exact_bounded_recovery htsim_roce_schedule htsim_roce_reps_warmup htsim_roce_reps_mrc_semantics htsim_roce_mrc_skip_semantics htsim_hybrid_nmrc htsim_sglb_quality htsim_sglb_gcn htsim_paper_sglb htsim_nmrc_score htsim_nmrc_shuffled_bucket htsim_stor_feedback htsim_stor_score_trace htsim_composite_ecn htsim_lossless_ecn_counter htsim_connection_matrix_lb htsim_dumbell_hpcc htsim_dumbell_strack
+
+htsim_connection_matrix_lb:	main_connection_matrix_lb.o $(LIBDEP) ../datacenter/connection_matrix.o
+	$(CC) $(CFLAGS) main_connection_matrix_lb.o ../datacenter/connection_matrix.o -o htsim_connection_matrix_lb $(LIBS)
+
+main_connection_matrix_lb.o:	main_connection_matrix_lb.cpp ../datacenter/connection_matrix.h
 
 htsim_dumbell_ndp:  main_dumbell_ndp.o $(LIBDEP)
 	$(CC) $(CFLAGS) main_dumbell_ndp.o -o htsim_dumbell_ndp $(LIBS)
@@ -43,6 +48,11 @@ htsim_roce_reps_mrc_semantics:	main_roce_reps_mrc_semantics.o $(LIBDEP)
 
 main_roce_reps_mrc_semantics.o: main_roce_reps_mrc_semantics.cpp ../roce.h ../rocepacket.h
 
+htsim_roce_mrc_skip_semantics:	main_roce_mrc_skip_semantics.o $(LIBDEP)
+	$(CC) $(CFLAGS) main_roce_mrc_skip_semantics.o -o htsim_roce_mrc_skip_semantics $(LIBS)
+
+main_roce_mrc_skip_semantics.o: main_roce_mrc_skip_semantics.cpp ../roce.h ../rocepacket.h
+
 htsim_hybrid_nmrc:	main_hybrid_nmrc.o $(LIBDEP)
 	$(CC) $(CFLAGS) main_hybrid_nmrc.o -o htsim_hybrid_nmrc $(LIBS)
 
@@ -56,6 +66,16 @@ htsim_sglb_quality:	main_sglb_quality.o $(LIBDEP) sglb_datacenter_objects
 	$(CC) $(CFLAGS) main_sglb_quality.o $(SGLB_DATACENTER_OBJS) -o htsim_sglb_quality $(LIBS)
 
 main_sglb_quality.o:	main_sglb_quality.cpp ../datacenter/fat_tree_switch.h
+
+htsim_sglb_gcn:	main_sglb_gcn.o $(LIBDEP) sglb_datacenter_objects
+	$(CC) $(CFLAGS) main_sglb_gcn.o $(SGLB_DATACENTER_OBJS) -o htsim_sglb_gcn $(LIBS)
+
+main_sglb_gcn.o:	main_sglb_gcn.cpp ../datacenter/fat_tree_switch.h ../sglbpacket.h
+
+htsim_paper_sglb:	main_paper_sglb.o $(LIBDEP) sglb_datacenter_objects
+	$(CC) $(CFLAGS) main_paper_sglb.o $(SGLB_DATACENTER_OBJS) -o htsim_paper_sglb $(LIBS)
+
+main_paper_sglb.o:	main_paper_sglb.cpp ../datacenter/fat_tree_switch.h ../sglbpacket.h
 
 htsim_nmrc_score:	main_nmrc_score.o $(LIBDEP) sglb_datacenter_objects
 	$(CC) $(CFLAGS) main_nmrc_score.o $(SGLB_DATACENTER_OBJS) -o htsim_nmrc_score $(LIBS)

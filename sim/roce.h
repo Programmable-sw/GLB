@@ -61,6 +61,12 @@ public:
         MRC_COOLDOWN_ONE_CYCLE = 1
     } mrc_cooldown_mode_t;
     typedef enum {
+        MRC_POLICY_SKIP_TOKEN = 0,
+        MRC_POLICY_SKIP_ROTATION = 1,
+        MRC_POLICY_ONE_CYCLE = 2,
+        MRC_POLICY_CWND_SCALED = 3
+    } mrc_congestion_policy_t;
+    typedef enum {
         MRC_ALL_COOLING_EARLIEST = 0,
         MRC_ALL_COOLING_ROUND_ROBIN = 1
     } mrc_all_cooling_fallback_t;
@@ -241,6 +247,21 @@ public:
     static const std::map<uint32_t, uint64_t>& diagSelectedEvHist() {return _diag_selected_ev_hist;}
     static const std::map<uint32_t, uint64_t>& diagSelectedPhysicalHist() {return _diag_selected_physical_hist;}
     static const std::vector<uint32_t>& diagFirstSelectedEvs() {return _diag_first_selected_evs;}
+    static void setMrcCongestionPolicy(mrc_congestion_policy_t policy) {
+        _mrc_congestion_policy = policy;
+    }
+    static mrc_congestion_policy_t mrcCongestionPolicy() {
+        return _mrc_congestion_policy;
+    }
+    static const char* mrcCongestionPolicyName() {
+        switch (_mrc_congestion_policy) {
+        case MRC_POLICY_SKIP_TOKEN: return "skip_token";
+        case MRC_POLICY_SKIP_ROTATION: return "skip_rotation";
+        case MRC_POLICY_ONE_CYCLE: return "one_cycle";
+        case MRC_POLICY_CWND_SCALED: return "cwnd_scaled";
+        }
+        return "unknown";
+    }
     static void setMrcCooldownMode(mrc_cooldown_mode_t mode) {
         _mrc_cooldown_mode = mode;
     }
@@ -287,12 +308,32 @@ public:
     static uint32_t mrcActiveEvs() {
         return _mrc_active_evs;
     }
+    static bool mrcUsesCanonical64Profile() {
+        return _mrc_congestion_policy == MRC_POLICY_SKIP_TOKEN ||
+            _mrc_congestion_policy == MRC_POLICY_SKIP_ROTATION;
+    }
     static uint32_t resolvedMrcActiveEvs(uint32_t path_space) {
-        uint32_t limit = std::min(path_space ? path_space : 1U, 32U);
-        return _mrc_active_evs ? std::min(_mrc_active_evs, limit) : limit;
+        if (mrcUsesCanonical64Profile())
+            return path_space == 64 ? 64 : 0;
+        uint32_t available = path_space ? path_space : 1U;
+        if (_mrc_active_evs)
+            return std::min(_mrc_active_evs, available);
+        return std::min(available, 32U);
     }
     static void setMrcFailedRetry(simtime_picosec retry) {_mrc_failed_retry = retry;}
     static void setMrcProbeIntervalPkts(uint32_t pkts) {_mrc_probe_interval_pkts = pkts;}
+    static void setMrcFailureRecoveryEnabled(bool enabled) {
+        _mrc_failure_recovery_enabled = enabled;
+    }
+    static bool mrcFailureRecoveryEnabled() {
+        return _mrc_failure_recovery_enabled;
+    }
+    static void setMrcProbeSuccessThreshold(uint32_t successes) {
+        _mrc_probe_success_threshold = successes ? successes : 1;
+    }
+    static uint32_t mrcProbeSuccessThreshold() {
+        return _mrc_probe_success_threshold;
+    }
     static void setConweaveRttThreshold(simtime_picosec threshold) {_conweave_rtt_threshold = threshold;}
     static void setConweaveMinRerouteGap(simtime_picosec gap) {_conweave_min_reroute_gap = gap;}
     static void setNdpInitialWindow(uint32_t pkts) {_ndp_initial_window = pkts ? pkts : 1;}
@@ -471,6 +512,10 @@ public:
     uint64_t _mrc_feedback_physical_fallback_events;
     uint64_t _mrc_feedback_cumulative_mismatch_events;
     uint64_t _mrc_select_counter;
+    uint64_t _mrc_rotation;
+    uint32_t _mrc_rotation_slot;
+    uint64_t _mrc_skip_opportunities_consumed;
+    uint64_t _mrc_data_on_non_good_violations;
     uint64_t _mrc_cycle_cooling_events;
     uint64_t _mrc_cycle_cooling_expiries;
     uint64_t _mrc_cooling_skip_selection_sum;
@@ -573,12 +618,15 @@ public:
     static uint32_t _reps_buffer_size;
     static uint32_t _reps_warmup_pkts;
     static uint32_t _hosts_per_tor;
+    static mrc_congestion_policy_t _mrc_congestion_policy;
     static mrc_cooldown_mode_t _mrc_cooldown_mode;
     static uint32_t _mrc_cooldown_reference_pkts;
     static mrc_all_cooling_fallback_t _mrc_all_cooling_fallback;
     static uint32_t _mrc_active_evs;
     static simtime_picosec _mrc_failed_retry;
     static uint32_t _mrc_probe_interval_pkts;
+    static bool _mrc_failure_recovery_enabled;
+    static uint32_t _mrc_probe_success_threshold;
     static simtime_picosec _conweave_rtt_threshold;
     static simtime_picosec _conweave_min_reroute_gap;
     static uint32_t _ndp_initial_window;
@@ -710,6 +758,7 @@ private:
             : logical_ev(logical), physical_path(physical) {}
     };
     MrcChoice choose_mrc_ev(uint32_t path_space);
+    MrcChoice choose_mrc_skip_ev(uint32_t path_space);
     MrcChoice choose_mrc_retx_ev(uint32_t path_space,
                                  uint32_t original_logical_ev);
     void publish_mrc_shared(uint32_t ev, mrc_shared_signal_t signal);
@@ -743,6 +792,7 @@ private:
         uint32_t logical_ev,
         mrc_congestion_signal_t signal = MRC_CONGESTION_ECN);
     bool mrc_mark_failed(uint32_t logical_ev);
+    bool mrc_note_probe_result(uint32_t logical_ev, bool success);
     void mrc_promote_backup(uint32_t path_space);
     uint32_t mrc_choose_probe_ev(uint32_t path_space);
     void mrc_note_clean_ack(RocePacket::seq_t ackno,
@@ -802,11 +852,16 @@ private:
         RepsBufferEntry() : cached_ev(0), valid(false) {}
     };
     enum MrcPathState {
-        MRC_PATH_UNUSED = 0,
-        MRC_PATH_ACTIVE = 1,
-        MRC_PATH_COOLING = 2,
-        MRC_PATH_FAILED = 3,
-        MRC_PATH_PROBING = 4
+        MRC_EV_DENIED = 0,
+        MRC_EV_GOOD = 1,
+        MRC_EV_SKIP = 2,
+        MRC_EV_ASSUMED_BAD = 3,
+        MRC_EV_PROBING = 4,
+        MRC_PATH_UNUSED = MRC_EV_DENIED,
+        MRC_PATH_ACTIVE = MRC_EV_GOOD,
+        MRC_PATH_COOLING = MRC_EV_SKIP,
+        MRC_PATH_FAILED = MRC_EV_ASSUMED_BAD,
+        MRC_PATH_PROBING = MRC_EV_PROBING
     };
     struct MrcEv {
         uint32_t logical_ev;
@@ -815,11 +870,15 @@ private:
         uint8_t probe_successes;
         simtime_picosec retry_after;
         uint64_t cool_until_select_count;
+        bool skip_pending;
+        uint64_t resume_rotation;
+        uint64_t congestion_epoch;
         bool awaiting_post_cooldown_feedback;
         MrcEv()
             : logical_ev(0), physical_path(0), state(MRC_PATH_UNUSED),
               probe_successes(0), retry_after(0),
-              cool_until_select_count(0),
+              cool_until_select_count(0), skip_pending(false),
+              resume_rotation(0), congestion_epoch(0),
               awaiting_post_cooldown_feedback(false) {}
     };
     struct MrcFlowMetrics {

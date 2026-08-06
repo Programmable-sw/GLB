@@ -94,6 +94,8 @@ RoceSrc::nmrc_all_cooling_policy_t RoceSrc::_nmrc_all_cooling_policy =
 uint32_t RoceSrc::_reps_buffer_size = 8;
 uint32_t RoceSrc::_reps_warmup_pkts = 0;
 uint32_t RoceSrc::_hosts_per_tor = 1;
+RoceSrc::mrc_congestion_policy_t RoceSrc::_mrc_congestion_policy =
+    RoceSrc::MRC_POLICY_SKIP_TOKEN;
 RoceSrc::mrc_cooldown_mode_t RoceSrc::_mrc_cooldown_mode =
     RoceSrc::MRC_COOLDOWN_ONE_CYCLE;
 uint32_t RoceSrc::_mrc_cooldown_reference_pkts = 1;
@@ -102,6 +104,8 @@ RoceSrc::mrc_all_cooling_fallback_t RoceSrc::_mrc_all_cooling_fallback =
 uint32_t RoceSrc::_mrc_active_evs = 0;
 simtime_picosec RoceSrc::_mrc_failed_retry = timeFromUs(100.0);
 uint32_t RoceSrc::_mrc_probe_interval_pkts = 256;
+bool RoceSrc::_mrc_failure_recovery_enabled = false;
+uint32_t RoceSrc::_mrc_probe_success_threshold = 3;
 simtime_picosec RoceSrc::_conweave_rtt_threshold = timeFromUs(16.0);
 simtime_picosec RoceSrc::_conweave_min_reroute_gap = timeFromUs(4.0);
 uint32_t RoceSrc::_ndp_initial_window = 256;
@@ -368,6 +372,10 @@ RoceSrc::RoceSrc(RoceLogger* logger, TrafficLogger* pktlogger, EventList &eventl
     _mrc_feedback_physical_fallback_events = 0;
     _mrc_feedback_cumulative_mismatch_events = 0;
     _mrc_select_counter = 0;
+    _mrc_rotation = 0;
+    _mrc_rotation_slot = 0;
+    _mrc_skip_opportunities_consumed = 0;
+    _mrc_data_on_non_good_violations = 0;
     _mrc_cycle_cooling_events = 0;
     _mrc_cycle_cooling_expiries = 0;
     _mrc_cooling_skip_selection_sum = 0;
@@ -2916,6 +2924,8 @@ void RoceSrc::reset_mrc_paths() {
     _mrc_seq_sent_at.clear();
     _mrc_shared_consumed.clear();
     _mrc_select_counter = 0;
+    _mrc_rotation = 0;
+    _mrc_rotation_slot = 0;
 }
 
 uint32_t RoceSrc::mrc_logical_ev_count(uint32_t path_space) const {
@@ -2937,6 +2947,11 @@ bool RoceSrc::mrc_ev_in_active(uint32_t logical_ev) const {
 void RoceSrc::init_mrc_paths(uint32_t path_space) {
     if (path_space == 0)
         path_space = 1;
+    if (mrcUsesCanonical64Profile() && path_space != 64) {
+        cerr << "canonical MRC skip policies require exactly 64 paths; got "
+             << path_space << endl;
+        abort();
+    }
     uint32_t logical_count = mrc_logical_ev_count(path_space);
     if (_mrc_paths_ready && _mrc_evs.size() == logical_count &&
         _mrc_path_space == path_space)
@@ -2961,6 +2976,9 @@ void RoceSrc::init_mrc_paths(uint32_t path_space) {
         _mrc_evs[logical].probe_successes = 0;
         _mrc_evs[logical].retry_after = 0;
         _mrc_evs[logical].cool_until_select_count = 0;
+        _mrc_evs[logical].skip_pending = false;
+        _mrc_evs[logical].resume_rotation = 0;
+        _mrc_evs[logical].congestion_epoch = 0;
     }
 
     for (uint32_t i = 0; i < desired_active; i++) {
@@ -2980,6 +2998,8 @@ void RoceSrc::init_mrc_paths(uint32_t path_space) {
 
 bool RoceSrc::mrc_cooling_expired(const MrcEv& ev) const {
     if (ev.state != MRC_PATH_COOLING)
+        return false;
+    if (mrcUsesCanonical64Profile())
         return false;
     if (ev.cool_until_select_count)
         return _mrc_select_counter >= ev.cool_until_select_count;
@@ -3038,6 +3058,8 @@ void RoceSrc::mrc_activate_ev(uint32_t logical_ev) {
     _mrc_evs[logical_ev].state = MRC_PATH_ACTIVE;
     _mrc_evs[logical_ev].retry_after = 0;
     _mrc_evs[logical_ev].cool_until_select_count = 0;
+    _mrc_evs[logical_ev].skip_pending = false;
+    _mrc_evs[logical_ev].resume_rotation = 0;
     _mrc_evs[logical_ev].probe_successes = 0;
     if (was_cooling)
         _mrc_evs[logical_ev].awaiting_post_cooldown_feedback = true;
@@ -3113,6 +3135,29 @@ bool RoceSrc::mrc_mark_congested(uint32_t logical_ev,
     if (logical_ev >= _mrc_evs.size())
         return false;
     MrcEv& ev = _mrc_evs[logical_ev];
+    if (mrcUsesCanonical64Profile()) {
+        if (ev.state != MRC_EV_GOOD) {
+            if (ev.state == MRC_EV_SKIP)
+                _mrc_duplicate_feedback_ignored++;
+            return false;
+        }
+        ev.state = MRC_EV_SKIP;
+        ev.skip_pending = false;
+        ev.resume_rotation = 0;
+        ev.retry_after = 0;
+        ev.cool_until_select_count = 0;
+        ev.probe_successes = 0;
+        ev.awaiting_post_cooldown_feedback = false;
+        ev.congestion_epoch++;
+        if (_mrc_congestion_policy == MRC_POLICY_SKIP_TOKEN)
+            ev.skip_pending = true;
+        else
+            ev.resume_rotation = _mrc_rotation + 1;
+        _mrc_cycle_cooling_events++;
+        sample_mrc_state_counts();
+        (void)signal;
+        return true;
+    }
     if (ev.state == MRC_PATH_FAILED)
         return false;
     bool cwnd_scaled_feedback =
@@ -3156,17 +3201,28 @@ bool RoceSrc::mrc_mark_failed(uint32_t logical_ev) {
     if (logical_ev >= _mrc_evs.size())
         return false;
 
+    const bool canonical = mrcUsesCanonical64Profile();
+    if (canonical && !_mrc_failure_recovery_enabled)
+        return false;
+
     MrcEv& ev = _mrc_evs[logical_ev];
     if (ev.state == MRC_PATH_FAILED)
         return false;
     ev.awaiting_post_cooldown_feedback = false;
     if (ev.state == MRC_PATH_PROBING)
         _mrc_probe_fail_events++;
-    mrc_remove_active_ev(logical_ev);
+    if (!canonical)
+        mrc_remove_active_ev(logical_ev);
     ev.state = MRC_PATH_FAILED;
     ev.probe_successes = 0;
     ev.retry_after = eventlist().now() + _mrc_failed_retry;
     ev.cool_until_select_count = 0;
+    ev.skip_pending = false;
+    ev.resume_rotation = 0;
+    if (canonical) {
+        sample_mrc_state_counts();
+        return true;
+    }
     uint64_t replacements_before = _mrc_backup_replacement_events;
     mrc_promote_backup(_path_entropy_size ? _path_entropy_size : 1);
     _mrc_failure_backup_promotions +=
@@ -3175,7 +3231,38 @@ bool RoceSrc::mrc_mark_failed(uint32_t logical_ev) {
     return true;
 }
 
+bool RoceSrc::mrc_note_probe_result(uint32_t logical_ev, bool success) {
+    if (!_mrc_failure_recovery_enabled || logical_ev >= _mrc_evs.size())
+        return false;
+    MrcEv& ev = _mrc_evs[logical_ev];
+    if (ev.state != MRC_EV_ASSUMED_BAD && ev.state != MRC_EV_PROBING)
+        return false;
+
+    _mrc_probe_events++;
+    if (!success) {
+        ev.state = MRC_EV_ASSUMED_BAD;
+        ev.probe_successes = 0;
+        _mrc_probe_fail_events++;
+        sample_mrc_state_counts();
+        return false;
+    }
+
+    ev.state = MRC_EV_PROBING;
+    ev.probe_successes++;
+    _mrc_probe_success_events++;
+    if (ev.probe_successes < _mrc_probe_success_threshold) {
+        sample_mrc_state_counts();
+        return false;
+    }
+
+    mrc_activate_ev(logical_ev);
+    sample_mrc_state_counts();
+    return true;
+}
+
 uint32_t RoceSrc::mrc_choose_probe_ev(uint32_t path_space) {
+    if (mrcUsesCanonical64Profile() && !_mrc_failure_recovery_enabled)
+        return UINT32_MAX;
     if (_mrc_probe_interval_pkts == 0 || _packets_sent == 0 ||
         _packets_sent % _mrc_probe_interval_pkts != 0)
         return UINT32_MAX;
@@ -3230,6 +3317,9 @@ RoceSrc::MrcChoice RoceSrc::choose_mrc_ev(uint32_t path_space) {
     init_mrc_paths(path_space);
     consume_mrc_shared();
     sample_mrc_state_counts();
+
+    if (mrcUsesCanonical64Profile())
+        return choose_mrc_skip_ev(path_space);
 
     uint32_t probe = mrc_choose_probe_ev(path_space);
     if (probe != UINT32_MAX)
@@ -3326,10 +3416,62 @@ RoceSrc::MrcChoice RoceSrc::choose_mrc_ev(uint32_t path_space) {
     return mrc_note_selected_choice(MrcChoice(UINT32_MAX, random() % path_space));
 }
 
+RoceSrc::MrcChoice RoceSrc::choose_mrc_skip_ev(uint32_t path_space) {
+    const uint32_t nominal_slots = (uint32_t)_mrc_active.size();
+    if (nominal_slots != 64) {
+        cerr << "canonical MRC selector expected 64 nominal slots; got "
+             << nominal_slots << endl;
+        abort();
+    }
+
+    const uint32_t max_visits = nominal_slots * 2;
+    for (uint32_t visits = 0; visits < max_visits; ++visits) {
+        const uint64_t slot_rotation = _mrc_rotation;
+        const uint32_t slot = _mrc_rotation_slot;
+        const uint32_t logical_ev = _mrc_active[slot];
+        MrcEv& ev = _mrc_evs[logical_ev];
+
+        _mrc_rotation_slot++;
+        if (_mrc_rotation_slot == nominal_slots) {
+            _mrc_rotation_slot = 0;
+            _mrc_rotation++;
+        }
+
+        if (_mrc_congestion_policy == MRC_POLICY_SKIP_ROTATION &&
+            ev.state == MRC_EV_SKIP &&
+            slot_rotation >= ev.resume_rotation) {
+            mrc_activate_ev(logical_ev);
+        }
+
+        if (_mrc_congestion_policy == MRC_POLICY_SKIP_TOKEN &&
+            ev.state == MRC_EV_SKIP && ev.skip_pending) {
+            ev.skip_pending = false;
+            ev.state = MRC_EV_GOOD;
+            ev.awaiting_post_cooldown_feedback = true;
+            _mrc_skip_opportunities_consumed++;
+            continue;
+        }
+
+        if (ev.state != MRC_EV_GOOD)
+            continue;
+
+        return mrc_note_selected_choice(
+            MrcChoice(logical_ev, ev.physical_path % path_space));
+    }
+
+    _mrc_data_on_non_good_violations++;
+    cerr << "canonical MRC selector found no GOOD EV after "
+         << max_visits << " ordinary slot visits" << endl;
+    abort();
+}
+
 RoceSrc::MrcChoice RoceSrc::choose_mrc_retx_ev(uint32_t path_space,
                                                uint32_t original_logical_ev) {
     init_mrc_paths(path_space);
     consume_mrc_shared();
+
+    if (mrcUsesCanonical64Profile())
+        return choose_mrc_skip_ev(path_space);
 
     if (original_logical_ev == UINT32_MAX ||
         original_logical_ev >= _mrc_evs.size())

@@ -1,5 +1,10 @@
 # MRC 与 SGLB 高压力流大小转折对比
 
+> **历史拓扑说明：** 本文已有曲线和数值使用旧的 128 节点、8-Spine
+> 自动拓扑。当前标准已经覆盖为固定 64 Spine、每 Leaf 64 上联/64 下联，
+> 因此本文结果只作为历史轻量机制验证；标准结论需要使用更新后的 runner
+> 重新运行。
+
 ## 结论
 
 原 `focused_transition.png` 比较的是 **MRC 与 RR**。其中 RR 是 MRC
@@ -25,6 +30,91 @@ MRC/RR 明显不同：
 图中上半部分是严格配对后的 `MRC FCT / SGLB FCT` 几何均值，小于 1
 表示 MRC 更快；下半部分仍是 MRC 自身的 actionable-flow 比例，只用于
 解释 MRC 反馈闭环何时具备作用机会，不是 SGLB 的反馈指标。
+
+## 错峰启动复核：新 QP 进入已经形成压力的网络
+
+### 实验决策
+
+没有另造同步或分阶段 workload。原 5 ms WebSearch trace 已经满足这次
+问题的控制要求：
+
+- 每个源按 Poisson 过程独立产生流，启动时刻散布在 0 到 5 ms；
+- 同一 trace 混合 6 KiB 到 30 MiB 的 12 档流；
+- 60% 和 80% 负载分别有 11,077 和 14,748 条流；
+- MRC 与 SGLB 使用完全相同的 `flow_id/src/dst/start/size`，只改变
+  `-lb`。
+
+因此这次不需要修改 traffic。新增分析按外生的启动窗口 `[0,1)` 到
+`[4,5)` ms 切分同一批逐流配对结果。图的上栏分别统计 MRC 和 SGLB
+运行中，新流启动时已经开始但尚未完成的旧流数。这个数用于说明网络中已有
+多少持续流，不把它当作队列长度，也不作为因果分组条件。
+
+![Staggered MRC and SGLB cold-start transition](output/mrc_sglb_pressure_transition_examples_5ms/staggered_start_transition.png)
+
+图中四类流按 MRC 的发送和反馈阶段划分：
+
+- `sub sweep`：6 到 19 KiB，新数据选择不足一次 8 EV sweep；
+- `sweep no action`：33 到 133 KiB，可以完成 sweep，但没有状态更新被
+  后续新数据选择消费；
+- `transition`：667 KiB 到 1.3 MiB，部分 QP 进入反馈闭环；
+- `closed loop`：3.3 到 30 MiB，大部分 QP 已有可作用反馈。
+
+下表每个流阶段的单元格都是
+`MRC/SGLB 配对 FCT 几何均值 / actionable-flow 比例`。比值大于 1
+表示 SGLB 更快。
+
+| 80% 负载启动窗口 | MRC/SGLB 启动时在途流 | 6 到 19 KiB | 33 到 133 KiB | 667 KiB 到 1.3 MiB | 3.3 到 30 MiB |
+|---:|---:|---:|---:|---:|---:|
+| 0 到 1 ms | 257.3 / 255.9 | 1.0079 / 0.0% | 1.0195 / 0.0% | 1.0103 / 46.8% | 1.0115 / 79.4% |
+| 1 到 2 ms | 447.9 / 444.1 | 0.9883 / 0.0% | 1.0413 / 0.0% | 0.9968 / 60.0% | 1.0172 / 87.3% |
+| 2 到 3 ms | 587.7 / 579.6 | 1.0037 / 0.0% | 1.0291 / 0.0% | 1.0051 / 65.2% | 1.0096 / 89.8% |
+| 3 到 4 ms | 679.9 / 670.8 | 1.0125 / 0.0% | **1.0707 / 0.0%** | **0.9856 / 68.5%** | 1.0092 / 93.9% |
+| 4 到 5 ms | 727.5 / 726.6 | 1.0075 / 0.0% | **1.0643 / 0.0%** | 1.0002 / 70.6% | **0.9970 / 92.0%** |
+
+这组切分比单纯按流大小画线更接近要验证的冷启动问题。80% 负载的平均
+在途流从第一个窗口的约 256 条增至最后一个窗口的约 727 条。后到的短流
+不是在空网络中启动。
+
+最清楚的冷启动惩罚出现在 33 到 133 KiB，而不是最小的 6 到 19 KiB。
+前一组在 3 到 5 ms 启动时，MRC 比 SGLB 慢 6.4% 到 7.1%。其中
+37.3% 到 38.0% 的 MRC 流在完成前已经收到质量反馈，但
+actionable-flow 比例仍为 0。反馈到达以后没有新的数据选择，所以这些 QP
+仍无法用自己的学习结果保护当前流。6 到 19 KiB 只发送很少的数据包，
+初始随机喷洒是否碰到慢路占主导，MRC/SGLB 因而在 0.988 到 1.013 之间
+波动，不能据此宣称 SGLB 对所有极短流都必胜。
+
+当流增至 667 KiB 到 1.3 MiB，晚到窗口已有 68.5% 到 70.6% 的流具备
+actionable feedback，MRC/SGLB 回到 0.986 到 1.000。3.3 MiB 以上流的
+actionable 比例达到 92.0% 到 93.9%，FCT 比值为 0.997 到 1.009。
+这里支持的是"闭环生效后 MRC 追近 SGLB"，不是"MRC 长流必然超过
+SGLB"。
+
+60% 负载提供了一个有用的敏感性检查。3 到 5 ms 的平均在途流只有约
+330 到 348 条，33 到 133 KiB 的 FCT 比值也降至 1.007 和 1.014。
+冷启动劣势随启动时压力减弱，说明差异来自"新 QP 在无本地状态时进入已经
+拥塞的网络"这一条件，而不是只由流大小标签决定。
+
+### 对整体完成跨度的影响
+
+这里的 CCT 是开放到达 trace 从第一条流启动到最后一条流完成的跨度，不是
+一次同步 collective 的完成时间。
+
+| 负载 | 流数 | MRC CCT | SGLB CCT | MRC/SGLB |
+|---:|---:|---:|---:|---:|
+| 60% | 11,077 | 7,775.63 μs | 7,746.20 μs | 1.00380 |
+| 80% | 14,748 | 7,938.88 μs | 7,933.82 μs | 1.00064 |
+
+短流冷启动会改变相应 cohort 的 FCT，但没有明显改变这批开放到达 workload
+的整体完成跨度。CCT 由最后完成的长尾流决定，不能替代分流阶段的 FCT
+分析。
+
+### actionable 的口径
+
+`actionable_feedback` 不是"QP 结束前收到一个反馈就加一"。代码只在
+一次有效路径状态更新之后，又发生至少一次新数据选择时，才把该更新记为
+actionable。图和表使用的是 `actionable_feedback > 0` 的 flow 比例。
+它表示反馈有机会影响后续新数据选路，不保证实际选择一定偏离无状态 RR；
+恢复和重传对状态的消费也没有计入这个指标。
 
 ## 条件性证明：SGLB 已有公共视角时，短流中的 MRC 明显处于劣势
 
@@ -277,6 +367,10 @@ FCT 分布分别取 p99 后再相除，两者不是同一个统计量。例如 6
 - 逐流严格配对数据：`output/mrc_sglb_pressure_transition_examples_5ms/paired_flow_metrics.csv.gz`
 - PNG 图：[`focused_transition.png`](output/mrc_sglb_pressure_transition_examples_5ms/focused_transition.png)
 - PDF 图：[`focused_transition.pdf`](output/mrc_sglb_pressure_transition_examples_5ms/focused_transition.pdf)
+- 错峰启动分析脚本：[`analyze_mrc_sglb_staggered_start.py`](analyze_mrc_sglb_staggered_start.py)
+- 错峰 cohort 汇总：[`staggered_start_summary.csv`](output/mrc_sglb_pressure_transition_examples_5ms/staggered_start_summary.csv)
+- 错峰 CCT 汇总：[`staggered_scenario_summary.csv`](output/mrc_sglb_pressure_transition_examples_5ms/staggered_scenario_summary.csv)
+- 错峰三联图：[`staggered_start_transition.png`](output/mrc_sglb_pressure_transition_examples_5ms/staggered_start_transition.png) 和 [`PDF`](output/mrc_sglb_pressure_transition_examples_5ms/staggered_start_transition.pdf)
 - SGLB 原始命令、stdout 和 cell summary：`output/mrc_sglb_pressure_transition_examples_5ms/raw/`
 - 预热短流运行脚本：[`run_mrc_sglb_warmed_short_flow.py`](run_mrc_sglb_warmed_short_flow.py)
 - 预热短流三 seed 汇总：[`summary.csv`](output/mrc_sglb_warmed_short_flow/summary.csv)

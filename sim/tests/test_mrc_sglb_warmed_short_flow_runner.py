@@ -42,7 +42,7 @@ def test_commands_are_identical_except_lb_and_output(tmp_path):
     left.pop("-o")
     right.pop("-o")
     assert left == right
-    assert left["-path_hotspot_spines"] == "5"
+    assert left["-path_hotspot_spines"] == "16"
     assert left["-path_hotspot_bg_rate_gbps"] == "380"
     assert left["-path_hotspot_bg_on_us"] == "1000"
     assert left["-end"] == "10000"

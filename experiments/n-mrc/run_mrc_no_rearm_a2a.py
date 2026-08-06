@@ -95,7 +95,7 @@ def main():
     }
     manifest = {
         "nodes": 128,
-        "paths": 8,
+        "paths": 64,
         "seeds": seeds,
         "scheme": "mrc",
         "cooldown_mode": "one_cycle",

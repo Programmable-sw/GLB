@@ -216,6 +216,9 @@ Packet::str() const {
     case ROCEFASTCNP:
         s = "ROCEFASTCNP";
         break;
+    case ROCEEVPROBE:
+        s = "ROCEEVPROBE";
+        break;
     case HPCC:
         s = "HPCC";
         break;
@@ -242,6 +245,9 @@ Packet::str() const {
         break;
     case CNP:
         s = "CNP";
+        break;
+    case SGLB_GCN:
+        s = "SGLB_GCN";
         break;
     }
     return s;

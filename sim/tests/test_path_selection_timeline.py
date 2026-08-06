@@ -43,7 +43,7 @@ def main():
             "-host_queue_type", "prio",
             "-mtu", "4096",
             "-end", "1000",
-            "-paths", "8",
+            "-paths", "64",
             "-seed", "13",
             "-cc", "dcqcn_variant",
             "-roce_rx_mode", "sp",
@@ -72,14 +72,14 @@ def main():
         if len(rows) < 2:
             raise AssertionError(f"expected multiple timeline rows, got {len(rows)}")
         expected = {"time_us", "selected_total", "cumulative_cv"}
-        expected.update(f"path_{index}" for index in range(8))
+        expected.update(f"path_{index}" for index in range(64))
         if set(rows[0]) != expected:
             raise AssertionError(f"unexpected timeline columns: {rows[0].keys()}")
 
         previous_total = 0
         for row in rows:
             total = int(row["selected_total"])
-            counts = [int(row[f"path_{index}"]) for index in range(8)]
+            counts = [int(row[f"path_{index}"]) for index in range(64)]
             if total <= previous_total:
                 raise AssertionError("selected_total must increase monotonically")
             if sum(counts) != total:

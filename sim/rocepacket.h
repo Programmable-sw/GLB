@@ -443,5 +443,43 @@ protected:
     static PacketDB<RoceFastCnp> _packetdb;
 };
 
+class RoceEvProbe : public Packet {
+public:
+    inline static RoceEvProbe* newpkt(
+            PacketFlow& flow, const Route& route, uint64_t request_id,
+            uint32_t target_ev, bool response, bool success) {
+        assert(target_ev <= 0xffffU);
+        RoceEvProbe* p = _packetdb.allocPacket();
+        p->set_route(flow, route, RocePacket::ACKSIZE,
+                     (packetid_t)(request_id & 0xffffffffU));
+        p->_type = ROCEEVPROBE;
+        p->_is_header = true;
+        p->_direction = NONE;
+        p->_path_len = route.size();
+        p->_request_id = request_id;
+        p->_target_ev = (uint16_t)target_ev;
+        p->_response = response;
+        p->_success = success;
+        p->set_pathid(UINT32_MAX);
+        p->set_flags(0);
+        return p;
+    }
+
+    void free() {_packetdb.freePacket(this);}
+    inline uint64_t request_id() const {return _request_id;}
+    inline uint32_t target_ev() const {return _target_ev;}
+    inline bool response() const {return _response;}
+    inline bool success() const {return _success;}
+    virtual PktPriority priority() const {return Packet::PRIO_HI;}
+    virtual ~RoceEvProbe() {}
+
+protected:
+    uint64_t _request_id;
+    uint16_t _target_ev;
+    bool _response;
+    bool _success;
+    static PacketDB<RoceEvProbe> _packetdb;
+};
+
 
 #endif

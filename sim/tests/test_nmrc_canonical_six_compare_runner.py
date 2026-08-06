@@ -93,7 +93,7 @@ def main():
                     ("-queue_type", "composite_ecn_lb"),
                     ("-host_queue_type", "prio"),
                     ("-mtu", "4096"),
-                    ("-paths", "8"),
+                    ("-paths", "64"),
                     ("-cc", "dcqcn_variant"),
                     ("-roce_rx_mode", "sp"),
                     ("-roce_sack_bitmap_bits", "64"),

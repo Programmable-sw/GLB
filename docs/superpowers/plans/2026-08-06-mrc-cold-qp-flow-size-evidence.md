@@ -61,7 +61,7 @@
 - Modify: `experiments/n-mrc/run_mrc_sglb_steady_mixed_256.py`
 
 **Interfaces:**
-- Consumes: the simulator's existing `-mixed_lb_traffic` rule, which gives matrix entries `index % 10 == 0` a per-flow `LB_ECMP` override and marks them as background.
+- Consumes: an explicit connection-matrix token, `lb ecmp`, which gives only the tagged connection a per-flow `LB_ECMP` override and marks it as background.
 - Produces: `build_ecmp_mixed_flows(seed, measured_flows)` and an `ecmp_mixed` command/validation path.
 
 - [ ] **Step 1: Define background-flow constants**
@@ -70,11 +70,11 @@
 
 - [ ] **Step 2: Build an explicitly indexed mixed matrix**
 
-  Implement `build_ecmp_mixed_flows` by emitting one dedicated `ecmp_background` connection followed by at most nine measured connections per group. Assign fresh unique flow IDs after construction. This makes exactly the dedicated connections satisfy the simulator's existing `index % 10 == 0` ECMP override without routing a measured short flow through ECMP.
+  Implement `build_ecmp_mixed_flows` as 16 dedicated `ecmp_background` connections, each tagged `lb ecmp`, alongside an unchanged measured traffic matrix. Assign fresh unique flow IDs to the background connections. The explicit token prevents measured short flows from being routed through ECMP.
 
 - [ ] **Step 3: Add the condition command and validation**
 
-  For `ecmp_mixed`, call the healthy base command and append `-mixed_lb_traffic`. Require `MixedLbDiag enabled=on`, the exact total/background/main counts, and completion lines with `bg traffic 1` only for dedicated background flow IDs.
+  For `ecmp_mixed`, call the healthy base command with the combined matrix. Require `ExplicitLbDiag ecmp_background_flows=16`, the exact measured/background completion counts, and completion lines with `bg traffic 1` only for dedicated background flow IDs.
 
 - [ ] **Step 4: Keep measured-flow pairing independent of background flows**
 

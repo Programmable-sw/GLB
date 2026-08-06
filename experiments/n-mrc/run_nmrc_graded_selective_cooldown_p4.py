@@ -157,7 +157,7 @@ def main():
 
     manifest = {
         "nodes": 128,
-        "paths": 8,
+        "paths": 64,
         "seed": args.seed,
         "scheme": "n-mrc",
         "parallel": 4,

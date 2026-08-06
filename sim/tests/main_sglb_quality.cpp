@@ -397,6 +397,32 @@ static void test_nmrc_relative_action_identity_and_histogram_boundaries() {
 }
 
 int main() {
+    FatTreeSwitch::configure_sglb_scheme_defaults(false);
+    expect(FatTreeSwitch::_sglb_ofat_factor ==
+               FatTreeSwitch::SGLB_OFAT_REAL_GCN_RAW_LINEAR,
+           "sglb must default to real-GCN raw-linear paper semantics");
+    expect(FatTreeSwitch::_sglb_min_choices == 24,
+           "sglb must default to exact-min24 best-level selection");
+    expect_near(FatTreeSwitch::_sglb_nmrc_degraded_threshold, 0.05, 1e-12,
+                "sglb good threshold must default to 5 percent");
+    expect_near(FatTreeSwitch::_sglb_nmrc_bad_threshold, 0.10, 1e-12,
+                "sglb degraded threshold must default to 10 percent");
+    expect_near(FatTreeSwitch::_sglb_nmrc_avoid_threshold, 0.20, 1e-12,
+                "sglb bad threshold must default to 20 percent");
+
+    FatTreeSwitch::configure_sglb_scheme_defaults(true);
+    expect(FatTreeSwitch::_sglb_ofat_factor ==
+               FatTreeSwitch::SGLB_OFAT_BASELINE,
+           "sglb-old must retain the original implementation");
+    expect(FatTreeSwitch::_sglb_min_choices == 3,
+           "sglb-old must retain min3 selection");
+    expect_near(FatTreeSwitch::_sglb_nmrc_degraded_threshold, 0.10, 1e-12,
+                "sglb-old must retain the 10 percent first threshold");
+    expect_near(FatTreeSwitch::_sglb_nmrc_bad_threshold, 0.40, 1e-12,
+                "sglb-old must retain the 40 percent second threshold");
+    expect_near(FatTreeSwitch::_sglb_nmrc_avoid_threshold, 0.60, 1e-12,
+                "sglb-old must retain the 60 percent third threshold");
+
     EventList eventlist;
 
     expect(FatTreeSwitch::_sglb_score_mode ==
@@ -407,8 +433,8 @@ int main() {
     expect(!std::strcmp(FatTreeSwitch::sglb_score_mode_name(),
                         "nmrc_quantized_topk"),
            "default SGLB score mode should have a stable diagnostic name");
-    expect(FatTreeSwitch::_sglb_gcn_update_interval == timeFromUs(5.0),
-           "SGLB downstream GCN export should refresh every 5us by default");
+    expect(FatTreeSwitch::_sglb_gcn_update_interval == timeFromUs(15.0),
+           "SGLB downstream GCN export should refresh every 15us by default");
     expect(FatTreeSwitch::_nmrc_reroute_policy ==
                FatTreeSwitch::NMRC_REROUTE_BETTER_GE3,
            "library and CLI hybrid n-MRC defaults must use better-ge3");
@@ -661,11 +687,21 @@ int main() {
             FatTreeSwitch::SGLB_SCORE_NMRC_QUANTIZED_TOPK;
         FatTreeSwitch::_sglb_nmrc_levels = 4;
         FatTreeSwitch::_sglb_min_choices = 3;
+        FatTreeSwitch::_sglb_ofat_factor =
+            FatTreeSwitch::SGLB_OFAT_REAL_GCN_RAW_LINEAR;
         FatTreeSwitch::reset_sglb_route_diag();
         for (uint32_t i = 0; i < 64; i++)
             sw.sglb_route(&routes, 79);
+        expect(FatTreeSwitch::_sglb_diag_candidate_choices == 64 * 3,
+               "quantized selection should sample the boundary level and "
+               "stop exactly at K");
+
+        FatTreeSwitch::_sglb_ofat_factor = FatTreeSwitch::SGLB_OFAT_BASELINE;
+        FatTreeSwitch::reset_sglb_route_diag();
+        for (uint32_t i = 0; i < 64; i++)
+            sw.sglb_route(&routes, 81);
         expect(FatTreeSwitch::_sglb_diag_candidate_choices == 64 * 4,
-               "quantized top-k should add the whole next level to reach K");
+               "sglb-old should retain whole-level fill and random choice");
 
         q1.set_queuesize(0);
         q2.set_queuesize(0);
@@ -904,6 +940,9 @@ int main() {
             FatTreeSwitch::NMRC_REROUTE_BETTER_GE3;
         FatTreeSwitch::_sglb_update_interval = 0;
         FatTreeSwitch::_sglb_gcn_aging_interval = timeFromUs(5.0);
+        // This hybrid-routing fixture needs an immediately refreshed remote
+        // snapshot; it must not inherit the production SGLB 15us cadence.
+        FatTreeSwitch::_sglb_gcn_update_interval = 0;
         FatTreeSwitch::_nmrc_hybrid_enabled = false;
         FatTreeSwitch::_nmrc_fastcnp_enabled = true;
 

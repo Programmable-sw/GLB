@@ -78,6 +78,24 @@ TRIM 同时作用于传输恢复和负载均衡。对传输层来说，它触发
 
 该入口使用旧的累计 TRIM 恢复和 Natural inflate，不能与当前的 Exact+Bounded 模式混用。
 
+## 标准仿真拓扑
+
+所有二层主实验统一使用固定 64-Spine 的全带宽 Leaf–Spine：每台 Leaf 有
+64 个 400Gbps 主机下联和 64 个 400Gbps Spine 上联，并分别连接 64 台主机
+和全部 64 台 Spine。网络规模只通过 Leaf 数量变化：
+
+```text
+spines         = 64
+hosts_per_leaf = 64
+leaves         = nodes / 64
+physical_paths = 64
+```
+
+因此 128、512、2048 节点分别对应 2、8、32 台 Leaf，Spine 数和物理路径数
+始终为 64。`-paths` 小于 64 只允许用于明确标注的 EV/候选集消融，不能解释
+为物理拓扑路径数。小于 64 节点或节点数不是 64 倍数的拓扑仅用于单元测试，
+不属于标准实验结果。
+
 ## 128 节点主实验
 
 主实验固定比较 `ops`、`reps`、`mrc`、`sglb` 和 `n-mrc`，使用 seeds `13,29,47`。健康 P2P 额外运行 `ecmp`，用于计算相对 ECMP 的加速比。

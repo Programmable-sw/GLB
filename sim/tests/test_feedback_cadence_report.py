@@ -29,12 +29,12 @@ CADENCES = ("fixed5", "fixed_rtt", "bdp_triggered")
 EVALUATION_STAGES = ("pilot-time", "pilot-bdp", "simple", "alltoall")
 FIXTURE_TOPOLOGIES = {
     128: {
-        "nodes": 128, "hosts_per_leaf": 8, "leaves": 16,
-        "spines": 8, "paths": 8, "tiers": 2,
+        "nodes": 128, "hosts_per_leaf": 64, "leaves": 2,
+        "spines": 64, "paths": 64, "tiers": 2,
     },
     512: {
-        "nodes": 512, "hosts_per_leaf": 16, "leaves": 32,
-        "spines": 16, "paths": 16, "tiers": 2,
+        "nodes": 512, "hosts_per_leaf": 64, "leaves": 8,
+        "spines": 64, "paths": 64, "tiers": 2,
     },
 }
 SCENARIOS = (
@@ -750,7 +750,7 @@ def test_feedback_overhead_requires_and_uses_total_feedback_messages():
         rows = module.load_rows(fixture.root)
         assert rows.rejections == []
         assert rows[0]["feedback_count"] == 9
-        assert rows[0]["feedback_bytes"] == 9
+        assert rows[0]["feedback_bytes"] == 72
 
         missing, missing_key = write_single_fixture(Path(temp_dir) / "missing")
         missing.mutate(
@@ -1040,7 +1040,7 @@ def test_load_rows_and_aggregate_complete_fixture():
         assert healthy["p99_fct_us_min"] == 99.0
         assert healthy["p99_fct_us_max"] == 101.0
         assert healthy["feedback_count_median"] == 1010
-        assert healthy["feedback_bytes_median"] == 1010
+        assert healthy["feedback_bytes_median"] == 8080
         assert healthy["queue_cv_median"] == 0.125
         alltoall = summary[(
             128, "full_global_p4_64mib_background_off",

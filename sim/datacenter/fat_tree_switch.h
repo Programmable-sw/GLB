@@ -12,7 +12,10 @@
 
 class FatTreeTopology;
 class SglbGcnTimer;
+class SglbRealGcnTimer;
 class NetawareExportTimer;
+class SglbGcnPacket;
+struct SglbGcnRecord;
 
 /*
  * Copyright (C) 2013-2014 Universita` di Pisa. All rights reserved.
@@ -94,7 +97,8 @@ public:
     };
 
     enum routing_strategy {
-        NIX = 0, ECMP = 1, ADAPTIVE_ROUTING = 2, ECMP_ADAPTIVE = 3, RR = 4, RR_ECMP = 5, SGLB = 6, DRILL = 7
+        NIX = 0, ECMP = 1, ADAPTIVE_ROUTING = 2, ECMP_ADAPTIVE = 3, RR = 4, RR_ECMP = 5, SGLB = 6, DRILL = 7,
+        PAPER_SGLB = 8
     };
 
     enum sticky_choices {
@@ -114,9 +118,139 @@ public:
     uint32_t sglb_best_score(uint32_t dst, uint32_t depth);
     uint32_t drill_route(vector<FibEntry*>* ecmp_set, uint32_t dst);
 
+    struct PaperSglbRemoteState {
+        uint8_t level;
+        uint64_t version;
+        bool link_up;
+        double remote_queue;
+        double remote_utilization;
+        double remote_busyness;
+        simtime_picosec received_at;
+        bool valid;
+
+        PaperSglbRemoteState()
+            : level(0), version(0), link_up(true), remote_queue(0.0),
+              remote_utilization(0.0), remote_busyness(0.0),
+              received_at(0), valid(false) {}
+    };
+
+    struct PaperSglbFactors {
+        double local_queue;
+        double local_utilization;
+        double remote_queue;
+        double remote_utilization;
+        double remote_busyness;
+
+        PaperSglbFactors()
+            : local_queue(0.0), local_utilization(0.0),
+              remote_queue(0.0), remote_utilization(0.0),
+              remote_busyness(0.0) {}
+    };
+
+    static double paper_sglb_value(const PaperSglbFactors& factors);
+    static uint8_t paper_sglb_ar_level(double value);
+    static vector<uint32_t> paper_sglb_best_level(
+        const vector<uint8_t>& levels, const vector<bool>& available,
+        uint32_t min_choices);
+    static vector<uint32_t> paper_sglb_exact_min_by_level(
+        const vector<uint8_t>& levels, const vector<bool>& available,
+        const vector<uint64_t>& tie_keys, uint32_t min_choices);
+
+    struct SglbShuffledRrState {
+        vector<uint32_t> members;
+        vector<uint32_t> order;
+        size_t cursor;
+        uint64_t generation;
+        uint64_t quality_signature;
+        bool valid;
+
+        SglbShuffledRrState()
+            : cursor(0), generation(0), quality_signature(0), valid(false) {}
+    };
+
+    static uint32_t sglb_shuffled_rr_select(
+        const vector<uint32_t>& candidates, uint32_t switch_id,
+        uint32_t dst_tor, uint64_t quality_signature,
+        SglbShuffledRrState& state);
+    static vector<uint32_t> paper_sglb_topk_by_level(
+        const vector<uint8_t>& levels, const vector<bool>& available,
+        const vector<uint64_t>& tie_keys, uint32_t k);
+    static bool paper_sglb_snapshot_refresh_due(
+        bool valid, simtime_picosec last_update, simtime_picosec now,
+        simtime_picosec interval);
+    static bool paper_sglb_emit_due(
+        bool has_sent, simtime_picosec last_sent, simtime_picosec now,
+        simtime_picosec interval);
+
+    static double paper_sglb_noisy_or(double local, double remote);
+    static double paper_sglb_queue_pressure(double queue_fraction);
+    static uint8_t paper_sglb_quantized_level(double score, uint32_t levels);
+    static vector<uint32_t> paper_sglb_strict_topk(
+        const vector<uint8_t>& levels, const vector<double>& scores,
+        const vector<bool>& available, const vector<uint64_t>& stable_keys,
+        uint32_t k);
+    static bool paper_sglb_accept_gcn(
+        PaperSglbRemoteState& state, bool link_up, double remote_queue,
+        double remote_utilization, double remote_busyness, uint8_t level,
+        uint64_t version, simtime_picosec received_at);
+    static void initialize_paper_sglb(FatTreeTopology* topology,
+                                      simtime_picosec propagation_delay);
+    void receive_paper_sglb_gcn(SglbGcnPacket& packet);
+    uint32_t paper_sglb_route(vector<FibEntry*>* ecmp_set, Packet& pkt);
+
+    enum PaperSglbSelectionMode {
+        PAPER_SGLB_BEST_LEVEL = 0,
+        PAPER_SGLB_TOPK = 1
+    };
+
+    enum PaperSglbRemoteMode {
+        PAPER_SGLB_REMOTE_GCN_PROFILE = 0,
+        PAPER_SGLB_REMOTE_DIRECT = 1
+    };
+
+    enum PaperSglbAblation {
+        PAPER_SGLB_ABLATION_NONE = 0,
+        PAPER_SGLB_ABLATION_LEGACY_CANDIDATES,
+        PAPER_SGLB_ABLATION_LEGACY_NOISY_OR,
+        PAPER_SGLB_ABLATION_LEGACY_QUEUE_PRESSURE,
+        PAPER_SGLB_ABLATION_LEGACY_LEVELS,
+        PAPER_SGLB_ABLATION_LEGACY_REMOTE_SEMANTICS,
+        PAPER_SGLB_ABLATION_LEGACY_TRANSPORT,
+        PAPER_SGLB_ABLATION_LAZY_INIT,
+        PAPER_SGLB_ABLATION_NO_VERSION,
+        PAPER_SGLB_ABLATION_ALL_SWITCH_DECISIONS,
+        PAPER_SGLB_ABLATION_LEGACY_BACKGROUND,
+        PAPER_SGLB_ABLATION_NO_CONTROL_BANDWIDTH
+    };
+
+    static const char* paper_sglb_remote_mode_name();
+    static const char* paper_sglb_ablation_name();
+
     enum SglbScoreMode {
         SGLB_SCORE_LEGACY = 0,
         SGLB_SCORE_NMRC_QUANTIZED_TOPK = 1
+    };
+
+    enum SglbOfatFactor {
+        SGLB_OFAT_BASELINE = 0,
+        SGLB_OFAT_TOPK8,
+        SGLB_OFAT_LINEAR_SCORE,
+        SGLB_OFAT_RAW_QUEUE,
+        SGLB_OFAT_PAPER_LEVELS,
+        SGLB_OFAT_REMOTE_MEAN,
+        SGLB_OFAT_CHANGE_TRIGGERED,
+        SGLB_OFAT_DELAYED_MESSAGE,
+        SGLB_OFAT_EAGER_INIT,
+        SGLB_OFAT_VERSIONED,
+        SGLB_OFAT_NO_AGING,
+        SGLB_OFAT_SOURCE_LEAF_ONLY,
+        SGLB_OFAT_BACKGROUND_SGLB,
+        SGLB_OFAT_SHADOW_GCN,
+        SGLB_OFAT_RAW_QUEUE_TOPK8,
+        SGLB_OFAT_RAW_PAPER_LEVELS_TOPK8,
+        SGLB_OFAT_RAW_LINEAR_PAPER_LEVELS_TOPK8,
+        SGLB_OFAT_REAL_GCN_PROFILES,
+        SGLB_OFAT_REAL_GCN_RAW_LINEAR
     };
 
     enum NmrcReroutePolicy {
@@ -274,6 +408,7 @@ public:
         double queue_pressure;
         uint32_t candidate_count;
         uint8_t quality;
+        uint64_t version;
         simtime_picosec last_update;
         bool valid;
         bool link_available;
@@ -281,9 +416,37 @@ public:
         SglbPathState()
             : score(0.0), best_score(0.0), avg_busy(0.0),
               queue_fraction(0.0), queue_pressure(0.0), candidate_count(0),
-              quality(0), last_update(0),
+              quality(0), version(0), last_update(0),
               valid(false), link_available(true) {}
     };
+
+    struct SglbGcnProducerState {
+        SglbPathState current;
+        SglbPathState advertised;
+        simtime_picosec last_sample;
+        simtime_picosec last_sent;
+        uint64_t version;
+        bool valid;
+        bool dirty;
+        bool has_sent;
+        bool timer_pending;
+
+        SglbGcnProducerState()
+            : last_sample(0), last_sent(0), version(0), valid(false),
+              dirty(false), has_sent(false), timer_pending(false) {}
+    };
+
+    static bool sglb_gcn_export_changed(
+        const SglbPathState& advertised,
+        const SglbPathState& observed);
+    static bool sglb_gcn_observe_export(
+        SglbGcnProducerState& producer,
+        const SglbPathState& observed,
+        simtime_picosec now,
+        simtime_picosec sample_interval);
+    static void sglb_gcn_mark_advertised(
+        SglbGcnProducerState& producer,
+        simtime_picosec now);
 
     struct SglbQualitySnapshot {
         double score;
@@ -495,9 +658,24 @@ public:
 
     static double sglb_nmrc_queue_pressure(double queue_fraction);
     static double sglb_nmrc_noisy_or(double local, double remote);
+    static double sglb_nmrc_queue_signal(double queue_fraction);
+    static double sglb_nmrc_couple(double local, double remote);
     static uint8_t sglb_nmrc_level(double score);
     static uint8_t sglb_nmrc_quantized_level(double score, uint32_t levels);
     static const char* sglb_score_mode_name();
+    static const char* sglb_ofat_factor_name();
+    static void configure_sglb_scheme_defaults(bool legacy);
+    static bool sglb_ofat_uses_topk8();
+    static bool sglb_ofat_uses_raw_queue();
+    static bool sglb_ofat_uses_linear_score();
+    static bool sglb_ofat_uses_paper_levels();
+    static bool sglb_ofat_uses_real_gcn_profiles();
+    static bool sglb_accept_real_gcn_profile(
+        SglbPathState& state, const SglbGcnRecord& record,
+        uint64_t version, simtime_picosec received_at);
+    static void initialize_sglb_ofat(FatTreeTopology* topology);
+    static void initialize_sglb_real_gcn_profiles(
+        FatTreeTopology* topology);
 
     static const char* netaware_score_mode_name();
     static const char* netaware_path_coupling_name();
@@ -582,9 +760,35 @@ public:
     static uint32_t _sglb_min_choices;
     static simtime_picosec _sglb_gcn_update_interval;
     static simtime_picosec _sglb_gcn_aging_interval;
+    static simtime_picosec _paper_sglb_sample_interval;
+    static simtime_picosec _paper_sglb_gcn_interval;
+    static simtime_picosec _paper_sglb_gcn_delay;
+    static double _paper_sglb_weight_local_queue;
+    static double _paper_sglb_weight_local_util;
+    static double _paper_sglb_weight_remote_queue;
+    static double _paper_sglb_weight_remote_util;
+    static double _paper_sglb_weight_remote_busy;
+    static PaperSglbSelectionMode _paper_sglb_selection_mode;
+    static PaperSglbRemoteMode _paper_sglb_remote_mode;
+    static PaperSglbAblation _paper_sglb_ablation;
+    static uint32_t _paper_sglb_levels;
+    static uint32_t _paper_sglb_k;
+    static double _paper_sglb_q_low;
+    static double _paper_sglb_q_high;
+    static uint64_t _paper_sglb_diag_route_calls;
+    static uint64_t _paper_sglb_diag_candidate_sum;
+    static uint64_t _paper_sglb_diag_remote_missing;
+    static uint64_t _paper_sglb_diag_gcn_updates;
+    static uint64_t _paper_sglb_diag_gcn_deliveries;
+    static uint64_t _paper_sglb_diag_gcn_packets;
+    static uint64_t _paper_sglb_diag_gcn_bytes;
+    static uint64_t _paper_sglb_diag_gcn_stale;
+    static uint64_t _paper_sglb_diag_gcn_profile_updates;
     static bool _sglb_normalize_scores;
     static bool _sglb_local_damping;
     static SglbScoreMode _sglb_score_mode;
+    static SglbOfatFactor _sglb_ofat_factor;
+    static simtime_picosec _sglb_ofat_message_delay;
     static double _sglb_nmrc_q_min;
     static double _sglb_nmrc_q_max;
     static double _sglb_nmrc_degraded_threshold;
@@ -792,8 +996,38 @@ private:
     unordered_map<uint32_t,StorState> _stor_states;
     unordered_map<uint32_t,uint32_t> _drill_memory;
     unordered_map<uint32_t,SglbPathState> _sglb_exported_state;
+    unordered_map<uint32_t,SglbPathState> _sglb_previous_exported_state;
     unordered_map<uint32_t,unordered_map<FibEntry*,SglbQualitySnapshot> > _sglb_quality_table;
+    unordered_map<uint32_t,SglbShuffledRrState> _sglb_shuffled_rr_states;
+    unordered_map<uint64_t,SglbPathState> _sglb_received_profiles;
     unordered_map<uint32_t,bool> _sglb_neighbor_available;
+    unordered_map<uint64_t,PaperSglbRemoteState> _paper_sglb_remote;
+    struct PaperSglbLocalState {
+        double queue;
+        double utilization;
+        simtime_picosec last_update;
+        bool valid;
+        PaperSglbLocalState()
+            : queue(0.0), utilization(0.0), last_update(0), valid(false) {}
+    };
+    struct PaperSglbProducerState {
+        PaperSglbFactors current;
+        PaperSglbFactors advertised;
+        simtime_picosec last_sample;
+        bool valid;
+        PaperSglbProducerState()
+            : last_sample(0), valid(false) {}
+    };
+    unordered_map<BaseQueue*,PaperSglbLocalState> _paper_sglb_local;
+    unordered_map<uint32_t,PaperSglbProducerState> _paper_sglb_producers;
+    unordered_map<uint32_t,vector<Route*> > _paper_sglb_gcn_routes;
+    unordered_map<uint32_t,SglbGcnProducerState> _sglb_gcn_producers;
+    unordered_map<uint32_t,SglbRealGcnTimer*> _sglb_real_gcn_timers;
+    PacketFlow* _paper_sglb_gcn_flow;
+    simtime_picosec _paper_sglb_gcn_last_sent;
+    uint64_t _paper_sglb_gcn_version;
+    bool _paper_sglb_gcn_dirty;
+    bool _paper_sglb_gcn_has_sent;
     SglbGcnTimer* _sglb_gcn_timer;
     bool _sglb_gcn_timer_pending;
     unordered_map<BaseQueue*,NetawarePortSnapshot> _netaware_local_state;
@@ -810,14 +1044,25 @@ private:
     unordered_map<Packet*,bool> _packets;
 
     void sglb_candidate_queues(uint32_t dst, vector<BaseQueue*>& queues);
+    void paper_sglb_observe_remote_on_lookup(uint32_t destination_tor);
+    void paper_sglb_emit_if_due();
     uint32_t sglb_queue_kbytes(BaseQueue* q);
     double sglb_queue_fraction(BaseQueue* q);
     uint32_t sglb_utilization_percent(BaseQueue* q);
     double sglb_port_score(BaseQueue* q, double queue_weight, double util_weight);
     SglbPathState sglb_compute_export_state(uint32_t dst);
     void sglb_maybe_refresh_export(uint32_t dst);
+    bool sglb_uses_leaf_profiles() const;
+    uint32_t sglb_profile_destination(uint32_t dst) const;
+    uint32_t sglb_profile_observation_destination(uint32_t profile) const;
     void sglb_schedule_periodic_gcn();
     void sglb_periodic_refresh_exports();
+    void sglb_observe_real_gcn_export(uint32_t destination);
+    void sglb_schedule_real_gcn(uint32_t destination,
+                                simtime_picosec delay);
+    void sglb_real_gcn_timer_fired(uint32_t destination);
+    void sglb_emit_real_gcn(uint32_t destination);
+    void receive_sglb_real_gcn(SglbGcnPacket& packet);
     const SglbPathState* sglb_neighbor_snapshot(FibEntry* entry, uint32_t dst) const;
     uint32_t sglb_next_hop_id(FibEntry* entry) const;
     bool sglb_entry_available(FibEntry* entry) const;
@@ -874,6 +1119,7 @@ private:
     static void stor_note_level_transition(StorEvState& ev, uint8_t old_level);
 
     friend class SglbGcnTimer;
+    friend class SglbRealGcnTimer;
     friend class NetawareExportTimer;
 };
 

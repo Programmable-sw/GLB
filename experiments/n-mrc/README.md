@@ -185,6 +185,10 @@ python3 experiments/n-mrc/run_stor_aging_compare.py
 2.多流/多 NIC 共享交换机视图的路径表，让每个流有即时回避拥塞能力而非牺牲业务包的探索；
 3.实现端侧可见的 EV-PATH 映射，协助 cc 使网络不再黑盒。
 
+标准二层拓扑固定为 64 台 Spine；每台 Leaf 有 64 个主机下联和 64 个
+Spine 上联。节点规模仅通过 `leaves = nodes / 64` 改变，因而 128、512、
+2048 节点分别使用 2、8、32 台 Leaf，物理跨 Leaf 路径数始终为 64。
+
 仿真默认配置是：
 
 ```text
@@ -195,7 +199,10 @@ ecn Kmax   = 0.8 * queue
 EV/pathid  = source 端逐包填写，交换机按单 EV 哈希
 ```
 
-EV 空间仍然用 `pathid` 表示。没有显式 `-paths` 时，source-controlled LB 会按拓扑自动校准 EV 数量：二层网络下是 `leaf uplinks * spine downlinks`。例如 2k 节点、64 条二层路径时，EV set 大小就是 64。
+EV 空间仍然用 `pathid` 表示。没有显式 `-paths` 时，source-controlled LB
+会按拓扑自动校准 EV 数量。标准二层网络有 64 条跨 Leaf 物理路径，因此
+默认 EV set 大小为 64；实验若显式设置更小的活跃 EV 数，必须标注为 EV
+集合消融，不能当作另一种物理拓扑。
 
 交换机分工：
 

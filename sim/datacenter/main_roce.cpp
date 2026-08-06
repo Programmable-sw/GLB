@@ -777,7 +777,7 @@ const char* nmrc_network_decision_name(
 }
 
 void exit_error(char* progr) {
-    cout << "Usage " << progr << " [-nodes N] [-conns C] [-q queue_size] [-tm traffic_matrix_file]\\n\\t[-lb ecmp|ecmp_rr|adaptive-routing|sglb|drill|reps|avail|grade|mrc|mrc-shared|netaware|n-mrc|n-mrc-fixed0.5|n-mrc-delta|rr|ops|conweave|ndp]\\n\\t[-cc none|dcqcn|dcqcn_variant|mprdma]" << endl;
+    cout << "Usage " << progr << " [-nodes N] [-conns C] [-q queue_size] [-tm traffic_matrix_file]\\n\\t[-lb ecmp|ecmp_rr|adaptive-routing|sglb|sglb-old|sglb-paper|drill|reps|avail|grade|mrc|mrc-shared|netaware|n-mrc|n-mrc-fixed0.5|n-mrc-delta|rr|ops|conweave|ndp]\\n\\t[-cc none|dcqcn|dcqcn_variant|mprdma]" << endl;
     cout << "\t[-roce_sack_bitmap_bits 64|128]" << endl;
     cout << "\t[-roce_transport_semantics legacy|mrc_exact_bounded]" << endl;
     cout << "\t[-roce_trim_recovery cumulative|exact]" << endl;
@@ -832,6 +832,8 @@ void exit_error(char* progr) {
     cout << "\t[-nmrc_graded_cooldown selective|full|none]" << endl;
     cout << "\t[-nmrc_graded_reroute_delta VALUE]" << endl;
     cout << "\t[-nmrc_route_delta VALUE] [-nmrc_cooldown_delta VALUE]" << endl;
+    cout << "\t[-mrc_congestion_policy skip_token|skip_rotation|one_cycle|cwnd_scaled]" << endl;
+    cout << "\t[-mrc_failure_recovery on|off] [-mrc_probe_success_threshold N]" << endl;
     cout << "\t[-mrc_active_evs K]" << endl;
     cout << "\t[-queue_cv_sample_us x]" << endl;
     cout << "\t[-path_selection_timeline file] "
@@ -914,6 +916,7 @@ int main(int argc, char **argv) {
     double queue_cv_sample_us = 0.0;
     string path_selection_timeline_file;
     uint64_t path_selection_timeline_every = 100000;
+    double paper_sglb_gcn_delay_us = -1.0;
     double stor_feedback_min_us = 5.0;
     double stor_feedback_max_us = 5.0;
     double stor_trim_feedback_min_us = 5.0;
@@ -1004,6 +1007,10 @@ int main(int argc, char **argv) {
     bool mrc_active_evs_user_set = false;
     uint32_t mrc_min_active_paths = 1;
     uint32_t mrc_path_bits = 0;
+    RoceSrc::mrc_congestion_policy_t mrc_congestion_policy =
+        RoceSrc::MRC_POLICY_SKIP_TOKEN;
+    bool mrc_congestion_policy_user_set = false;
+    bool mrc_cooldown_mode_user_set = false;
     RoceSrc::mrc_cooldown_mode_t mrc_cooldown_mode =
         RoceSrc::MRC_COOLDOWN_ONE_CYCLE;
     uint32_t mrc_cooldown_reference_pkts = 0;
@@ -1012,6 +1019,8 @@ int main(int argc, char **argv) {
         RoceSrc::MRC_ALL_COOLING_EARLIEST;
     double mrc_failed_retry_us = 100.0;
     uint32_t mrc_probe_interval_pkts = 256;
+    bool mrc_failure_recovery_enabled = false;
+    uint32_t mrc_probe_success_threshold = 3;
 
     bool log_sink = false;
     bool log_tor_downqueue = false;
@@ -1158,9 +1167,21 @@ int main(int argc, char **argv) {
                 lb_scheme_name = "ecmp_rr";
             } else if (!strcmp(argv[i+1], "sglb")) {
                 route_strategy = ECMP_FIB;
+                FatTreeSwitch::configure_sglb_scheme_defaults(false);
                 FatTreeSwitch::set_strategy(FatTreeSwitch::SGLB);
                 roce_lb_mode = RoceSrc::LB_ECMP;
                 lb_scheme_name = "sglb";
+            } else if (!strcmp(argv[i+1], "sglb-old")) {
+                route_strategy = ECMP_FIB;
+                FatTreeSwitch::configure_sglb_scheme_defaults(true);
+                FatTreeSwitch::set_strategy(FatTreeSwitch::SGLB);
+                roce_lb_mode = RoceSrc::LB_ECMP;
+                lb_scheme_name = "sglb-old";
+            } else if (!strcmp(argv[i+1], "sglb-paper")) {
+                route_strategy = ECMP_FIB;
+                FatTreeSwitch::set_strategy(FatTreeSwitch::PAPER_SGLB);
+                roce_lb_mode = RoceSrc::LB_ECMP;
+                lb_scheme_name = "sglb-paper";
             } else if (!strcmp(argv[i+1], "reps")) {
                 route_strategy = ECMP_FIB;
                 FatTreeSwitch::set_strategy(FatTreeSwitch::ECMP);
@@ -1371,15 +1392,45 @@ int main(int argc, char **argv) {
             ecn_thresh_user_set = true;
             cout << "Composite RED ECN Kmax fraction " << ecn_thresh << endl;
             i++;
-        } else if (!strcmp(argv[i],"-mrc_cooldown_mode")){
-            if (!strcmp(argv[i+1], "cwnd_scaled"))
-                mrc_cooldown_mode = RoceSrc::MRC_COOLDOWN_CWND_SCALED;
-            else if (!strcmp(argv[i+1], "one_cycle"))
+        } else if (!strcmp(argv[i],"-mrc_congestion_policy")){
+            if (i + 1 >= argc) {
+                cerr << "missing value for -mrc_congestion_policy" << endl;
+                exit(1);
+            }
+            if (!strcmp(argv[i+1], "skip_token"))
+                mrc_congestion_policy = RoceSrc::MRC_POLICY_SKIP_TOKEN;
+            else if (!strcmp(argv[i+1], "skip_rotation"))
+                mrc_congestion_policy = RoceSrc::MRC_POLICY_SKIP_ROTATION;
+            else if (!strcmp(argv[i+1], "one_cycle")) {
+                mrc_congestion_policy = RoceSrc::MRC_POLICY_ONE_CYCLE;
                 mrc_cooldown_mode = RoceSrc::MRC_COOLDOWN_ONE_CYCLE;
-            else {
+            } else if (!strcmp(argv[i+1], "cwnd_scaled")) {
+                mrc_congestion_policy = RoceSrc::MRC_POLICY_CWND_SCALED;
+                mrc_cooldown_mode = RoceSrc::MRC_COOLDOWN_CWND_SCALED;
+            } else {
+                cerr << "Unknown MRC congestion policy " << argv[i+1]
+                     << endl;
+                exit(1);
+            }
+            mrc_congestion_policy_user_set = true;
+            cout << "MRC congestion policy " << argv[i+1] << endl;
+            i++;
+        } else if (!strcmp(argv[i],"-mrc_cooldown_mode")){
+            if (i + 1 >= argc) {
+                cerr << "missing value for -mrc_cooldown_mode" << endl;
+                exit(1);
+            }
+            if (!strcmp(argv[i+1], "cwnd_scaled")) {
+                mrc_cooldown_mode = RoceSrc::MRC_COOLDOWN_CWND_SCALED;
+                mrc_congestion_policy = RoceSrc::MRC_POLICY_CWND_SCALED;
+            } else if (!strcmp(argv[i+1], "one_cycle")) {
+                mrc_cooldown_mode = RoceSrc::MRC_COOLDOWN_ONE_CYCLE;
+                mrc_congestion_policy = RoceSrc::MRC_POLICY_ONE_CYCLE;
+            } else {
                 cout << "Unknown MRC cooldown mode " << argv[i+1] << endl;
                 exit_error(argv[0]);
             }
+            mrc_cooldown_mode_user_set = true;
             cout << "MRC cooldown mode " << argv[i+1] << endl;
             i++;
         } else if (!strcmp(argv[i],"-mrc_all_cooling_fallback")){
@@ -1413,6 +1464,32 @@ int main(int argc, char **argv) {
         } else if (!strcmp(argv[i],"-mrc_probe_interval_pkts")){
             mrc_probe_interval_pkts = atoi(argv[i+1]);
             cout << "MRC background probe interval " << mrc_probe_interval_pkts << " packets" << endl;
+            i++;
+        } else if (!strcmp(argv[i],"-mrc_failure_recovery")){
+            if (i + 1 >= argc) {
+                cerr << "missing value for -mrc_failure_recovery" << endl;
+                exit(1);
+            }
+            if (!strcmp(argv[i+1], "on"))
+                mrc_failure_recovery_enabled = true;
+            else if (!strcmp(argv[i+1], "off"))
+                mrc_failure_recovery_enabled = false;
+            else {
+                cerr << "-mrc_failure_recovery requires on or off" << endl;
+                exit(1);
+            }
+            i++;
+        } else if (!strcmp(argv[i],"-mrc_probe_success_threshold")){
+            if (i + 1 >= argc) {
+                cerr << "missing value for -mrc_probe_success_threshold" << endl;
+                exit(1);
+            }
+            mrc_probe_success_threshold =
+                (uint32_t)strtoul(argv[i+1], NULL, 10);
+            if (!mrc_probe_success_threshold) {
+                cerr << "-mrc_probe_success_threshold must be positive" << endl;
+                exit(1);
+            }
             i++;
         } else if (!strcmp(argv[i],"-mrc_active_evs")){
             if (i + 1 >= argc) {
@@ -1744,6 +1821,52 @@ int main(int argc, char **argv) {
             }
             cout << "sglb score mode "
                  << FatTreeSwitch::sglb_score_mode_name() << endl;
+            i++;
+        } else if (!strcmp(argv[i],"-sglb_ofat_factor")) {
+            const char* value = argv[i+1];
+            struct OfatName {
+                const char* name;
+                FatTreeSwitch::SglbOfatFactor factor;
+            } names[] = {
+                {"baseline", FatTreeSwitch::SGLB_OFAT_BASELINE},
+                {"topk8", FatTreeSwitch::SGLB_OFAT_TOPK8},
+                {"linear_score", FatTreeSwitch::SGLB_OFAT_LINEAR_SCORE},
+                {"raw_queue", FatTreeSwitch::SGLB_OFAT_RAW_QUEUE},
+                {"paper_levels", FatTreeSwitch::SGLB_OFAT_PAPER_LEVELS},
+                {"remote_mean", FatTreeSwitch::SGLB_OFAT_REMOTE_MEAN},
+                {"change_triggered", FatTreeSwitch::SGLB_OFAT_CHANGE_TRIGGERED},
+                {"delayed_message", FatTreeSwitch::SGLB_OFAT_DELAYED_MESSAGE},
+                {"eager_init", FatTreeSwitch::SGLB_OFAT_EAGER_INIT},
+                {"versioned", FatTreeSwitch::SGLB_OFAT_VERSIONED},
+                {"no_aging", FatTreeSwitch::SGLB_OFAT_NO_AGING},
+                {"source_leaf_only", FatTreeSwitch::SGLB_OFAT_SOURCE_LEAF_ONLY},
+                {"background_sglb", FatTreeSwitch::SGLB_OFAT_BACKGROUND_SGLB},
+                {"shadow_gcn", FatTreeSwitch::SGLB_OFAT_SHADOW_GCN},
+                {"raw_queue_topk8",
+                 FatTreeSwitch::SGLB_OFAT_RAW_QUEUE_TOPK8},
+                {"raw_paper_levels_topk8",
+                 FatTreeSwitch::SGLB_OFAT_RAW_PAPER_LEVELS_TOPK8},
+                {"raw_linear_paper_levels_topk8",
+                 FatTreeSwitch::SGLB_OFAT_RAW_LINEAR_PAPER_LEVELS_TOPK8},
+                {"real_gcn_profiles",
+                 FatTreeSwitch::SGLB_OFAT_REAL_GCN_PROFILES},
+                {"real_gcn_raw_linear",
+                 FatTreeSwitch::SGLB_OFAT_REAL_GCN_RAW_LINEAR},
+            };
+            bool matched = false;
+            for (size_t n = 0; n < sizeof(names) / sizeof(names[0]); ++n) {
+                if (!strcmp(value, names[n].name)) {
+                    FatTreeSwitch::_sglb_ofat_factor = names[n].factor;
+                    matched = true;
+                    break;
+                }
+            }
+            if (!matched) {
+                cerr << "unknown SGLB OFAT factor " << value << endl;
+                exit(1);
+            }
+            cout << "sglb OFAT factor "
+                 << FatTreeSwitch::sglb_ofat_factor_name() << endl;
             i++;
         } else if (!strcmp(argv[i],"-sglb_nmrc_q_range")){
             double q_min = atof(argv[i+1]);
@@ -2597,6 +2720,13 @@ int main(int argc, char **argv) {
     srandom(seed);
     RoceSrc::setNmrcEvSeed(seed);
 
+    if (mrc_congestion_policy_user_set && mrc_cooldown_mode_user_set) {
+        cerr << "-mrc_congestion_policy cannot be combined with deprecated "
+             << "-mrc_cooldown_mode" << endl;
+        exit(1);
+    }
+    RoceSrc::setMrcCongestionPolicy(mrc_congestion_policy);
+
     if (grade_complex_score && lb_scheme_name != "grade") {
         cerr << "grade complex override requires -lb grade" << endl;
         exit(1);
@@ -3058,6 +3188,7 @@ int main(int argc, char **argv) {
     if (FatTreeSwitch::_strategy == FatTreeSwitch::SGLB) {
         cout << "SGLB effective config: score mode "
              << FatTreeSwitch::sglb_score_mode_name()
+             << ", OFAT factor " << FatTreeSwitch::sglb_ofat_factor_name()
              << ", local quality update "
              << timeAsUs(FatTreeSwitch::_sglb_update_interval)
              << "us, GCN update " << timeAsUs(FatTreeSwitch::_sglb_gcn_update_interval)
@@ -3075,6 +3206,29 @@ int main(int argc, char **argv) {
              << ", downstream weight " << FatTreeSwitch::_sglb_downstream_weight
              << ", local damping " << (FatTreeSwitch::_sglb_local_damping ? "on" : "off")
              << endl;
+    }
+    if (FatTreeSwitch::_strategy == FatTreeSwitch::PAPER_SGLB) {
+        if (tiers != 2) {
+            cerr << "sglb-paper requires -tiers 2" << endl;
+            exit(1);
+        }
+        cout << "Paper SGLB effective config: five-factor weights "
+             << FatTreeSwitch::_paper_sglb_weight_local_queue << "/"
+             << FatTreeSwitch::_paper_sglb_weight_local_util << "/"
+             << FatTreeSwitch::_paper_sglb_weight_remote_queue << "/"
+             << FatTreeSwitch::_paper_sglb_weight_remote_util << "/"
+             << FatTreeSwitch::_paper_sglb_weight_remote_busy
+             << ", selector "
+             << (FatTreeSwitch::_paper_sglb_selection_mode ==
+                     FatTreeSwitch::PAPER_SGLB_TOPK ? "topk" : "best-level")
+             << ", remote " << FatTreeSwitch::paper_sglb_remote_mode_name()
+             << ", ablation " << FatTreeSwitch::paper_sglb_ablation_name()
+             << ", source-leaf-only, 4 AR levels, top-K "
+             << FatTreeSwitch::_paper_sglb_k << ", local "
+             << timeAsUs(FatTreeSwitch::_paper_sglb_sample_interval)
+             << "us, GCN "
+             << timeAsUs(FatTreeSwitch::_paper_sglb_gcn_interval)
+             << "us, GCN packet 256B high-priority" << endl;
     }
 
     RoceSrc::setLoadBalancing(roce_lb_mode);
@@ -3218,6 +3372,9 @@ int main(int argc, char **argv) {
         top = FatTreeTopology::load(topo_file, qlf, eventlist, queuesize, qt, snd_type);
     } else {
         FatTreeTopology::set_tiers(tiers);
+        if (tiers == 2 && no_of_nodes >= 64 && no_of_nodes % 64 == 0) {
+            FatTreeTopology::set_two_tier_leaf_spine_radix(64);
+        }
         FatTreeTopology::set_slow_link_divisor(slow_core_downlink_divisor);
         FatTreeTopology::set_slow_tor_uplinks(slow_tor_uplinks);
         FatTreeTopology::set_slow_tor_uplink_divisor(slow_tor_uplink_divisor);
@@ -3225,6 +3382,26 @@ int main(int argc, char **argv) {
         FatTreeTopology::set_slow_tor_uplink_seed(seed);
         top = new FatTreeTopology(no_of_nodes, linkspeed, queuesize, qlf, 
                                                &eventlist,NULL,qt,hop_latency,switch_latency,snd_type,slow_core_downlinks);
+    }
+    if (FatTreeSwitch::_strategy == FatTreeSwitch::PAPER_SGLB ||
+        (FatTreeSwitch::_strategy == FatTreeSwitch::SGLB &&
+         FatTreeSwitch::_sglb_ofat_factor ==
+             FatTreeSwitch::SGLB_OFAT_SHADOW_GCN)) {
+        const simtime_picosec paper_delay = paper_sglb_gcn_delay_us >= 0.0 ?
+            timeFromUs(paper_sglb_gcn_delay_us) : hop_latency;
+        FatTreeSwitch::initialize_paper_sglb(top, paper_delay);
+    }
+    FatTreeSwitch::initialize_sglb_ofat(top);
+    FatTreeSwitch::initialize_sglb_real_gcn_profiles(top);
+    if (top->get_tiers() == 2 && top->no_of_nodes() >= 256) {
+        cout << "Canonical64TopologyDiag spines=" << top->getNAGG()
+             << " leaf_uplinks=" << top->radix_up(TOR_TIER)
+             << " leaf_downlinks=" << top->radix_down(TOR_TIER)
+             << " hosts_per_leaf=" << top->radix_down(TOR_TIER)
+             << " leaves="
+             << top->no_of_nodes() / top->radix_down(TOR_TIER)
+             << " paths=" << top->radix_up(TOR_TIER)
+             << endl;
     }
 #endif
 
@@ -3327,10 +3504,29 @@ int main(int argc, char **argv) {
     RoceSrc::setHostsPerTor(top->radix_down(TOR_TIER));
 
     uint32_t path_space = path_entropy_size ? path_entropy_size : 1;
+    bool mrc_canonical_policy =
+        mrc_congestion_policy == RoceSrc::MRC_POLICY_SKIP_TOKEN ||
+        mrc_congestion_policy == RoceSrc::MRC_POLICY_SKIP_ROTATION;
+    if ((roce_lb_mode == RoceSrc::LB_MRC ||
+         roce_lb_mode == RoceSrc::LB_MRC_SHARED) &&
+        mrc_canonical_policy && path_space != 64) {
+        cerr << "MRC policy "
+             << (mrc_congestion_policy == RoceSrc::MRC_POLICY_SKIP_TOKEN ?
+                 "skip_token" : "skip_rotation")
+             << " requires exactly 64 physical paths; topology provides "
+             << path_space << endl;
+        exit(1);
+    }
+    if (mrc_canonical_policy && mrc_active_evs_user_set &&
+        mrc_active_evs != 64) {
+        cerr << "canonical 64-EV policies require -mrc_active_evs 64"
+             << endl;
+        exit(1);
+    }
     if (mrc_active_evs_user_set &&
-        mrc_active_evs > std::min(path_space, 32U)) {
+        mrc_active_evs > path_space) {
         cerr << "-mrc_active_evs exceeds the available active EV space "
-             << std::min(path_space, 32U) << endl;
+             << path_space << endl;
         exit(1);
     }
     RoceSrc::setMrcActiveEvs(mrc_active_evs);
@@ -3581,23 +3777,46 @@ int main(int argc, char **argv) {
              << " mrc_alias_ratio=1"
              << " mrc_ev_path_mapping=encoded_identity"
              << endl;
-        cout << "MrcCooldownDiag "
-             << "mrc_cooldown_mode=" << mrc_cooldown_mode_name
-             << " mrc_cooldown_reference="
-             << mrc_cooldown_reference_source
-             << " mrc_cooldown_reference_pkts="
-             << RoceSrc::mrcCooldownReferencePkts()
-             << " mrc_cwnd_scaled_rotations="
-             << mrc_cwnd_scaled_rotations
-             << " mrc_cwnd_scaled_skip_selections="
-             << mrc_cwnd_scaled_skip_selections
-             << endl;
-        cout << "MrcFallbackDiag "
-             << "mrc_all_cooling_fallback="
-             << (mrc_all_cooling_fallback ==
-                 RoceSrc::MRC_ALL_COOLING_EARLIEST ?
-                 "earliest" : "round_robin")
-             << endl;
+        cout << "MrcPolicyDiag policy=";
+        switch (mrc_congestion_policy) {
+        case RoceSrc::MRC_POLICY_SKIP_TOKEN:
+            cout << "skip_token all_skip_resolution=natural_rotation";
+            break;
+        case RoceSrc::MRC_POLICY_SKIP_ROTATION:
+            cout << "skip_rotation all_skip_resolution=natural_rotation";
+            break;
+        case RoceSrc::MRC_POLICY_ONE_CYCLE:
+            cout << "one_cycle all_skip_resolution=legacy_fallback";
+            break;
+        case RoceSrc::MRC_POLICY_CWND_SCALED:
+            cout << "cwnd_scaled all_skip_resolution=legacy_fallback";
+            break;
+        }
+        cout << endl;
+        cout << "MrcFailureRecoveryDiag enabled="
+             << (mrc_failure_recovery_enabled ? 1 : 0)
+             << " probe_success_threshold=" << mrc_probe_success_threshold
+             << " assumed_bad=0 probe_packets=0" << endl;
+        if (mrc_congestion_policy == RoceSrc::MRC_POLICY_ONE_CYCLE ||
+            mrc_congestion_policy == RoceSrc::MRC_POLICY_CWND_SCALED) {
+            cout << "MrcCooldownDiag "
+                 << "mrc_cooldown_mode=" << mrc_cooldown_mode_name
+                 << " mrc_cooldown_reference="
+                 << mrc_cooldown_reference_source
+                 << " mrc_cooldown_reference_pkts="
+                 << RoceSrc::mrcCooldownReferencePkts()
+                 << " mrc_cwnd_scaled_rotations="
+                 << mrc_cwnd_scaled_rotations
+                 << " mrc_cwnd_scaled_skip_selections="
+                 << mrc_cwnd_scaled_skip_selections
+                 << endl;
+            cout << "MrcFallbackDiag "
+                 << "mrc_all_cooling_fallback="
+                 << (mrc_all_cooling_fallback ==
+                     RoceSrc::MRC_ALL_COOLING_EARLIEST ?
+                     "earliest" : "round_robin")
+                 << endl;
+        }
         if (roce_lb_mode == RoceSrc::LB_MRC_SHARED)
             cout << "MrcSharedConfig enabled=1 key=source_nic,destination_tor,ev"
                  << endl;
@@ -3614,6 +3833,8 @@ int main(int argc, char **argv) {
     RoceSrc::setMrcAllCoolingFallback(mrc_all_cooling_fallback);
     RoceSrc::setMrcFailedRetry(timeFromUs(mrc_failed_retry_us));
     RoceSrc::setMrcProbeIntervalPkts(mrc_probe_interval_pkts);
+    RoceSrc::setMrcFailureRecoveryEnabled(mrc_failure_recovery_enabled);
+    RoceSrc::setMrcProbeSuccessThreshold(mrc_probe_success_threshold);
     RoceSrc::setPathEntropySize(path_entropy_size);
 
     ofstream path_selection_timeline;
@@ -3744,6 +3965,7 @@ int main(int argc, char **argv) {
     }
 
     map <flowid_t, TriggerTarget*> flowmap;
+    size_t explicit_ecmp_background_flows = 0;
 
     for (size_t c = 0; c < all_conns->size(); c++){
         connection* crt = all_conns->at(c);
@@ -3775,8 +3997,12 @@ int main(int argc, char **argv) {
             flowmap[crt->flowid] = roceSrc;
         }
 
-        if (mixed_lb_traffic)
+        if (crt->ecmp_override) {
+            roceSrc->set_flow_ecmp_override(true);
+            explicit_ecmp_background_flows++;
+        } else if (mixed_lb_traffic) {
             roceSrc->set_flow_ecmp_override(c % 10 == 0);
+        }
 
         if (crt->trigger) {
             Trigger* trig = conns->getTrigger(crt->trigger, eventlist);
@@ -3874,6 +4100,10 @@ int main(int argc, char **argv) {
              << " main_flows=" << all_conns->size() - background_flows
              << " ecmp_background_flows=" << background_flows << endl;
     }
+    if (explicit_ecmp_background_flows) {
+        cout << "ExplicitLbDiag ecmp_background_flows="
+             << explicit_ecmp_background_flows << endl;
+    }
 
     for (size_t ix = 0; ix < no_of_nodes; ix++) {
         delete path_refcounts[ix];
@@ -3937,6 +4167,8 @@ int main(int argc, char **argv) {
     uint64_t mrc_cooling_skip_selection_sum = 0;
     uint64_t mrc_cooling_skip_selection_events = 0;
     uint64_t mrc_duplicate_feedback_ignored = 0;
+    uint64_t mrc_skip_opportunities_consumed = 0;
+    uint64_t mrc_data_on_non_good_violations = 0;
     uint64_t mrc_cwnd_scaled_feedback_events = 0;
     uint64_t mrc_cwnd_scaled_duplicate_feedback_ignored = 0;
     uint64_t mrc_probe_events = 0, mrc_backup_replacement_events = 0;
@@ -4078,6 +4310,10 @@ int main(int argc, char **argv) {
             roce_srcs[ix]->_mrc_cooling_skip_selection_events;
         mrc_duplicate_feedback_ignored +=
             roce_srcs[ix]->_mrc_duplicate_feedback_ignored;
+        mrc_skip_opportunities_consumed +=
+            roce_srcs[ix]->_mrc_skip_opportunities_consumed;
+        mrc_data_on_non_good_violations +=
+            roce_srcs[ix]->_mrc_data_on_non_good_violations;
         mrc_cwnd_scaled_feedback_events +=
             roce_srcs[ix]->_mrc_cwnd_scaled_feedback_events;
         mrc_cwnd_scaled_duplicate_feedback_ignored +=
@@ -4281,6 +4517,10 @@ int main(int argc, char **argv) {
          << mrc_cooling_skip_selection_events
          << " duplicate_feedback_ignored="
          << mrc_duplicate_feedback_ignored
+         << " skip_opportunities_consumed="
+         << mrc_skip_opportunities_consumed
+         << " data_on_non_good_violations="
+         << mrc_data_on_non_good_violations
          << " cwnd_scaled_feedback_events="
          << mrc_cwnd_scaled_feedback_events
          << " cwnd_scaled_duplicate_feedback_ignored="
@@ -4646,6 +4886,23 @@ int main(int argc, char **argv) {
          << FatTreeSwitch::_sglb_diag_remote_snapshot_used
          << " remote_snapshot_missing="
          << FatTreeSwitch::_sglb_diag_remote_snapshot_missing
+         << endl;
+    const double paper_calls =
+        static_cast<double>(FatTreeSwitch::_paper_sglb_diag_route_calls);
+    cout << "PaperSglbDiag "
+         << "route_calls=" << FatTreeSwitch::_paper_sglb_diag_route_calls
+         << " avg_candidates=" << (paper_calls ?
+             FatTreeSwitch::_paper_sglb_diag_candidate_sum / paper_calls : 0.0)
+         << " remote_missing="
+         << FatTreeSwitch::_paper_sglb_diag_remote_missing
+         << " gcn_updates=" << FatTreeSwitch::_paper_sglb_diag_gcn_updates
+         << " gcn_packets=" << FatTreeSwitch::_paper_sglb_diag_gcn_packets
+         << " gcn_bytes=" << FatTreeSwitch::_paper_sglb_diag_gcn_bytes
+         << " gcn_deliveries="
+         << FatTreeSwitch::_paper_sglb_diag_gcn_deliveries
+         << " gcn_profile_updates="
+         << FatTreeSwitch::_paper_sglb_diag_gcn_profile_updates
+         << " gcn_stale=" << FatTreeSwitch::_paper_sglb_diag_gcn_stale
          << endl;
 
     /*list <const Route*>::iterator rt_i;
