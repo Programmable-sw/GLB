@@ -245,7 +245,7 @@ def main(argv=None):
         return 0
     if not args.sim.exists():
         raise FileNotFoundError(args.sim)
-    rows = staged.run_specs(specs, args)
+    rows = staged.run_specs(specs, args, validate_specs)
     base.write_csv(args.out / "cells.csv", rows)
     base.write_csv(args.out / "rankings.csv", staged._rank(rows))
     optima = select_policy_optima(rows)

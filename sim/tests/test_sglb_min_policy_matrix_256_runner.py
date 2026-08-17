@@ -73,10 +73,22 @@ def test_each_policy_is_tuned_before_comparison(runner):
             for row in tuned} == set(optima.items())
 
 
+def test_execution_uses_matrix_validator(runner):
+    def matrix_validator(_specs):
+        raise RuntimeError("matrix-validator-reached")
+    try:
+        runner.staged.run_specs([], object(), matrix_validator)
+    except RuntimeError as error:
+        assert str(error) == "matrix-validator-reached"
+    else:
+        raise AssertionError("custom execution validator was not called")
+
+
 def main():
     runner = load_runner()
     test_complete_matrix(runner)
     test_each_policy_is_tuned_before_comparison(runner)
+    test_execution_uses_matrix_validator(runner)
 
 
 if __name__ == "__main__":

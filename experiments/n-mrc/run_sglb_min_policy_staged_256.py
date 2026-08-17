@@ -184,8 +184,8 @@ def _run_cell(spec, args, simulator_sha):
     return row
 
 
-def run_specs(specs, args):
-    validate_specs(specs)
+def run_specs(specs, args, validator=validate_specs):
+    validator(specs)
     simulator_sha = metrics.file_sha256(args.sim)
     rows = []
     errors = []
