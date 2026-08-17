@@ -50,7 +50,7 @@ def synthetic_rows(runner, unique=False):
     rows = []
     for choice in runner.MIN_CHOICES:
         cct = 100.0 + (abs(choice - 28) if unique else 0)
-        rows.append({
+        row = {
             "seed": 13, "min_choices": choice,
             "cct_us": cct, "mean_fct_us": 50.0,
             "p95_fct_us": 90.0, "p99_fct_us": 95.0,
@@ -60,7 +60,10 @@ def synthetic_rows(runner, unique=False):
             "spine_queue_cv": 0.5,
             "avg_candidate_choices": 28.0,
             "nonbest_fraction": 0.0, "avoid_fraction": 0.0,
-        })
+        }
+        for metric in runner.RANKING_METRICS:
+            row.setdefault(metric, 0)
+        rows.append(row)
     return rows
 
 
