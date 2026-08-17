@@ -38,13 +38,8 @@ idmap.txt
 /experiments/*/output*/
 /experiments/*/.root_owned_output_old/
 
-# Only the final multi-scenario runner and its required parser/traffic helpers
-# are published. Development probes, tuning runners, and one-off plot scripts
-# remain available locally but are not tracked.
-/experiments/n-mrc/*.py
-!/experiments/n-mrc/run_final_512_comparison.py
-!/experiments/n-mrc/experiment_metrics.py
-!/experiments/n-mrc/feedback_eval_common.py
+# Experiment Python sources are never hidden by a blanket rule. Canonical
+# runners are tracked on main; historical-only runners live on archive refs.
 
 # Local research notes and skill-generated plans.
 /MRC_IMPLEMENTATION.md

@@ -4,6 +4,7 @@ import importlib.util
 import math
 import json
 from pathlib import Path
+import subprocess
 import tempfile
 from types import SimpleNamespace
 
@@ -27,7 +28,24 @@ def option(command, name):
     return command[command.index(name) + 1]
 
 
+def test_canonical_runners_are_tracked_by_policy():
+    for relative in (
+        "experiments/n-mrc/run_mrc_sglb_cold_qp_256.py",
+        "experiments/n-mrc/run_mrc_sglb_steady_mixed_256.py",
+    ):
+        result = subprocess.run(
+            ["git", "check-ignore", "-q", relative], cwd=ROOT,
+            check=False)
+        assert result.returncode != 0, relative
+    ignored = subprocess.run(
+        ["git", "check-ignore", "-q",
+         "experiments/n-mrc/output/local-smoke/result.json"],
+        cwd=ROOT, check=False)
+    assert ignored.returncode == 0
+
+
 def main():
+    test_canonical_runners_are_tracked_by_policy()
     runner = load_runner()
     args = runner.parse_args([])
     assert args.sample_scale == 1.0
