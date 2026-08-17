@@ -114,7 +114,7 @@ def _selection(value, allowed, name):
     return result
 
 
-def materialize_traffic(out, workload, seed):
+def materialize_traffic(out, workload, seed, sample_scale=1.0):
     traffic_dir = Path(out) / "traffic"
     traffic_dir.mkdir(parents=True, exist_ok=True)
     permutation_path = traffic_dir / f"permutation_16mib_seed{seed}.cm"
@@ -124,32 +124,39 @@ def materialize_traffic(out, workload, seed):
             common.write_traffic_matrix(permutation_path, TOPOLOGY, flows)
         return permutation_path, len(flows), flows
     if workload == WORKLOADS[1]:
-        path = traffic_dir / f"websearch_100_seed{seed}.cm"
-        flows = common.websearch_flows(TOPOLOGY, seed, 1.0, 10000)
+        suffix = "" if sample_scale == 1.0 else f"_sample{sample_scale:g}"
+        path = traffic_dir / f"websearch_100{suffix}_seed{seed}.cm"
+        flows = common.websearch_flows(
+            TOPOLOGY, seed, 1.0, 10000 * sample_scale)
         if not path.exists():
             common.write_traffic_matrix(path, TOPOLOGY, flows)
         return path, len(flows), flows
     if workload == WORKLOADS[3]:
-        path = traffic_dir / f"a2a_p16_256mib_seed{seed}.cm"
+        suffix = "" if sample_scale == 1.0 else f"_sample{sample_scale:g}"
+        path = traffic_dir / f"a2a_p16_256mib{suffix}_seed{seed}.cm"
+        sampled_message_bytes = max(
+            NODES, int(round(256 * common.MIB * sample_scale)))
         plan = common.alltoall_plan(
-            NODES, NODES, 16, 256 * common.MIB // NODES, 0, seed)
+            NODES, NODES, 16, sampled_message_bytes // NODES, 0, seed)
         if not path.exists():
             common.write_alltoall_matrix(path, plan)
         return path, plan.connection_count, None
     raise ValueError(f"unknown workload {workload}")
 
 
-def _end_us(workload):
+def _end_us(workload, sample_scale=1.0):
     if workload == WORKLOADS[0] or workload == WORKLOADS[2]:
         return 10000
     if workload == WORKLOADS[1]:
-        return 40000
-    return 100000
+        return 40000 if sample_scale == 1.0 else max(
+            5000, int(round(40000 * sample_scale)))
+    return 100000 if sample_scale == 1.0 else max(
+        5000, int(round(100000 * sample_scale)))
 
 
 def build_command(sim, traffic, output, connections, seed, workload,
-                  min_choices):
-    end_us = _end_us(workload)
+                  min_choices, sample_scale=1.0):
+    end_us = _end_us(workload, sample_scale)
     command = [
         str(sim), "-o", str(output), "-tm", str(traffic),
         "-nodes", str(NODES), "-conns", str(connections), "-tiers", "2",
@@ -191,7 +198,7 @@ def make_specs(args):
             key = (workload, seed)
             if key not in materials:
                 traffic, connections, flows = materialize_traffic(
-                    args.out, workload, seed)
+                    args.out, workload, seed, args.sample_scale)
                 materials[key] = (
                     traffic, metrics.file_sha256(traffic), connections, flows)
             traffic, digest, connections, flows = materials[key]
@@ -200,7 +207,7 @@ def make_specs(args):
                 output = case_dir / "logout.dat"
                 command = build_command(
                     args.sim, traffic, output, connections, seed, workload,
-                    choice)
+                    choice, args.sample_scale)
                 specs.append(CellSpec(
                     workload, seed, choice, traffic, digest, connections,
                     flows, case_dir, output, command))
@@ -520,7 +527,7 @@ def _markdown_table(rows, columns):
     return "\n".join(lines)
 
 
-def write_report(path, ranked, rankings, pareto):
+def write_report(path, ranked, rankings, pareto, sample_scale=1.0):
     winner = next((row for row in ranked if row["selected"]), None)
     if winner is None:
         lead = "No tested candidate met both healthy-workload guardrails."
@@ -534,9 +541,18 @@ def write_report(path, ranked, rankings, pareto):
         "healthy_websearch_p99_ratio", "fixed_hotspot_cct_us",
         "avg_candidate_choices", "retransmissions", "trims", "ecn_marks")
     ranking_rows = sorted(rankings, key=lambda row: (row["metric"], row["rank"]))
+    sampling_note = (
+        "Full-scale workload matrix."
+        if sample_scale == 1.0 else
+        f"Quick screening matrix (`sample_scale={sample_scale:g}`): P2P and "
+        "fixed-hotspot traffic remain full; WebSearch uses the scaled arrival "
+        "window and A2A uses the scaled per-source message volume."
+    )
     content = f"""# SGLB min-choice scan (64 paths, 256 hosts)
 
 {lead}
+
+{sampling_note}
 
 Eligibility requires the paired three-seed geometric-mean p99-FCT ratio to
 min24 to be at most 1.01 for both healthy P2P and healthy WebSearch. The winner
@@ -578,6 +594,7 @@ def parse_args(argv=None):
     parser.add_argument("--workloads", default=",".join(WORKLOADS))
     parser.add_argument("--workers", type=int, default=3)
     parser.add_argument("--timeout", type=int, default=7200)
+    parser.add_argument("--sample-scale", type=float, default=1.0)
     parser.add_argument("--force", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--gate", action="store_true")
@@ -586,8 +603,9 @@ def parse_args(argv=None):
 
 def main(argv=None):
     args = parse_args(argv)
-    if args.workers < 1 or args.timeout < 1:
-        raise ValueError("workers and timeout must be positive")
+    if (args.workers < 1 or args.timeout < 1
+            or not 0 < args.sample_scale <= 1):
+        raise ValueError("workers/timeout must be positive and scale in (0,1]")
     args.out = args.out.resolve()
     args.sim = args.sim.resolve()
     if not args.dry_run and not args.sim.exists():
@@ -605,6 +623,12 @@ def main(argv=None):
     simulator_sha = metrics.file_sha256(args.sim) if args.sim.exists() else "dry-run"
     manifest = {
         "schema": 1, "nodes": NODES, "paths": PATHS,
+        "sample_scale": args.sample_scale,
+        "sample_semantics": {
+            "p2p_and_fixed_hotspot": "full",
+            "websearch_arrival_window": args.sample_scale,
+            "a2a_per_source_message_volume": args.sample_scale,
+        },
         "min_choices": sorted({spec.min_choices for spec in specs}),
         "seeds": sorted({spec.seed for spec in specs}),
         "workloads": sorted({spec.workload for spec in specs}),
@@ -658,7 +682,9 @@ def main(argv=None):
     write_csv(args.out / "summary.csv", ranked)
     write_csv(args.out / "rankings.csv", rankings)
     write_csv(args.out / "pareto.csv", pareto)
-    write_report(args.out / "report.md", ranked, rankings, pareto)
+    write_report(
+        args.out / "report.md", ranked, rankings, pareto,
+        args.sample_scale)
     winner = next((row for row in ranked if row["selected"]), None)
     print("selected " + (f"min{winner['min_choices']}" if winner else "none"))
     return 0
