@@ -550,6 +550,29 @@ vector<uint32_t> FatTreeSwitch::paper_sglb_exact_min_by_level(
     return choices;
 }
 
+vector<uint32_t> FatTreeSwitch::paper_sglb_strict_k_by_level(
+    const vector<uint8_t>& levels, const vector<bool>& available,
+    const vector<uint64_t>& tie_keys, uint32_t requested) {
+    vector<uint32_t> choices;
+    const size_t count = std::min(
+        levels.size(), std::min(available.size(), tie_keys.size()));
+    for (uint32_t i = 0; i < count; ++i) {
+        if (available[i])
+            choices.push_back(i);
+    }
+    std::sort(choices.begin(), choices.end(), [&](uint32_t a, uint32_t b) {
+        if (levels[a] != levels[b])
+            return levels[a] < levels[b];
+        if (tie_keys[a] != tie_keys[b])
+            return tie_keys[a] < tie_keys[b];
+        return a < b;
+    });
+    const size_t keep = std::min<size_t>(requested ? requested : 1,
+                                         choices.size());
+    choices.resize(keep);
+    return choices;
+}
+
 uint32_t FatTreeSwitch::sglb_shuffled_rr_select(
     const vector<uint32_t>& candidates, uint32_t switch_id,
     uint32_t dst_tor, uint64_t quality_signature,
@@ -1016,6 +1039,8 @@ uint32_t FatTreeSwitch::_sglb_max_quality = 7;
 simtime_picosec FatTreeSwitch::_sglb_update_interval = timeFromUs(1.0);
 uint32_t FatTreeSwitch::_sglb_quality_levels = 8;
 uint32_t FatTreeSwitch::_sglb_min_choices = 3;
+FatTreeSwitch::SglbCandidatePolicy FatTreeSwitch::_sglb_candidate_policy =
+    FatTreeSwitch::SGLB_CANDIDATE_EXACT_MIN;
 simtime_picosec FatTreeSwitch::_sglb_gcn_update_interval = timeFromUs(15.0);
 simtime_picosec FatTreeSwitch::_sglb_gcn_aging_interval = timeFromUs(30.0);
 simtime_picosec FatTreeSwitch::_paper_sglb_sample_interval = timeFromUs(1.0);
@@ -3502,8 +3527,17 @@ uint32_t FatTreeSwitch::sglb_route(vector<FibEntry*>* ecmp_set, uint32_t dst) {
                     rr_dst_tor, i, _id ^ low);
                 tie_keys[i] = (static_cast<uint64_t>(high) << 32) | low;
             }
-            best_choices = paper_sglb_exact_min_by_level(
-                qualities, available, tie_keys, min_choices);
+            if (_sglb_candidate_policy == SGLB_CANDIDATE_STRICT_K) {
+                best_choices = paper_sglb_strict_k_by_level(
+                    qualities, available, tie_keys, min_choices);
+            } else if (_sglb_candidate_policy ==
+                       SGLB_CANDIDATE_WHOLE_GRADE_MIN) {
+                best_choices = paper_sglb_best_level(
+                    qualities, available, min_choices);
+            } else {
+                best_choices = paper_sglb_exact_min_by_level(
+                    qualities, available, tie_keys, min_choices);
+            }
         } else {
             uint32_t levels = _sglb_quality_levels ? _sglb_quality_levels :
                 (_sglb_max_quality + 1);

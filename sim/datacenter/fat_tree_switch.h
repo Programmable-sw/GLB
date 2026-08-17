@@ -155,6 +155,9 @@ public:
     static vector<uint32_t> paper_sglb_exact_min_by_level(
         const vector<uint8_t>& levels, const vector<bool>& available,
         const vector<uint64_t>& tie_keys, uint32_t min_choices);
+    static vector<uint32_t> paper_sglb_strict_k_by_level(
+        const vector<uint8_t>& levels, const vector<bool>& available,
+        const vector<uint64_t>& tie_keys, uint32_t choices);
 
     struct SglbShuffledRrState {
         vector<uint32_t> members;
@@ -229,6 +232,12 @@ public:
     enum SglbScoreMode {
         SGLB_SCORE_LEGACY = 0,
         SGLB_SCORE_NMRC_QUANTIZED_TOPK = 1
+    };
+
+    enum SglbCandidatePolicy {
+        SGLB_CANDIDATE_STRICT_K = 0,
+        SGLB_CANDIDATE_WHOLE_GRADE_MIN = 1,
+        SGLB_CANDIDATE_EXACT_MIN = 2
     };
 
     enum SglbOfatFactor {
@@ -758,6 +767,7 @@ public:
     static simtime_picosec _sglb_update_interval;
     static uint32_t _sglb_quality_levels;
     static uint32_t _sglb_min_choices;
+    static SglbCandidatePolicy _sglb_candidate_policy;
     static simtime_picosec _sglb_gcn_update_interval;
     static simtime_picosec _sglb_gcn_aging_interval;
     static simtime_picosec _paper_sglb_sample_interval;

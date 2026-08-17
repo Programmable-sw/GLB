@@ -128,6 +128,14 @@ int main() {
     assert(std::find(exact_filled.begin(), exact_filled.end(), 4) ==
            exact_filled.end());
 
+    vector<uint32_t> strict_filled =
+        FatTreeSwitch::paper_sglb_strict_k_by_level(
+            fill_levels, fill_available, fill_keys, 3);
+    assert((strict_filled == vector<uint32_t>{3, 2, 1}));
+
+    assert(FatTreeSwitch::_sglb_candidate_policy ==
+           FatTreeSwitch::SGLB_CANDIDATE_EXACT_MIN);
+
     vector<uint8_t> oversized_best_levels{0, 0, 0, 0, 1};
     vector<bool> oversized_best_available(oversized_best_levels.size(), true);
     vector<uint64_t> oversized_best_keys{4, 3, 2, 1, 0};

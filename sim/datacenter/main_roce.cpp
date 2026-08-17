@@ -1971,6 +1971,22 @@ int main(int argc, char **argv) {
                 FatTreeSwitch::_sglb_min_choices = 1;
             cout << "sglb minimum sprayed choices " << FatTreeSwitch::_sglb_min_choices << endl;
             i++;
+        } else if (!strcmp(argv[i],"-sglb_candidate_policy")){
+            if (!strcmp(argv[i+1], "strict_k"))
+                FatTreeSwitch::_sglb_candidate_policy =
+                    FatTreeSwitch::SGLB_CANDIDATE_STRICT_K;
+            else if (!strcmp(argv[i+1], "whole_grade_min"))
+                FatTreeSwitch::_sglb_candidate_policy =
+                    FatTreeSwitch::SGLB_CANDIDATE_WHOLE_GRADE_MIN;
+            else if (!strcmp(argv[i+1], "exact_min"))
+                FatTreeSwitch::_sglb_candidate_policy =
+                    FatTreeSwitch::SGLB_CANDIDATE_EXACT_MIN;
+            else {
+                cerr << "unknown SGLB candidate policy " << argv[i+1] << endl;
+                exit(1);
+            }
+            cout << "sglb candidate policy " << argv[i+1] << endl;
+            i++;
         } else if (!strcmp(argv[i],"-stor_feedback_pkts")){
             stor_feedback_pkts = atoi(argv[i+1]);
             if (!stor_feedback_pkts)
@@ -3210,6 +3226,12 @@ int main(int argc, char **argv) {
              << "us, quality levels " << FatTreeSwitch::_sglb_quality_levels
              << ", bucket " << FatTreeSwitch::_sglb_quality_bucket
              << ", min choices " << FatTreeSwitch::_sglb_min_choices
+             << ", candidate policy "
+             << (FatTreeSwitch::_sglb_candidate_policy ==
+                         FatTreeSwitch::SGLB_CANDIDATE_STRICT_K ? "strict_k" :
+                 FatTreeSwitch::_sglb_candidate_policy ==
+                         FatTreeSwitch::SGLB_CANDIDATE_WHOLE_GRADE_MIN ?
+                         "whole_grade_min" : "exact_min")
              << ", n-mrc q range " << FatTreeSwitch::_sglb_nmrc_q_min
              << "/" << FatTreeSwitch::_sglb_nmrc_q_max
              << ", netaware thresholds "
