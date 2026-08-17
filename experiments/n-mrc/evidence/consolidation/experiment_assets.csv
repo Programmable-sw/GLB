@@ -1,4 +1,5 @@
 asset_id,original_path,class,topology,schemes,seeds,sample_scale,runner,source_ref,manifest,summary,report,status,cleanup_action,bytes_before
+current_async_real_gcn_root_cause_seed29,experiments/n-mrc/output/current_async_real_gcn_root_cause_seed29,current,256/64/64,sglb,29,1.0,historical-local,main-htsim,,experiments/n-mrc/output/current_async_real_gcn_root_cause_seed29/result.csv,experiments/n-mrc/output/current_async_real_gcn_root_cause_seed29/report.md,complete,retain-traceable-log,74905
 four_scheme_parameter_matrix_20260726,experiments/n-mrc/output/four_scheme_parameter_matrix_20260726,historical,,,,,,historical-local,,experiments/n-mrc/output/four_scheme_parameter_matrix_20260726/summary.csv,,present,retain-historical-until-reviewed,10553456
 grade_collective_scale_concurrency_20260726,experiments/n-mrc/output/grade_collective_scale_concurrency_20260726,historical,,,,,,historical-local,,experiments/n-mrc/output/grade_collective_scale_concurrency_20260726/summary.csv,,present,retain-historical-until-reviewed,30522447
 mrc-new-result,experiments/n-mrc/output/mrc-new-result,current,,,,,,main-htsim,,,,present,compact-raw-retain-curated,322547

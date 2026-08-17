@@ -8,3 +8,6 @@
 - `superseded`：已被更完整或更新语义的正式结果取代。
 
 清理动作必须以 `experiment_assets.csv` 为准。删除后更新 `status`、`cleanup_action` 和空间统计；保留文件由 `retained_sha256.tsv` 校验。
+
+2026-08-17 的实际清理、空间变化、归档引用和例外保留项见
+[`cleanup_report.md`](cleanup_report.md) 与 [`archive_refs.md`](archive_refs.md)。
