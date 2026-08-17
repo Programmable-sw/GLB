@@ -1,0 +1,546 @@
+{
+  "surface": "report",
+  "manifest": {
+    "version": 1,
+    "surface": "report",
+    "title": "N-MRC 相对 MRC 的回退原因诊断",
+    "description": "基于 128 节点最终对比数据与当前实现源码的技术诊断。",
+    "generatedAt": "2026-07-21T00:00:00Z",
+    "cards": [
+      {
+        "id": "healthy_ws100_card",
+        "description": "健康 WebSearch 100% 负载；正值表示 n-MRC 更慢。",
+        "dataset": "headline_metrics",
+        "sourceId": "summary_csv",
+        "metrics": [
+          {
+            "label": "健康 WebSearch 100% p99 回退 (%)",
+            "field": "healthy_ws100_p99_delta_pct",
+            "format": "number",
+            "signed": true
+          }
+        ]
+      },
+      {
+        "id": "healthy_a2a_card",
+        "description": "健康 all-to-all 九个配置的几何平均；9/9 均慢于 MRC。",
+        "dataset": "headline_metrics",
+        "sourceId": "summary_csv",
+        "metrics": [
+          {
+            "label": "健康 A2A CCT 回退 (%)",
+            "field": "healthy_a2a_geo_delta_pct",
+            "format": "number",
+            "signed": true
+          }
+        ]
+      },
+      {
+        "id": "asym_tornado_card",
+        "description": "3% ToR 上行降半时，Tornado 16 MiB 的 p99 改善。",
+        "dataset": "headline_metrics",
+        "sourceId": "summary_csv",
+        "metrics": [
+          {
+            "label": "非对称 Tornado 16 MiB p99 差异 (%)",
+            "field": "asym_tornado16_p99_delta_pct",
+            "format": "number",
+            "signed": true
+          }
+        ]
+      },
+      {
+        "id": "mixed_bg_card",
+        "description": "混合部署中，每第十条连接固定使用 ECMP 的背景流最大 FCT。",
+        "dataset": "headline_metrics",
+        "sourceId": "summary_csv",
+        "metrics": [
+          {
+            "label": "混合部署 ECMP 背景流差异 (%)",
+            "field": "mixed_bg_geo_delta_pct",
+            "format": "number",
+            "signed": true
+          }
+        ]
+      }
+    ],
+    "charts": [
+      {
+        "id": "family_delta_chart",
+        "title": "n-MRC 相对 MRC 的性能差异（按场景族）",
+        "subtitle": "负值为 n-MRC 更快；正值为 n-MRC 更慢。场景族内采用完成时间比值的几何平均。",
+        "showDescription": true,
+        "intent": "comparison",
+        "question": "哪些负载结构从网侧路径视角中获益，哪些负载结构发生回退？",
+        "rationale": "有正有负的单指标分类比较，横向条形图可直接呈现场景分化与零基线。",
+        "comparisonContext": {
+          "baseline": "MRC",
+          "denominator": "MRC completion time",
+          "grain": "scenario family",
+          "normalization": "geometric mean of n-MRC/MRC ratios minus one",
+          "semanticFamily": "completion-time delta",
+          "unit": "%"
+        },
+        "type": "horizontalBar",
+        "dataset": "family_summary",
+        "sourceId": "summary_csv",
+        "valueFormat": "number",
+        "unit": "%",
+        "encodings": {
+          "x": {
+            "field": "family",
+            "type": "nominal",
+            "label": "场景族"
+          },
+          "y": {
+            "field": "delta_pct",
+            "type": "quantitative",
+            "label": "n-MRC 相对 MRC (%)",
+            "format": "number",
+            "unit": "%"
+          },
+          "tooltip": [
+            {
+              "field": "scenario_count",
+              "type": "quantitative",
+              "label": "配置数"
+            },
+            {
+              "field": "better_cells",
+              "type": "quantitative",
+              "label": "n-MRC 更快配置数"
+            },
+            {
+              "field": "primary_metric",
+              "type": "text",
+              "label": "主指标"
+            },
+            {
+              "field": "representative_result",
+              "type": "text",
+              "label": "代表结果"
+            }
+          ]
+        },
+        "referenceLines": [
+          {
+            "axis": "y",
+            "value": 0,
+            "label": "MRC 基线",
+            "color": "neutral",
+            "lineStyle": "dashed"
+          }
+        ],
+        "layout": "full",
+        "maxRows": 10
+      }
+    ],
+    "tables": [
+      {
+        "id": "diagnostic_evidence_table",
+        "title": "代表场景的控制与拥塞诊断",
+        "subtitle": "计数按每条流归一；比值均为 n-MRC/MRC。",
+        "showDescription": true,
+        "dataset": "diagnostic_evidence",
+        "sourceId": "results_csv",
+        "defaultSort": {
+          "field": "reroutes_per_flow",
+          "direction": "desc"
+        },
+        "density": "dense",
+        "layout": "full",
+        "columns": [
+          {
+            "field": "scenario",
+            "label": "代表场景",
+            "type": "text"
+          },
+          {
+            "field": "observed_effect",
+            "label": "完成时间结果",
+            "type": "text"
+          },
+          {
+            "field": "reroutes_per_flow",
+            "label": "reroute/flow",
+            "format": "number"
+          },
+          {
+            "field": "all_cooling_per_flow",
+            "label": "全冷却回退/flow",
+            "format": "number"
+          },
+          {
+            "field": "ecn_mark_ratio",
+            "label": "ECN 标记比",
+            "format": "number"
+          },
+          {
+            "field": "spine_queue_mean_ratio",
+            "label": "Spine 平均队列比",
+            "format": "number"
+          },
+          {
+            "field": "interpretation",
+            "label": "直接读法",
+            "type": "text"
+          }
+        ]
+      }
+    ],
+    "sources": [
+      {
+        "id": "summary_csv",
+        "label": "最终 128 节点方案汇总查询",
+        "path": "experiments/n-mrc/output/final_packet_lb_comparison_20260720/nmrc_vs_mrc_diagnosis/summary_report.sql",
+        "query": {
+          "description": "比较每个场景中 n-MRC 与 MRC 的 p99 FCT、最大 FCT 或 all-to-all CCT，并在场景族内对比值取几何平均。",
+          "executed_at": "2026-07-21T00:00:00Z",
+          "filters": [
+            "nodes = 128",
+            "schemes in (mrc, n-mrc)",
+            "three seeds per scenario-scheme group"
+          ],
+          "tables_used": [
+            "experiments/n-mrc/output/final_packet_lb_comparison_20260720/summary.csv"
+          ],
+          "metric_definitions": [
+            "delta_pct = 100 * (n-MRC completion metric / MRC completion metric - 1); lower is better",
+            "family delta = 100 * (geometric mean of cell-level n-MRC/MRC ratios - 1)"
+          ]
+        }
+      },
+      {
+        "id": "results_csv",
+        "label": "最终逐 seed 诊断聚合查询",
+        "path": "experiments/n-mrc/output/final_packet_lb_comparison_20260720/nmrc_vs_mrc_diagnosis/diagnostics_report.sql",
+        "query": {
+          "description": "对三枚 seed 的控制器计数、ECN/TRIM 和队列统计求和或按流归一，再与同场景 MRC 对照。",
+          "executed_at": "2026-07-21T00:00:00Z",
+          "filters": [
+            "nodes = 128",
+            "schemes in (mrc, n-mrc)",
+            "completed runs only"
+          ],
+          "tables_used": [
+            "experiments/n-mrc/output/final_packet_lb_comparison_20260720/results.csv"
+          ],
+          "metric_definitions": [
+            "events_per_flow = sum(events over three seeds) / sum(flow count over three seeds)",
+            "diagnostic ratio = aggregated n-MRC value / aggregated MRC value"
+          ]
+        }
+      },
+      {
+        "id": "main_roce_source",
+        "label": "负载均衡模式入口",
+        "path": "sim/datacenter/main_roce.cpp"
+      },
+      {
+        "id": "roce_source",
+        "label": "MRC 与 n-MRC 端侧实现",
+        "path": "sim/roce.cpp"
+      },
+      {
+        "id": "switch_source",
+        "label": "source ToR GLB、better_ge3 与 FastCNP 实现",
+        "path": "sim/datacenter/fat_tree_switch.cpp"
+      },
+      {
+        "id": "design_source",
+        "label": "n-MRC + FastCNP 设计说明",
+        "path": "docs/plans/2026-07-18-netaware-hybrid-nmrc-fastcnp-design.md"
+      }
+    ],
+    "blocks": [
+      {
+        "id": "title",
+        "type": "markdown",
+        "body": "# N-MRC 相对 MRC 的回退原因诊断\n\n128 节点最终数据与当前代码路径的联合分析。"
+      },
+      {
+        "id": "executive_conclusion",
+        "type": "markdown",
+        "body": "## 结论：是配合问题，但首先是架构并非“完整 MRC + GLB”\n\n当前 `LB_NMRC` 与 `LB_MRC` 是互斥端侧模式。n-MRC 没有复用 MRC 的 active/cooling/failed/probing/backup 状态机，而是使用固定 EV 集合上的简化轮转与一轮冷却，再让 source ToR 按逐包队列快照改写实际出口。因而它失去了 MRC 对 ECN、LOSS、RTO 和重传路径历史的统一闭环，同时又引入了第二套 FastCNP 冷却闭环。\n\n这不是“GLB 兜底本身一定有害”，而是当前两个机制对路径身份、反馈对象和时间尺度没有共享同一份状态：NIC 选的是名义 EV，ToR 走的是实际出口，FastCNP 冷却名义 EV，detour 后的 TRIM 又可能冷却实际出口。高负载时，这种分裂会放大排队和 ECN；持久链路降速时，网侧视角反而能稳定识别坏路，所以明显获益。"
+      },
+      {
+        "id": "headline_metrics_block",
+        "type": "metric-strip",
+        "cardIds": [
+          "healthy_ws100_card",
+          "healthy_a2a_card",
+          "asym_tornado_card",
+          "mixed_bg_card"
+        ]
+      },
+      {
+        "id": "performance_pattern",
+        "type": "markdown",
+        "sourceId": "summary_csv",
+        "body": "## 数据呈现的不是普遍失效，而是明确的场景分化\n\n健康 permutation/tornado 的 4/8/16 MiB p99 基本与 MRC 持平；WebSearch 从 60% 开始回退，并在 100% 负载达到 **+20.89%**。健康 all-to-all 的 9 个配置全部更慢，场景族几何平均为 **+7.60%**。\n\n相反，3% ToR 上行降半时，长流 p99 一致改善 **17.50%–26.32%**；混合部署的 ECMP 背景流 6/6 改善，几何平均 **-24.16%**。这说明 GLB 对持久、可观测的路径劣化有价值，但对健康且高度同步的拥塞容易追逐瞬态快照。"
+      },
+      {
+        "id": "family_chart_block",
+        "type": "chart",
+        "chartId": "family_delta_chart"
+      },
+      {
+        "id": "family_chart_readout",
+        "type": "markdown",
+        "sourceId": "summary_csv",
+        "body": "## 场景族图的读法\n\n非对称 P2P 与混合部署背景流位于零线左侧，说明网侧全局视角确实能绕开持久坏链路并保护被固定到 ECMP 的背景流。健康 A2A 位于右侧且 9/9 回退，说明在没有稳定坏路时，逐包改写并未增加有效容量，反而扰动了端侧已有的负载分散与拥塞控制。"
+      },
+      {
+        "id": "implementation_shape",
+        "type": "markdown",
+        "body": "## 实现结构：两个控制器没有形成一个统一闭环\n\n1. **模式替换而非叠加。** `main_roce.cpp` 把 `LB_MRC` 与 `LB_NMRC` 设置为两个独立模式；MRC 的 ACK/ECN 路径状态更新只在 `LB_MRC` 下运行。最终 n-MRC 日志中 `MrcDiag.*` 全为 0，而 `HybridNmrc.*` 在持续增长。\n2. **路径身份分裂。** 端侧先选名义 EV `E`，source ToR 可能实际走出口 `A`。reroute 触发的 FastCNP 冷却 `E`，detour 包若被 TRIM 则冷却 `A`；n-MRC 重传又没有 MRC 的 seqno→EV 历史。一次拥塞事件可能抑制两个不同路径，也可能无法归因到真正失败的路径。\n3. **反馈时间尺度偏快。** switch 每包重评估，FastCNP 每次 reroute 都发；端侧仅冷却一个 EV 轮次。8 个 EV 在单 QP 线速下的包序列化时间上界约 0.655 μs，短于 1 μs 本地质量缓存和 5 μs 远端 GCN 快照，容易在旧观测上同步追逐。\n4. **`better_ge3` 是不连续门槛。** 严格更优路径少于 3 条时 GLB 完全不动，而 n-MRC 又没有 MRC 的 ECN 状态机兜底；达到门槛后又可发生大量逐包 reroute。"
+      },
+      {
+        "id": "diagnostic_evidence_intro",
+        "type": "markdown",
+        "sourceId": "results_csv",
+        "body": "## 高负载回退与队列、ECN 放大相吻合\n\n健康 WebSearch 100% 中，n-MRC 每流约发生 127.9 次 reroute，ECN 标记量是 MRC 的 **11.95×**，Spine 平均队列是 **3.224×**；健康 A2A 1024 MiB、P=16 中分别为 **4.58×** 和 **2.464×**。队列 CV 反而下降，说明流量分布更均匀，但均匀地维持在更高排队水平——“更平衡”没有转化为更低完成时间。\n\n非对称 Tornado 16 MiB 的 ECN 比值只有 **0.297×**，并取得 **-26.32%** p99 改善。这组反例支持同一解释：持久坏链路适合由 ToR 做纠偏，健康高负载则更容易产生反馈追逐。"
+      },
+      {
+        "id": "diagnostic_table_block",
+        "type": "table",
+        "tableId": "diagnostic_evidence_table"
+      },
+      {
+        "id": "causal_confidence",
+        "type": "markdown",
+        "sourceId": "results_csv",
+        "body": "## 证据强度与替代解释\n\n主要回退跨三枚 seed 一致：健康 WebSearch 100% 的 n-MRC/MRC p99 比值为 1.223、1.222、1.182；健康 A2A 1024 MiB、P=16 为 1.167、1.139、1.176。数据侧的对数性能惩罚与 ECN 比值相关系数约 **0.733**，与全冷却回退率约 **0.566**。这些是受负载共同驱动的观察性相关，不能单独证明因果，但与源码中的双反馈结构和场景反例一致。\n\nFastCNP 的 64 B 控制流量有额外成本，但现有证据更指向排队、ECN 与状态机缺失，而不是控制字节本身。当前结果也不是严格的 GLB on/off 消融，因此不能把全部差值都归因于单一参数。"
+      },
+      {
+        "id": "recommended_design",
+        "type": "markdown",
+        "body": "## 建议：让 MRC 做主状态机，GLB 只处理持久网侧异常\n\n最稳妥的方向是保留完整 `MrcChoice` 为唯一权威状态，把 GLB 变成有迟滞的约束层，而不是另一套逐包最优路径控制器。每个发送尝试记录 `{seqno, nominal_ev, actual_egress, attempt_id}`，ACK/ECN/TRIM/LOSS/RTO、FastCNP 与重传都更新同一物理路径状态；FastCNP 按路径和冷却 epoch 合并，避免每次 reroute 重复通知。\n\n网侧 override 应只在路径质量差异持续存在时生效，例如确认半速链路或持续拥塞；健康对称场景维持 MRC 的端侧闭环。这个设计与数据模式一致：保留非对称长流的收益，同时减少健康 WebSearch 和 all-to-all 的反馈放大。"
+      },
+      {
+        "id": "minimal_ablations",
+        "type": "markdown",
+        "body": "## 最小消融：四个代表点即可判断是哪一环出问题\n\n先只跑健康 WebSearch 100%、健康 A2A 1024 MiB P=16、非对称 Tornado 16 MiB、非对称+周期背景 A2A 64 MiB P=4。每个点比较：plain MRC、当前 n-MRC 且 FastCNP off、当前 n-MRC 且 FastCNP on、真正共享 MRC 状态的 MRC+GLB 原型。\n\n随后只对有问题的点扫描 `any_better`/`better_ge3`、冷却轮次 0/1/2/4，以及 FastCNP 按 EV 每冷却窗只发一次。建议验收线：健康 WebSearch 100% p99 与健康 A2A CCT 不劣于 MRC 2%，同时保留非对称长流至少 15% 的收益。"
+      },
+      {
+        "id": "methodology",
+        "type": "markdown",
+        "sourceId": "summary_csv",
+        "body": "## 方法与数据边界\n\n最终数据含 230 个场景-方案组、每组 3 枚 seed，共 690 个原始单元；690/690 均通过返回码、配置和完成标记检查，同场景各方案使用相同流量 SHA。汇总几何平均可从原始结果精确复算。只有非对称+背景 A2A 1024 MiB P=16 的一枚 MRC 运行发生过一次重试，该配置差值仅 +1.11%，不影响健康 WebSearch、健康 A2A 或非对称长流的主要结论。\n\n本报告诊断的是当前配置与实现，不等价于对“理想 MRC+GLB”架构的否定。要给出因果定论，仍需上述共享状态原型与 FastCNP 开关消融。"
+      }
+    ]
+  },
+  "snapshot": {
+    "version": 1,
+    "generatedAt": "2026-07-21T00:00:00Z",
+    "status": "ready",
+    "datasets": {
+      "headline_metrics": [
+        {
+          "healthy_ws100_p99_delta_pct": 20.89,
+          "healthy_a2a_geo_delta_pct": 7.6,
+          "asym_tornado16_p99_delta_pct": -26.32,
+          "mixed_bg_geo_delta_pct": -24.16
+        }
+      ],
+      "family_summary": [
+        {
+          "family": "健康 P2P",
+          "delta_pct": 2.42,
+          "scenario_count": 10,
+          "better_cells": 1,
+          "worse_or_tied_cells": 9,
+          "primary_metric": "p99 FCT",
+          "representative_result": "WebSearch 100%: +20.89%",
+          "traffic_structure": "对称；长流与 WebSearch",
+          "persistent_bad_link": false
+        },
+        {
+          "family": "非对称 P2P",
+          "delta_pct": -11.63,
+          "scenario_count": 10,
+          "better_cells": 8,
+          "worse_or_tied_cells": 2,
+          "primary_metric": "p99 FCT",
+          "representative_result": "Tornado 16 MiB: -26.32%",
+          "traffic_structure": "3% ToR 上行半速",
+          "persistent_bad_link": true
+        },
+        {
+          "family": "健康 A2A",
+          "delta_pct": 7.6,
+          "scenario_count": 9,
+          "better_cells": 0,
+          "worse_or_tied_cells": 9,
+          "primary_metric": "CCT",
+          "representative_result": "1024 MiB P=16: +16.06%",
+          "traffic_structure": "对称；并发集体通信",
+          "persistent_bad_link": false
+        },
+        {
+          "family": "非对称+周期背景 A2A",
+          "delta_pct": -2.64,
+          "scenario_count": 9,
+          "better_cells": 5,
+          "worse_or_tied_cells": 4,
+          "primary_metric": "CCT",
+          "representative_result": "64 MiB P=4: -15.56%",
+          "traffic_structure": "半速链路与周期背景并存",
+          "persistent_bad_link": true
+        },
+        {
+          "family": "混合部署主流量",
+          "delta_pct": -5.17,
+          "scenario_count": 6,
+          "better_cells": 5,
+          "worse_or_tied_cells": 1,
+          "primary_metric": "bg=0 最大 FCT",
+          "representative_result": "Permutation 16 MiB: +7.00%",
+          "traffic_structure": "90% 被测算法 + 10% ECMP",
+          "persistent_bad_link": false
+        },
+        {
+          "family": "混合部署 ECMP 背景",
+          "delta_pct": -24.16,
+          "scenario_count": 6,
+          "better_cells": 6,
+          "worse_or_tied_cells": 0,
+          "primary_metric": "bg=1 最大 FCT",
+          "representative_result": "单配置改善 14.16%–35.83%",
+          "traffic_structure": "每第十条连接固定 ECMP",
+          "persistent_bad_link": false
+        }
+      ],
+      "diagnostic_evidence": [
+        {
+          "scenario": "健康 WebSearch 100%",
+          "performance_delta_pct": 20.89,
+          "observed_effect": "p99 +20.89%",
+          "route_checks_per_flow": 416.2,
+          "reroutes_per_flow": 127.9,
+          "all_cooling_per_flow": 1.34,
+          "ecn_mark_ratio": 11.95,
+          "trim_ratio": 0.595,
+          "spine_queue_mean_ratio": 3.224,
+          "spine_queue_p99_ratio": 3.0,
+          "queue_cv_ratio": 0.774,
+          "interpretation": "更均匀但更深的常驻队列；中位数改善、尾部恶化"
+        },
+        {
+          "scenario": "健康 A2A 1024 MiB P=16",
+          "performance_delta_pct": 16.06,
+          "observed_effect": "CCT +16.06%",
+          "route_checks_per_flow": 1956.9,
+          "reroutes_per_flow": 816.3,
+          "all_cooling_per_flow": 6.38,
+          "ecn_mark_ratio": 4.58,
+          "trim_ratio": 0.285,
+          "spine_queue_mean_ratio": 2.464,
+          "spine_queue_p99_ratio": 2.234,
+          "queue_cv_ratio": 0.512,
+          "interpretation": "大量逐包改写与冷却；所有完成时间分位数同步恶化"
+        },
+        {
+          "scenario": "非对称 Tornado 16 MiB",
+          "performance_delta_pct": -26.32,
+          "observed_effect": "p99 -26.32%",
+          "route_checks_per_flow": null,
+          "reroutes_per_flow": 48.69,
+          "all_cooling_per_flow": 0,
+          "ecn_mark_ratio": 0.297,
+          "trim_ratio": null,
+          "spine_queue_mean_ratio": 0.99,
+          "spine_queue_p99_ratio": null,
+          "queue_cv_ratio": null,
+          "interpretation": "少量定向绕路避开持久半速链路，ECN 明显下降"
+        },
+        {
+          "scenario": "混合部署 Permutation 16 MiB",
+          "performance_delta_pct": 7.0,
+          "observed_effect": "主流 +7.00%；ECMP bg -14.16%",
+          "route_checks_per_flow": 3456.0,
+          "reroutes_per_flow": 223.95,
+          "all_cooling_per_flow": 0,
+          "ecn_mark_ratio": 1.169,
+          "trim_ratio": 1.464,
+          "spine_queue_mean_ratio": 1.603,
+          "spine_queue_p99_ratio": null,
+          "queue_cv_ratio": null,
+          "interpretation": "保护固定 ECMP 背景流，但主流最大 FCT 出现代价"
+        }
+      ]
+    },
+    "accessIssues": []
+  },
+  "sources": [
+    {
+      "id": "summary_csv",
+      "label": "最终 128 节点方案汇总查询",
+      "path": "experiments/n-mrc/output/final_packet_lb_comparison_20260720/nmrc_vs_mrc_diagnosis/summary_report.sql",
+      "query": {
+        "description": "比较每个场景中 n-MRC 与 MRC 的完成时间指标，并在场景族内对比值取几何平均。",
+        "executed_at": "2026-07-21T00:00:00Z",
+        "filters": [
+          "nodes = 128",
+          "schemes in (mrc, n-mrc)",
+          "three seeds per scenario-scheme group"
+        ],
+        "tables_used": [
+          "experiments/n-mrc/output/final_packet_lb_comparison_20260720/summary.csv"
+        ],
+        "metric_definitions": [
+          "delta_pct = 100 * (n-MRC completion metric / MRC completion metric - 1); lower is better",
+          "family delta = 100 * (geometric mean of cell-level n-MRC/MRC ratios - 1)"
+        ]
+      }
+    },
+    {
+      "id": "results_csv",
+      "label": "最终逐 seed 诊断聚合查询",
+      "path": "experiments/n-mrc/output/final_packet_lb_comparison_20260720/nmrc_vs_mrc_diagnosis/diagnostics_report.sql",
+      "query": {
+        "description": "对三枚 seed 的控制器计数、ECN/TRIM 和队列统计求和或按流归一，再与同场景 MRC 对照。",
+        "executed_at": "2026-07-21T00:00:00Z",
+        "filters": [
+          "nodes = 128",
+          "schemes in (mrc, n-mrc)",
+          "completed runs only"
+        ],
+        "tables_used": [
+          "experiments/n-mrc/output/final_packet_lb_comparison_20260720/results.csv"
+        ],
+        "metric_definitions": [
+          "events_per_flow = sum(events over three seeds) / sum(flow count over three seeds)",
+          "diagnostic ratio = aggregated n-MRC value / aggregated MRC value"
+        ]
+      }
+    },
+    {
+      "id": "main_roce_source",
+      "label": "负载均衡模式入口",
+      "path": "sim/datacenter/main_roce.cpp"
+    },
+    {
+      "id": "roce_source",
+      "label": "MRC 与 n-MRC 端侧实现",
+      "path": "sim/roce.cpp"
+    },
+    {
+      "id": "switch_source",
+      "label": "source ToR GLB、better_ge3 与 FastCNP 实现",
+      "path": "sim/datacenter/fat_tree_switch.cpp"
+    },
+    {
+      "id": "design_source",
+      "label": "n-MRC + FastCNP 设计说明",
+      "path": "docs/plans/2026-07-18-netaware-hybrid-nmrc-fastcnp-design.md"
+    }
+  ],
+  "package_info": {
+    "originUrl": "artifact://nmrc-vs-mrc-diagnosis",
+    "controls": {
+      "edit": false,
+      "refresh": false
+    }
+  }
+}

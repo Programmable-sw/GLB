@@ -1,0 +1,33 @@
+{
+  "actionable_rises_with_lifetime": {
+    "long_fraction": 1.0,
+    "short_fraction": 0.0,
+    "supported": true
+  },
+  "feedback_causal_delay": {
+    "minimum_feedback_delay_us": 7.100380914847392,
+    "reference_rtt_us": 7.0,
+    "supported": true
+  },
+  "long_mrc_improves_over_rr": {
+    "long_mrc_rr_gmean": 0.4127747671303428,
+    "short_mrc_rr_gmean": 1.0638355403125364,
+    "supported": true
+  },
+  "mrc_sglb_gap_narrows": {
+    "long_mrc_sglb_gmean": 5.431408164225493,
+    "short_mrc_sglb_gmean": 1.3530397741556606,
+    "supported": false
+  },
+  "rotation_boundary": {
+    "nominal_rotations_mean": 1.0,
+    "supported": true,
+    "zero_post_feedback_fraction": 1.0
+  },
+  "short_zero_actionable_rr_equivalence": {
+    "equivalence_margin": 0.1,
+    "flows": 16748,
+    "mrc_rr_gmean": 1.0638355403125364,
+    "supported": true
+  }
+}

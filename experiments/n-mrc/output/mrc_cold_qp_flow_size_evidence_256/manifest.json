@@ -1,0 +1,203 @@
+{
+  "all_arrival_flows": 27643,
+  "arrival_window_us": [
+    50.0,
+    1150.0
+  ],
+  "combined_figure": [
+    "cold_qp_startup_and_feedback.png",
+    "cold_qp_startup_and_feedback.pdf",
+    "mrc_lifecycle_robustness.png",
+    "mrc_lifecycle_robustness.pdf"
+  ],
+  "conditions": [
+    "healthy",
+    "fixed_hotspot",
+    "ecmp_mixed",
+    "slow_uplink"
+  ],
+  "ecmp_background_flows": 16,
+  "ecmp_background_size": 67108864,
+  "flow_size_points": [
+    6144,
+    33792,
+    136192,
+    262144,
+    524288,
+    683008,
+    1048576,
+    1364992,
+    2097152,
+    3412992,
+    6827008
+  ],
+  "hosts_per_leaf": 64,
+  "hot_spines": 16,
+  "hotspot_rate_gbps": 390,
+  "leaves": 4,
+  "long_offered_load": 0.56,
+  "mrc_active_evs": 64,
+  "mrc_policy": "skip_token",
+  "nodes": 256,
+  "paths": 64,
+  "reference_rtt_us": 7.0,
+  "report": "mrc_lifecycle_evidence_256.md",
+  "sample_scale": 1.0,
+  "schemes": [
+    "mrc",
+    "rr",
+    "sglb"
+  ],
+  "seeds": [
+    13,
+    29,
+    47
+  ],
+  "sglb": {
+    "cell_diagnostics": {
+      "13/ecmp_mixed": {
+        "gcn_bytes": 15808512,
+        "gcn_deliveries": 61752,
+        "gcn_packets": 61752,
+        "gcn_profile_updates": 61752,
+        "gcn_stale": 0
+      },
+      "13/fixed_hotspot": {
+        "gcn_bytes": 15298560,
+        "gcn_deliveries": 59760,
+        "gcn_packets": 59760,
+        "gcn_profile_updates": 59760,
+        "gcn_stale": 0
+      },
+      "13/healthy": {
+        "gcn_bytes": 14429184,
+        "gcn_deliveries": 56364,
+        "gcn_packets": 56364,
+        "gcn_profile_updates": 56364,
+        "gcn_stale": 0
+      },
+      "13/slow_uplink": {
+        "gcn_bytes": 11726848,
+        "gcn_deliveries": 45808,
+        "gcn_packets": 45808,
+        "gcn_profile_updates": 45808,
+        "gcn_stale": 0
+      },
+      "29/ecmp_mixed": {
+        "gcn_bytes": 16501760,
+        "gcn_deliveries": 64460,
+        "gcn_packets": 64460,
+        "gcn_profile_updates": 64460,
+        "gcn_stale": 0
+      },
+      "29/fixed_hotspot": {
+        "gcn_bytes": 15861760,
+        "gcn_deliveries": 61960,
+        "gcn_packets": 61960,
+        "gcn_profile_updates": 61960,
+        "gcn_stale": 0
+      },
+      "29/healthy": {
+        "gcn_bytes": 15470592,
+        "gcn_deliveries": 60432,
+        "gcn_packets": 60432,
+        "gcn_profile_updates": 60432,
+        "gcn_stale": 0
+      },
+      "29/slow_uplink": {
+        "gcn_bytes": 12419072,
+        "gcn_deliveries": 48512,
+        "gcn_packets": 48512,
+        "gcn_profile_updates": 48512,
+        "gcn_stale": 0
+      },
+      "47/ecmp_mixed": {
+        "gcn_bytes": 16334848,
+        "gcn_deliveries": 63808,
+        "gcn_packets": 63808,
+        "gcn_profile_updates": 63808,
+        "gcn_stale": 0
+      },
+      "47/fixed_hotspot": {
+        "gcn_bytes": 15731712,
+        "gcn_deliveries": 61452,
+        "gcn_packets": 61452,
+        "gcn_profile_updates": 61452,
+        "gcn_stale": 0
+      },
+      "47/healthy": {
+        "gcn_bytes": 15281152,
+        "gcn_deliveries": 59692,
+        "gcn_packets": 59692,
+        "gcn_profile_updates": 59692,
+        "gcn_stale": 0
+      },
+      "47/slow_uplink": {
+        "gcn_bytes": 12695552,
+        "gcn_deliveries": 49592,
+        "gcn_packets": 49592,
+        "gcn_profile_updates": 49592,
+        "gcn_stale": 0
+      }
+    },
+    "gcn_packet_bytes": 256,
+    "gcn_priority": "high",
+    "local_update_us": 1,
+    "profile": "real_gcn_raw_linear",
+    "remote_gcn_min_interval_us": 15,
+    "scheme": "sglb"
+  },
+  "short_offered_load": 0.1,
+  "sim_sha256": "0b82374fbc752a52af1c4a1094d1aa1d7c5f5ab80464ccbb3f0fca81bdbcf67c",
+  "source_hosts": 64,
+  "source_leaf": 0,
+  "spines": 64,
+  "status": "complete",
+  "steady_flows": 17725,
+  "steady_window_us": [
+    250.0,
+    950.0
+  ],
+  "theory_checks": {
+    "actionable_rises_with_lifetime": {
+      "long_fraction": 1.0,
+      "short_fraction": 0.0,
+      "supported": true
+    },
+    "feedback_causal_delay": {
+      "minimum_feedback_delay_us": 7.100380914847392,
+      "reference_rtt_us": 7.0,
+      "supported": true
+    },
+    "long_mrc_improves_over_rr": {
+      "long_mrc_rr_gmean": 0.4127747671303428,
+      "short_mrc_rr_gmean": 1.0638355403125364,
+      "supported": true
+    },
+    "mrc_sglb_gap_narrows": {
+      "long_mrc_sglb_gmean": 5.431408164225493,
+      "short_mrc_sglb_gmean": 1.3530397741556606,
+      "supported": false
+    },
+    "rotation_boundary": {
+      "nominal_rotations_mean": 1.0,
+      "supported": true,
+      "zero_post_feedback_fraction": 1.0
+    },
+    "short_zero_actionable_rr_equivalence": {
+      "equivalence_margin": 0.1,
+      "flows": 16748,
+      "mrc_rr_gmean": 1.0638355403125364,
+      "supported": true
+    }
+  },
+  "theory_checks_file": "theory_checks.json",
+  "traffic_sha256": {
+    "13/ecmp_mixed": "dfe9123c59df4087ce5eae9c78a4246f69b2cc5adbac9741dd040c52471f178e",
+    "13/measured": "7ec080a478cdb29957bb65e40e80577e7c8083eed3a629bc5cc4e4668a6b6e8c",
+    "29/ecmp_mixed": "d33dd7197ac438781f38b2979474fd8c5f8c08a8bd4eb6192768ab6c248cbfaa",
+    "29/measured": "4d76311928f4cdb94f6816a8a51e9e94633abf41332b4f52bfdfb737976adae3",
+    "47/ecmp_mixed": "138320e8b98569eaf17265a315af94c26779f209e31d2a5b752c380957ed1984",
+    "47/measured": "234ae3cb4e444960aed7424245eb28ad5e4802522c369b1661108769560b497b"
+  }
+}

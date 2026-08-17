@@ -1,0 +1,4 @@
+scheme,initial_behavior,feedback_behavior,short_flow_implication
+OPS,每包随机选择 8 路之一,不使用 ACK/NACK 路径状态,始终随机；覆盖方差随包数减少而增大
+REPS,前 86 个非重传包随机探索,warmup 期间就缓存 clean ACK；之后优先复用,1.49 BDP 时已有显著缓存命中；小于 1 BDP 时首次发送趋近 OPS
+MRC,从首包开始循环 QP 的 8 个 active EV,ECN/TRIM 触发 one-cycle 冷却；重复反馈续期,反馈预算短但不存在固定 1-BDP 探索阶段；有害迁移也可能来不及发生

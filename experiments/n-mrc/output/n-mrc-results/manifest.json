@@ -1,0 +1,39 @@
+{
+  "case_count": 690,
+  "gate": {
+    "reason": "nodes=128",
+    "selected_nodes": 128,
+    "status": "forced"
+  },
+  "nodes": 128,
+  "paths": 8,
+  "scheme_rules": {
+    "all_other_families": [
+      "ops",
+      "reps",
+      "mrc",
+      "sglb",
+      "n-mrc"
+    ],
+    "healthy_p2p": [
+      "ecmp",
+      "ops",
+      "reps",
+      "mrc",
+      "sglb",
+      "n-mrc"
+    ]
+  },
+  "schemes": [
+    "ops",
+    "reps",
+    "mrc",
+    "sglb",
+    "n-mrc"
+  ],
+  "seeds": [
+    13,
+    29,
+    47
+  ]
+}

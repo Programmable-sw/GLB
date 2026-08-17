@@ -1,0 +1,638 @@
+{
+  "surface": "report",
+  "manifest": {
+    "version": 1,
+    "surface": "report",
+    "title": "MRC 在 64 MiB、P=4 All-to-All 中的回退诊断",
+    "description": "核对短流 BDP 直觉、REPS warmup、OPS 对照与 MRC 机制性不均衡。",
+    "generatedAt": "2026-07-25T00:00:00Z",
+    "cards": [
+      {
+        "id": "flow_bdp_card",
+        "description": "每条主流为 512 KiB / 128 个 4 KiB 数据包；拓扑 BDP 为 86 包。",
+        "dataset": "headline_metrics",
+        "sourceId": "diagnostic_aggregates",
+        "metrics": [
+          {
+            "label": "单流长度 (BDP)",
+            "field": "flow_bdp",
+            "format": "number"
+          },
+          {
+            "label": "1 BDP 后剩余",
+            "field": "post_bdp_packets",
+            "format": "number"
+          }
+        ]
+      },
+      {
+        "id": "mrc_ops_card",
+        "description": "退化链路 + 周期背景、64 MiB、P=4；三枚 seed 的 CCT 几何平均。",
+        "dataset": "headline_metrics",
+        "sourceId": "a2a_matrix",
+        "metrics": [
+          {
+            "label": "MRC 相对 OPS CCT",
+            "field": "mrc_vs_ops_pct",
+            "format": "number",
+            "signed": true
+          },
+          {
+            "label": "MRC 相对 REPS",
+            "field": "mrc_vs_reps_pct",
+            "format": "number",
+            "signed": true
+          }
+        ]
+      },
+      {
+        "id": "reps_hit_card",
+        "description": "三枚 seed 的发送级 clean-EV 缓存命中率均值。",
+        "dataset": "headline_metrics",
+        "sourceId": "raw_diagnostics",
+        "metrics": [
+          {
+            "label": "REPS 缓存命中率 (%)",
+            "field": "reps_cache_hit_pct",
+            "format": "number"
+          }
+        ]
+      },
+      {
+        "id": "mrc_imbalance_card",
+        "description": "三枚 seed 的最终物理路径发送份额 CV 均值之比。",
+        "dataset": "headline_metrics",
+        "sourceId": "raw_diagnostics",
+        "metrics": [
+          {
+            "label": "MRC / OPS 路径份额 CV",
+            "field": "mrc_ops_path_cv_ratio",
+            "format": "number"
+          },
+          {
+            "label": "MRC TRIM 增量 (%)",
+            "field": "mrc_ops_trim_delta_pct",
+            "format": "number",
+            "signed": true
+          }
+        ]
+      }
+    ],
+    "charts": [
+      {
+        "id": "cct_64_chart",
+        "title": "64 MiB、P=4 All-to-All CCT",
+        "subtitle": "退化链路 + 周期背景；三枚 seed 几何平均，越低越好。",
+        "showDescription": true,
+        "intent": "comparison",
+        "question": "MRC 在目标单元中相对其他机制处于什么位置？",
+        "rationale": "五种方案共享同一完成时间单位，横向条形图便于直接比较排序和差距。",
+        "comparisonContext": {
+          "baseline": "REPS",
+          "denominator": "all-to-all completion time",
+          "grain": "load-balancing scheme",
+          "normalization": "geometric mean across seeds 13, 29, and 47",
+          "semanticFamily": "completion time",
+          "unit": "µs"
+        },
+        "type": "horizontalBar",
+        "dataset": "cct_64_by_scheme",
+        "sourceId": "a2a_matrix",
+        "valueFormat": "number",
+        "unit": "µs",
+        "encodings": {
+          "x": {
+            "field": "scheme",
+            "type": "nominal",
+            "label": "方案"
+          },
+          "y": {
+            "field": "cct_us",
+            "type": "quantitative",
+            "label": "CCT",
+            "format": "number",
+            "unit": "µs"
+          },
+          "tooltip": [
+            {
+              "field": "ratio_vs_reps",
+              "type": "quantitative",
+              "label": "相对 REPS"
+            },
+            {
+              "field": "rank",
+              "type": "quantitative",
+              "label": "名次"
+            },
+            {
+              "field": "seed_count",
+              "type": "quantitative",
+              "label": "Seed 数"
+            },
+            {
+              "field": "mechanism",
+              "type": "text",
+              "label": "机制"
+            }
+          ]
+        },
+        "layout": "full",
+        "maxRows": 8
+      }
+    ],
+    "tables": [
+      {
+        "id": "size_sweep_table",
+        "title": "P=4 退化背景场景的消息量扫描",
+        "subtitle": "相对差异按三枚 seed 的 CCT 几何平均计算；正值表示 MRC 更慢。",
+        "showDescription": true,
+        "dataset": "size_sweep",
+        "sourceId": "a2a_matrix",
+        "defaultSort": {
+          "field": "size_mib",
+          "direction": "asc"
+        },
+        "density": "spacious",
+        "layout": "full",
+        "columns": [
+          {
+            "field": "size_mib",
+            "label": "总消息量 (MiB)",
+            "format": "number"
+          },
+          {
+            "field": "flow_packets",
+            "label": "每流数据包",
+            "format": "number"
+          },
+          {
+            "field": "flow_bdp",
+            "label": "每流 BDP",
+            "format": "number"
+          },
+          {
+            "field": "ops_us",
+            "label": "OPS CCT (µs)",
+            "format": "number"
+          },
+          {
+            "field": "reps_us",
+            "label": "REPS CCT (µs)",
+            "format": "number"
+          },
+          {
+            "field": "mrc_us",
+            "label": "MRC CCT (µs)",
+            "format": "number"
+          },
+          {
+            "field": "mrc_vs_ops_pct",
+            "label": "MRC vs OPS (%)",
+            "format": "number",
+            "movement": true
+          },
+          {
+            "field": "mrc_vs_reps_pct",
+            "label": "MRC vs REPS (%)",
+            "format": "number",
+            "movement": true
+          }
+        ]
+      },
+      {
+        "id": "mechanism_table",
+        "title": "三种机制在短流中的实际语义",
+        "subtitle": "当前 canonical 实现与 64 MiB/P=4 配置。",
+        "showDescription": true,
+        "dataset": "mechanism_comparison",
+        "sourceId": "roce_source",
+        "density": "spacious",
+        "layout": "full",
+        "columns": [
+          {
+            "field": "scheme",
+            "label": "方案",
+            "type": "text"
+          },
+          {
+            "field": "initial_behavior",
+            "label": "初始行为",
+            "type": "text"
+          },
+          {
+            "field": "feedback_behavior",
+            "label": "反馈后行为",
+            "type": "text"
+          },
+          {
+            "field": "short_flow_implication",
+            "label": "短流含义",
+            "type": "text"
+          }
+        ]
+      }
+    ],
+    "sources": [
+      {
+        "id": "a2a_matrix",
+        "label": "最终主矩阵 All-to-All 汇总",
+        "path": "experiments/n-mrc/output/n-mrc-results/figures/no_websearch100/alltoall_cct_heatmap.csv",
+        "query": {
+          "description": "筛选 128 节点、退化链路加周期背景、P=4 的 All-to-All 单元，并比较五种负载均衡方案的 CCT 三-seed 几何平均。",
+          "engine": "DuckDB",
+          "language": "sql",
+          "sql": "SELECT scheme, size_mib, parallel, geomean_us AS cct_us, ratio, seed_count FROM read_csv_auto('experiments/n-mrc/output/n-mrc-results/figures/no_websearch100/alltoall_cct_heatmap.csv') WHERE family = 'asymmetric_alltoall_background' AND parallel = 4 AND size_mib IN (64, 256, 1024) ORDER BY size_mib, geomean_us",
+          "executed_at": "2026-07-25T00:00:00Z",
+          "filters": [
+            "family = asymmetric_alltoall_background",
+            "parallel = 4",
+            "size_mib in (64, 256, 1024)",
+            "seed_count = 3"
+          ],
+          "tables_used": [
+            "experiments/n-mrc/output/n-mrc-results/figures/no_websearch100/alltoall_cct_heatmap.csv"
+          ],
+          "metric_definitions": [
+            "CCT = all-to-all collective completion time in microseconds",
+            "relative delta = 100 * (MRC CCT / comparator CCT - 1)"
+          ]
+        }
+      },
+      {
+        "id": "raw_diagnostics",
+        "label": "64 MiB、P=4 三-seed 原始运行诊断",
+        "path": "experiments/n-mrc/output/n-mrc-results/raw/asymmetric_alltoall_background_64mib_p4",
+        "query": {
+          "description": "从每种方案的 stdout 读取 PathSelectDiag、QueueDiag、RepsLikeDiag 和 MrcDiag，并对 seeds 13/29/47 求均值。",
+          "engine": "DuckDB",
+          "language": "sql",
+          "sql": "SELECT * FROM read_csv_auto('experiments/n-mrc/output/n-mrc-results/mrc_short_a2a_diagnosis/diagnostic_aggregates.csv') WHERE scenario = 'asymmetric_alltoall_background_64mib_p4'",
+          "executed_at": "2026-07-25T00:00:00Z",
+          "filters": [
+            "scenario = asymmetric_alltoall_background_64mib_p4",
+            "seeds in (13, 29, 47)",
+            "completed runs only"
+          ],
+          "tables_used": [
+            "experiments/n-mrc/output/n-mrc-results/raw/asymmetric_alltoall_background_64mib_p4/*/seed_*/stdout.log.gz"
+          ],
+          "metric_definitions": [
+            "path-share CV = population standard deviation of eight physical-path send counts divided by their mean",
+            "REPS cache hit ratio = cached_sends / (cached_sends + random_sends)",
+            "TRIM delta = 100 * (mean MRC trims / mean OPS trims - 1)"
+          ]
+        }
+      },
+      {
+        "id": "diagnostic_aggregates",
+        "label": "64 MiB、P=4 诊断复算结果",
+        "path": "experiments/n-mrc/output/n-mrc-results/mrc_short_a2a_diagnosis/diagnostic_aggregates.csv",
+        "query": {
+          "description": "读取从流量文件、主矩阵与三-seed stdout 复算的单元级指标。",
+          "engine": "DuckDB",
+          "language": "sql",
+          "sql": "SELECT * FROM read_csv_auto('experiments/n-mrc/output/n-mrc-results/mrc_short_a2a_diagnosis/diagnostic_aggregates.csv') WHERE scenario = 'asymmetric_alltoall_background_64mib_p4'",
+          "executed_at": "2026-07-25T00:00:00Z",
+          "filters": [
+            "scenario = asymmetric_alltoall_background_64mib_p4",
+            "seeds in (13, 29, 47)"
+          ],
+          "tables_used": [
+            "experiments/n-mrc/output/n-mrc-results/mrc_short_a2a_diagnosis/diagnostic_aggregates.csv"
+          ],
+          "metric_definitions": [
+            "flow_bdp = flow_packets / bdp_packets",
+            "path-share CV ratio = mean MRC path-share CV / mean OPS path-share CV"
+          ]
+        }
+      },
+      {
+        "id": "traffic_cm",
+        "label": "64 MiB、P=4 All-to-All 流量文件",
+        "path": "experiments/n-mrc/output/n-mrc-results/traffic/n128_asymmetric_alltoall_background_64mib_p4_seed13.cm",
+        "query": {
+          "description": "读取每条连接的 size 字段并以 4096-byte MSS 换算数据包数，再与运行时报告的 86-packet BDP 对照。",
+          "executed_at": "2026-07-25T00:00:00Z",
+          "filters": [
+            "main all-to-all connections",
+            "size = 524288 bytes",
+            "MSS = 4096 bytes"
+          ],
+          "tables_used": [
+            "experiments/n-mrc/output/n-mrc-results/traffic/n128_asymmetric_alltoall_background_64mib_p4_seed13.cm"
+          ],
+          "metric_definitions": [
+            "flow packets = 524288 / 4096 = 128",
+            "flow BDP = 128 / 86 = 1.488"
+          ]
+        }
+      },
+      {
+        "id": "roce_source",
+        "label": "OPS、REPS 与 MRC 端侧选择实现",
+        "path": "experiments/n-mrc/output/n-mrc-results/mrc_short_a2a_diagnosis/mechanism_semantics.csv",
+        "query": {
+          "description": "把当前 choose_path、REPS buffer 和 MRC cooldown 源码语义整理为三方案对照。",
+          "engine": "DuckDB",
+          "language": "sql",
+          "sql": "SELECT scheme, initial_behavior, feedback_behavior, short_flow_implication FROM read_csv_auto('experiments/n-mrc/output/n-mrc-results/mrc_short_a2a_diagnosis/mechanism_semantics.csv') ORDER BY CASE scheme WHEN 'OPS' THEN 1 WHEN 'REPS' THEN 2 WHEN 'MRC' THEN 3 END",
+          "executed_at": "2026-07-25T00:00:00Z",
+          "filters": [
+            "schemes in (OPS, REPS, MRC)"
+          ],
+          "tables_used": [
+            "experiments/n-mrc/output/n-mrc-results/mrc_short_a2a_diagnosis/mechanism_semantics.csv",
+            "sim/roce.cpp",
+            "sim/datacenter/main_roce.cpp"
+          ],
+          "metric_definitions": [
+            "Initial and feedback behavior are direct implementation semantics, not performance metrics"
+          ]
+        }
+      },
+      {
+        "id": "main_roce_source",
+        "label": "REPS BDP warmup 与运行参数入口",
+        "path": "sim/datacenter/main_roce.cpp"
+      },
+      {
+        "id": "mrc_readme",
+        "label": "Canonical MRC 冷却语义说明",
+        "path": "experiments/n-mrc/README.md"
+      }
+    ],
+    "blocks": [
+      {
+        "id": "title",
+        "type": "markdown",
+        "body": "# MRC 在 64 MiB、P=4 All-to-All 中的回退诊断"
+      },
+      {
+        "id": "technical_summary",
+        "type": "markdown",
+        "body": "## 结论：现象成立，但原来的“前 1 BDP 探索失败”解释不适用于这次 MRC 运行\n\n目标单元中 MRC CCT 为 **3037.6 µs**，比 OPS 慢 **16.3%**、比 REPS 慢 **27.8%**，确实是五种机制中最差。每条主流为 128 包，约 **1.49 BDP**，所以“反馈可利用的尾部很短”是正确直觉。\n\n但 canonical MRC 使用 `one_cycle` 冷却：它从第一个包开始循环 8 个 active EV，并在收到 ECN/TRIM 后按一个 active-EV 周期冷却；它没有固定的“前 1 BDP 纯探索期”。REPS 才有 86 包 warmup，而且 warmup 同时在收集 clean ACK；实测 **37.4%** 的发送命中缓存。因此不能把 MRC 与 REPS 都概括为“前 1 BDP 不起作用”。"
+      },
+      {
+        "id": "headline_metrics_block",
+        "type": "metric-strip",
+        "cardIds": [
+          "flow_bdp_card",
+          "mrc_ops_card",
+          "reps_hit_card",
+          "mrc_imbalance_card"
+        ]
+      },
+      {
+        "id": "observed_result",
+        "type": "markdown",
+        "sourceId": "a2a_matrix",
+        "body": "## MRC 在目标单元中显著落后，但 OPS 也不是赢家\n\nREPS 最快，其后是 SGLB、n-MRC、OPS，MRC 最慢。OPS 比 REPS 慢 **9.8%**，所以“无反馈随机喷洒在坏路上会付出代价”也成立；只是 MRC 的反馈闭环在这个特定时序中付出了更大的代价。"
+      },
+      {
+        "id": "cct_chart_block",
+        "type": "chart",
+        "chartId": "cct_64_chart"
+      },
+      {
+        "id": "cct_chart_readout",
+        "type": "markdown",
+        "sourceId": "a2a_matrix",
+        "body": "## 图的读法：短流并未让所有有状态方案同时失效\n\n如果“只有约 0.5 BDP 可利用”足以解释全部差异，REPS、MRC、SGLB 和 n-MRC 应该同向接近 OPS。实际排序没有出现这种收敛：REPS 比 OPS 快，MRC 却比 OPS 慢。差异必须来自各机制如何使用早期 ACK/NACK，而不能只用流长解释。"
+      },
+      {
+        "id": "scope_definition",
+        "type": "markdown",
+        "sourceId": "traffic_cm",
+        "body": "## 口径：64 MiB 是每个源端的 All-to-All 总量，单连接为 512 KiB\n\n流量文件把 64 MiB 按 128 个节点切成每条连接 **524288 bytes**，即 **128 个 4 KiB 数据包**。运行时拓扑 BDP 为 **86 包**，所以单流长度是 **1.488 BDP**；走完 1 BDP 后理论上还剩 42 个首次发送包，即 **0.488 BDP**。这里的“约 1.5 BDP”判断是准确的。"
+      },
+      {
+        "id": "mechanism_semantics",
+        "type": "markdown",
+        "body": "## 机制差异：MRC 没有 warmup，REPS 的 warmup 也不是空转\n\nMRC 在 `path_space=8` 时把 8 条物理路径全部放入 active set，从第一个包开始按 QP 独立排列循环。ECN ACK 与 TRIM NACK 会冷却精确 EV 一个选择周期，重复反馈继续后移 deadline；全部 EV 冷却时强制选择最早到期 EV。\n\nREPS 的前 86 个非重传包随机探索，但 clean ACK 会同时写入 8 项 ring buffer。warmup 结束后优先消费缓存；在本单元三枚 seed 中，cache hit ratio 为 37.0%–38.0%。OPS 始终随机喷洒，不维护任何反馈状态。"
+      },
+      {
+        "id": "mechanism_table_block",
+        "type": "table",
+        "tableId": "mechanism_table"
+      },
+      {
+        "id": "answer_one",
+        "type": "markdown",
+        "sourceId": "a2a_matrix",
+        "body": "## （1）16 MiB 不应直接推断为“效果更差”\n\n按相同生成规则，16 MiB All-to-All 的单连接只有 **32 包 = 0.372 BDP**。这会让任何依赖 RTT 反馈的纠偏几乎来不及影响首次发送，因此 MRC、REPS 的适应性收益都会减弱。\n\n但对 MRC 而言，初始行为本身是 8 路确定性循环，不是随机坏路探索；反馈来不及也意味着有害的冷却迁移来不及放大。因此 MRC 相对 OPS 可能变好、变差或接近，不能只凭“更短”判断。现有 P=4 扫描也不是单调关系：MRC 相对 OPS 在 64 MiB 慢 16.3%，在 256 MiB 快 6.9%，在 1 GiB 快 11.7%。主矩阵没有 16 MiB A2A 单元，需要补跑才能定论。"
+      },
+      {
+        "id": "size_table_block",
+        "type": "table",
+        "tableId": "size_sweep_table"
+      },
+      {
+        "id": "answer_two",
+        "type": "markdown",
+        "sourceId": "raw_diagnostics",
+        "body": "## （2）REPS 不会因为前 1 BDP 就必然更差；小于 1 BDP 时才会趋近 OPS\n\n64 MiB/P=4 的数据直接反驳“REPS 前 1 BDP 不起作用”：它有约 **37.4%** 缓存发送，并比 OPS 快 **9.8%**。其知识来自 warmup 期间返回的 clean ACK，不是等 warmup 完成后才开始学习。\n\n若改成 16 MiB A2A，32 个首次发送包全部落在 86 包 warmup 内，REPS 的首次发送路径将与 OPS 一样随机；只有重传可能利用已经返回的缓存。因此最合理的预测是 **REPS 向 OPS 收敛**，而不是自动比 OPS 更差。"
+      },
+      {
+        "id": "answer_three",
+        "type": "markdown",
+        "sourceId": "raw_diagnostics",
+        "body": "## （3）OPS 确实较差，但 MRC 更差与反馈诱发的时空偏斜一致\n\n三枚 seed 中，MRC 的八路径发送份额 CV 平均为 **0.0148**，OPS 为 **0.00159**，前者约 **9.3×**；MRC 的 TRIM 平均数比 OPS 高 **15.9%**，总发送选择数高 **2.2%**，并发生平均约 **39k** 次全部 EV 冷却后的强制选择。这组证据说明 MRC 的逐-QP冷却/重传闭环确实制造了额外偏斜和恢复开销。\n\n但“全局不均衡”本身不是充分原因：SGLB 的路径份额 CV 更高，却比 MRC 快，因为有意避开受损/有背景流量的路径本来就应当不均匀。更准确的表述是：MRC 的滞后反馈与大量短 QP 的独立冷却在周期背景下产生了**未必对准真实坏路的时变偏斜或迁移**，导致更多 TRIM 和尾部拖延。当前日志支持这一机制解释，但缺少 MRC cooldown off / 固定循环的同流量消融，尚不能把全部 16.3% 差值严格归因于它。"
+      },
+      {
+        "id": "methodology",
+        "type": "markdown",
+        "sourceId": "raw_diagnostics",
+        "body": "## 方法：主矩阵、流量文件、三-seed 诊断与源码语义交叉核对\n\n性能使用最终主矩阵中 seeds 13/29/47 的 CCT 几何平均；每流 BDP 由流量文件的 524288-byte size、4096-byte MSS 和运行时 86-packet BDP 复算。机制证据来自同一单元的 `PathSelectDiag`、`QueueDiag`、`RepsLikeDiag`、`MrcDiag`，并以当前 `choose_path`、REPS buffer 与 MRC cooldown 源码核对。\n\n这是观察性诊断，不是因果消融。路径份额统计是整个运行的全局聚合，无法单独区分有益避障与短时 herd；最终 `QueueCvDiag` 也只是快照，不足以重建全过程。"
+      },
+      {
+        "id": "limitations",
+        "type": "markdown",
+        "body": "## 不确定性与稳健性：短流假说只能解释反馈预算，不能解释排序\n\n目标单元在三枚 seed 中 MRC 都慢于 REPS，方向稳定；但不同尺寸并不单调，健康 P=4 的 64/256/1024 MiB 中 MRC 反而都是最快。这说明回退依赖“短 QP + 退化链路 + 周期背景 + one-cycle 冷却”的组合，而不是 MRC 的普遍短流缺陷。\n\n16 MiB A2A 尚未运行；对它的判断是基于包数与实现语义的预测，不是实测结论。"
+      },
+      {
+        "id": "recommended_next_steps",
+        "type": "markdown",
+        "body": "## 下一步：用一个 16 MiB 点和两个 MRC 消融直接判因\n\n补跑 `asymmetric_alltoall_background_16mib_p4`，至少比较 OPS、REPS、MRC，使用 seeds 13/29/47。随后在 64 MiB/P=4 上增加两个 MRC 对照：一是关闭 cooldown、保留初始 8 路循环，二是保留 cooldown 但记录 5–10 µs 时间窗的路径利用率 CV、all-cooling 次数和 TRIM。\n\n判据很直接：若关闭 cooldown 后 MRC 接近或优于 OPS，同时 TRIM 与短窗路径 CV 明显下降，就能确认主要问题是反馈诱发偏斜；若差异仍在，则应继续检查 MRC 初始排列、重传换路和 QP 级拥塞窗口之间的耦合。"
+      },
+      {
+        "id": "further_questions",
+        "type": "markdown",
+        "body": "## 仍需回答的问题\n\n1. 16 MiB A2A 中 REPS 是否与 OPS 数值重合，还是重传缓存仍带来可测收益？\n2. MRC 的额外 TRIM 集中在每个 200 µs 背景 on/off 切换之后，还是贯穿整个传输？\n3. all-cooling 强制选择是否集中在少数 QP，并直接对应 CCT 尾部？\n4. 用确定性 RR 替代 MRC cooldown 后，64 MiB/P=4 的异常是否消失？"
+      }
+    ]
+  },
+  "snapshot": {
+    "version": 1,
+    "generatedAt": "2026-07-25T00:00:00Z",
+    "status": "ready",
+    "datasets": {
+      "headline_metrics": [
+        {
+          "flow_packets": 128,
+          "bdp_packets": 86,
+          "flow_bdp": 1.488,
+          "post_bdp_packets": 42,
+          "mrc_vs_ops_pct": 16.316,
+          "mrc_vs_reps_pct": 27.754,
+          "reps_cache_hit_pct": 37.439,
+          "mrc_ops_path_cv_ratio": 9.261,
+          "mrc_ops_trim_delta_pct": 15.89
+        }
+      ],
+      "cct_64_by_scheme": [
+        {
+          "scheme": "REPS",
+          "cct_us": 2377.657,
+          "ratio_vs_reps": 1.0,
+          "rank": 1,
+          "seed_count": 3,
+          "flow_packets": 128,
+          "bdp_packets": 86,
+          "mechanism": "1-BDP warmup + clean-EV cache"
+        },
+        {
+          "scheme": "SGLB",
+          "cct_us": 2455.454,
+          "ratio_vs_reps": 1.033,
+          "rank": 2,
+          "seed_count": 3,
+          "flow_packets": 128,
+          "bdp_packets": 86,
+          "mechanism": "switch-side queue-aware routing"
+        },
+        {
+          "scheme": "n-MRC",
+          "cct_us": 2564.801,
+          "ratio_vs_reps": 1.079,
+          "rank": 3,
+          "seed_count": 3,
+          "flow_packets": 128,
+          "bdp_packets": 86,
+          "mechanism": "network-aware EV availability"
+        },
+        {
+          "scheme": "OPS",
+          "cct_us": 2611.47,
+          "ratio_vs_reps": 1.098,
+          "rank": 4,
+          "seed_count": 3,
+          "flow_packets": 128,
+          "bdp_packets": 86,
+          "mechanism": "stateless random packet spraying"
+        },
+        {
+          "scheme": "MRC",
+          "cct_us": 3037.561,
+          "ratio_vs_reps": 1.278,
+          "rank": 5,
+          "seed_count": 3,
+          "flow_packets": 128,
+          "bdp_packets": 86,
+          "mechanism": "per-QP EV cycling + one-cycle cooldown"
+        }
+      ],
+      "size_sweep": [
+        {
+          "size_mib": 64,
+          "flow_packets": 128,
+          "flow_bdp": 1.488,
+          "ops_us": 2611.47,
+          "reps_us": 2377.657,
+          "mrc_us": 3037.561,
+          "mrc_vs_ops_pct": 16.316,
+          "mrc_vs_reps_pct": 27.754,
+          "seed_count": 3,
+          "family": "asymmetric_alltoall_background",
+          "parallel": 4
+        },
+        {
+          "size_mib": 256,
+          "flow_packets": 512,
+          "flow_bdp": 5.953,
+          "ops_us": 11823.695,
+          "reps_us": 10544.762,
+          "mrc_us": 11006.008,
+          "mrc_vs_ops_pct": -6.916,
+          "mrc_vs_reps_pct": 4.374,
+          "seed_count": 3,
+          "family": "asymmetric_alltoall_background",
+          "parallel": 4
+        },
+        {
+          "size_mib": 1024,
+          "flow_packets": 2048,
+          "flow_bdp": 23.814,
+          "ops_us": 47168.62,
+          "reps_us": 35679.02,
+          "mrc_us": 41637.89,
+          "mrc_vs_ops_pct": -11.725,
+          "mrc_vs_reps_pct": 16.701,
+          "seed_count": 3,
+          "family": "asymmetric_alltoall_background",
+          "parallel": 4
+        }
+      ],
+      "mechanism_comparison": [
+        {
+          "scheme": "OPS",
+          "initial_behavior": "每包随机选择 8 路之一",
+          "feedback_behavior": "不使用 ACK/NACK 路径状态",
+          "short_flow_implication": "始终随机；覆盖方差随包数减少而增大"
+        },
+        {
+          "scheme": "REPS",
+          "initial_behavior": "前 86 个非重传包随机探索",
+          "feedback_behavior": "warmup 期间就缓存 clean ACK；之后优先复用",
+          "short_flow_implication": "1.49 BDP 时已有显著缓存命中；小于 1 BDP 时首次发送趋近 OPS"
+        },
+        {
+          "scheme": "MRC",
+          "initial_behavior": "从首包开始循环 QP 的 8 个 active EV",
+          "feedback_behavior": "ECN/TRIM 触发 one-cycle 冷却，重复反馈续期",
+          "short_flow_implication": "反馈预算短，但不存在固定 1-BDP 探索阶段；有害迁移也可能来不及发生"
+        }
+      ]
+    },
+    "accessIssues": []
+  },
+  "sources": [
+    {
+      "id": "a2a_matrix",
+      "label": "最终主矩阵 All-to-All 汇总",
+      "path": "experiments/n-mrc/output/n-mrc-results/figures/no_websearch100/alltoall_cct_heatmap.csv"
+    },
+    {
+      "id": "raw_diagnostics",
+      "label": "64 MiB、P=4 三-seed 原始运行诊断",
+      "path": "experiments/n-mrc/output/n-mrc-results/raw/asymmetric_alltoall_background_64mib_p4"
+    },
+    {
+      "id": "diagnostic_aggregates",
+      "label": "64 MiB、P=4 诊断复算结果",
+      "path": "experiments/n-mrc/output/n-mrc-results/mrc_short_a2a_diagnosis/diagnostic_aggregates.csv"
+    },
+    {
+      "id": "traffic_cm",
+      "label": "64 MiB、P=4 All-to-All 流量文件",
+      "path": "experiments/n-mrc/output/n-mrc-results/traffic/n128_asymmetric_alltoall_background_64mib_p4_seed13.cm"
+    },
+    {
+      "id": "roce_source",
+      "label": "OPS、REPS 与 MRC 端侧选择实现",
+      "path": "sim/roce.cpp"
+    },
+    {
+      "id": "main_roce_source",
+      "label": "REPS BDP warmup 与运行参数入口",
+      "path": "sim/datacenter/main_roce.cpp"
+    },
+    {
+      "id": "mrc_readme",
+      "label": "Canonical MRC 冷却语义说明",
+      "path": "experiments/n-mrc/README.md"
+    }
+  ],
+  "package_info": {
+    "title": "MRC 在 64 MiB、P=4 All-to-All 中的回退诊断"
+  }
+}

@@ -1,0 +1,41 @@
+{
+  "checks": {
+    "batch.canonical_path": true,
+    "batch.complete": true,
+    "batch.manifest": true,
+    "data.plotted_values_match_summary": true,
+    "data.raw_cells": true,
+    "data.three_seed_matrix": true,
+    "docx.five_captions": true,
+    "docx.five_images": true,
+    "docx.image_layout": true,
+    "docx.target_sections": true,
+    "docx.update_fields": true,
+    "docx.zip_integrity": true,
+    "figure.a2a_csv": true,
+    "figure.a2a_pdf": true,
+    "figure.a2a_png": true,
+    "figure.metric_digest": true,
+    "figure.p16_diagnostics_csv": true,
+    "figure.p16_diagnostics_pdf": true,
+    "figure.p16_diagnostics_png": true,
+    "figure.p2p_csv": true,
+    "figure.p2p_pdf": true,
+    "figure.p2p_png": true,
+    "figure.p4_diagnostics_csv": true,
+    "figure.p4_diagnostics_pdf": true,
+    "figure.p4_diagnostics_png": true,
+    "figure.p8_diagnostics_csv": true,
+    "figure.p8_diagnostics_pdf": true,
+    "figure.p8_diagnostics_png": true,
+    "source.docx_hash_canonical": true,
+    "source.docx_hash_unchanged": true,
+    "trace.replay_match": true
+  },
+  "details": {
+    "source_docx_sha256_after": "8b70feb2a8311080d2b7abad32f8013820410dd6aafffb38e507dbb3b071ba72",
+    "source_docx_sha256_before": "8b70feb2a8311080d2b7abad32f8013820410dd6aafffb38e507dbb3b071ba72"
+  },
+  "failed_checks": [],
+  "valid": true
+}

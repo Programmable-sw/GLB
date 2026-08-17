@@ -1,0 +1,32 @@
+{
+  "aggregation": "geometric_mean_before_normalization",
+  "established_baselines": [
+    "ops",
+    "reps",
+    "mrc",
+    "sglb"
+  ],
+  "matrix_max": 1.4375195394884421,
+  "matrix_min": 0.9887087881015152,
+  "matrix_shape": [
+    5,
+    18
+  ],
+  "mrc_replaced": true,
+  "new_mrc_run_count": 54,
+  "original_figure": "/home/user/workspace/csg-htsim/experiments/n-mrc/output/n-mrc-results/figures/alltoall_cct_heatmap.png",
+  "original_figure_sha256": "d869caa7b1adfb29b654ee7d7649b49b2ef3fb369d54774335cabdcd98cf0054",
+  "scenario_count": 18,
+  "schemes": [
+    "ops",
+    "reps",
+    "mrc",
+    "sglb",
+    "n-mrc"
+  ],
+  "seeds": [
+    13,
+    29,
+    47
+  ]
+}

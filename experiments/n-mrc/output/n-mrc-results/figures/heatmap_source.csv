@@ -1,0 +1,611 @@
+figure,panel,scenario,column_key,column_label,family,traffic,size_mib,websearch_load_pct,parallel,degraded,periodic_background,scheme,metric,geomean_us,baseline_us,ratio,seed_count,baseline_schemes
+p2p,Healthy,healthy_p2p_permutation_4mib,permutation_4mib,"Permutation
+4 MiB",healthy_p2p,permutation,4,0,0,0,0,ecmp,p99_fct_us,380.88980520299526,96.71503919237874,3.9382686331270165,3,ops;reps;mrc;sglb;ecmp
+p2p,Healthy,healthy_p2p_permutation_4mib,permutation_4mib,"Permutation
+4 MiB",healthy_p2p,permutation,4,0,0,0,0,ops,p99_fct_us,201.25400661840408,96.71503919237874,2.0808967074715627,3,ops;reps;mrc;sglb;ecmp
+p2p,Healthy,healthy_p2p_permutation_4mib,permutation_4mib,"Permutation
+4 MiB",healthy_p2p,permutation,4,0,0,0,0,reps,p99_fct_us,125.67514665098757,96.71503919237874,1.299437478394683,3,ops;reps;mrc;sglb;ecmp
+p2p,Healthy,healthy_p2p_permutation_4mib,permutation_4mib,"Permutation
+4 MiB",healthy_p2p,permutation,4,0,0,0,0,mrc,p99_fct_us,96.71503919237874,96.71503919237874,1.0,3,ops;reps;mrc;sglb;ecmp
+p2p,Healthy,healthy_p2p_permutation_4mib,permutation_4mib,"Permutation
+4 MiB",healthy_p2p,permutation,4,0,0,0,0,sglb,p99_fct_us,103.94573427707499,96.71503919237874,1.0747628822267596,3,ops;reps;mrc;sglb;ecmp
+p2p,Healthy,healthy_p2p_permutation_4mib,permutation_4mib,"Permutation
+4 MiB",healthy_p2p,permutation,4,0,0,0,0,n-mrc,p99_fct_us,96.73117870493788,96.71503919237874,1.000166876968607,3,ops;reps;mrc;sglb;ecmp
+p2p,Healthy,healthy_p2p_permutation_8mib,permutation_8mib,"Permutation
+8 MiB",healthy_p2p,permutation,8,0,0,0,0,ecmp,p99_fct_us,723.9384377654334,183.22242537649623,3.951145370321575,3,ops;reps;mrc;sglb;ecmp
+p2p,Healthy,healthy_p2p_permutation_8mib,permutation_8mib,"Permutation
+8 MiB",healthy_p2p,permutation,8,0,0,0,0,ops,p99_fct_us,389.1816064331324,183.22242537649623,2.124093738162341,3,ops;reps;mrc;sglb;ecmp
+p2p,Healthy,healthy_p2p_permutation_8mib,permutation_8mib,"Permutation
+8 MiB",healthy_p2p,permutation,8,0,0,0,0,reps,p99_fct_us,238.9150652775251,183.22242537649623,1.3039619183437199,3,ops;reps;mrc;sglb;ecmp
+p2p,Healthy,healthy_p2p_permutation_8mib,permutation_8mib,"Permutation
+8 MiB",healthy_p2p,permutation,8,0,0,0,0,mrc,p99_fct_us,183.22242537649623,183.22242537649623,1.0,3,ops;reps;mrc;sglb;ecmp
+p2p,Healthy,healthy_p2p_permutation_8mib,permutation_8mib,"Permutation
+8 MiB",healthy_p2p,permutation,8,0,0,0,0,sglb,p99_fct_us,198.71678221522959,183.22242537649623,1.084565831976597,3,ops;reps;mrc;sglb;ecmp
+p2p,Healthy,healthy_p2p_permutation_8mib,permutation_8mib,"Permutation
+8 MiB",healthy_p2p,permutation,8,0,0,0,0,n-mrc,p99_fct_us,183.23880460483042,183.22242537649623,1.000089395325384,3,ops;reps;mrc;sglb;ecmp
+p2p,Healthy,healthy_p2p_permutation_16mib,permutation_16mib,"Permutation
+16 MiB",healthy_p2p,permutation,16,0,0,0,0,ecmp,p99_fct_us,1440.332591671946,356.23742762212373,4.043181541271874,3,ops;reps;mrc;sglb;ecmp
+p2p,Healthy,healthy_p2p_permutation_16mib,permutation_16mib,"Permutation
+16 MiB",healthy_p2p,permutation,16,0,0,0,0,ops,p99_fct_us,742.4522540997232,356.23742762212373,2.084150054236508,3,ops;reps;mrc;sglb;ecmp
+p2p,Healthy,healthy_p2p_permutation_16mib,permutation_16mib,"Permutation
+16 MiB",healthy_p2p,permutation,16,0,0,0,0,reps,p99_fct_us,459.42086535029415,356.23742762212373,1.2896479418710083,3,ops;reps;mrc;sglb;ecmp
+p2p,Healthy,healthy_p2p_permutation_16mib,permutation_16mib,"Permutation
+16 MiB",healthy_p2p,permutation,16,0,0,0,0,mrc,p99_fct_us,356.23742762212373,356.23742762212373,1.0,3,ops;reps;mrc;sglb;ecmp
+p2p,Healthy,healthy_p2p_permutation_16mib,permutation_16mib,"Permutation
+16 MiB",healthy_p2p,permutation,16,0,0,0,0,sglb,p99_fct_us,392.158899688669,356.23742762212373,1.1008357608753248,3,ops;reps;mrc;sglb;ecmp
+p2p,Healthy,healthy_p2p_permutation_16mib,permutation_16mib,"Permutation
+16 MiB",healthy_p2p,permutation,16,0,0,0,0,n-mrc,p99_fct_us,356.2538088435629,356.23742762212373,1.0000459839987856,3,ops;reps;mrc;sglb;ecmp
+p2p,Healthy,healthy_p2p_tornado_4mib,tornado_4mib,"Tornado
+4 MiB",healthy_p2p,tornado,4,0,0,0,0,ecmp,p99_fct_us,345.4462730252927,96.14428675401646,3.5929984473139958,3,ops;reps;mrc;sglb;ecmp
+p2p,Healthy,healthy_p2p_tornado_4mib,tornado_4mib,"Tornado
+4 MiB",healthy_p2p,tornado,4,0,0,0,0,ops,p99_fct_us,198.2258024656025,96.14428675401646,2.061753320535414,3,ops;reps;mrc;sglb;ecmp
+p2p,Healthy,healthy_p2p_tornado_4mib,tornado_4mib,"Tornado
+4 MiB",healthy_p2p,tornado,4,0,0,0,0,reps,p99_fct_us,120.37082478810575,96.14428675401646,1.251981046945332,3,ops;reps;mrc;sglb;ecmp
+p2p,Healthy,healthy_p2p_tornado_4mib,tornado_4mib,"Tornado
+4 MiB",healthy_p2p,tornado,4,0,0,0,0,mrc,p99_fct_us,96.14428675401646,96.14428675401646,1.0,3,ops;reps;mrc;sglb;ecmp
+p2p,Healthy,healthy_p2p_tornado_4mib,tornado_4mib,"Tornado
+4 MiB",healthy_p2p,tornado,4,0,0,0,0,sglb,p99_fct_us,101.48648534520738,96.14428675401646,1.0555643894354205,3,ops;reps;mrc;sglb;ecmp
+p2p,Healthy,healthy_p2p_tornado_4mib,tornado_4mib,"Tornado
+4 MiB",healthy_p2p,tornado,4,0,0,0,0,n-mrc,p99_fct_us,96.14820527878297,96.14428675401646,1.0000407567095124,3,ops;reps;mrc;sglb;ecmp
+p2p,Healthy,healthy_p2p_tornado_8mib,tornado_8mib,"Tornado
+8 MiB",healthy_p2p,tornado,8,0,0,0,0,ecmp,p99_fct_us,681.1141824758388,182.6519190102882,3.7290283407177003,3,ops;reps;mrc;sglb;ecmp
+p2p,Healthy,healthy_p2p_tornado_8mib,tornado_8mib,"Tornado
+8 MiB",healthy_p2p,tornado,8,0,0,0,0,ops,p99_fct_us,379.38601244741136,182.6519190102882,2.07709842033492,3,ops;reps;mrc;sglb;ecmp
+p2p,Healthy,healthy_p2p_tornado_8mib,tornado_8mib,"Tornado
+8 MiB",healthy_p2p,tornado,8,0,0,0,0,reps,p99_fct_us,225.45381570770888,182.6519190102882,1.2343358719106028,3,ops;reps;mrc;sglb;ecmp
+p2p,Healthy,healthy_p2p_tornado_8mib,tornado_8mib,"Tornado
+8 MiB",healthy_p2p,tornado,8,0,0,0,0,mrc,p99_fct_us,182.6519190102882,182.6519190102882,1.0,3,ops;reps;mrc;sglb;ecmp
+p2p,Healthy,healthy_p2p_tornado_8mib,tornado_8mib,"Tornado
+8 MiB",healthy_p2p,tornado,8,0,0,0,0,sglb,p99_fct_us,190.77454581375014,182.6519190102882,1.044470525398665,3,ops;reps;mrc;sglb;ecmp
+p2p,Healthy,healthy_p2p_tornado_8mib,tornado_8mib,"Tornado
+8 MiB",healthy_p2p,tornado,8,0,0,0,0,n-mrc,p99_fct_us,182.65592327970396,182.6519190102882,1.0000219229528902,3,ops;reps;mrc;sglb;ecmp
+p2p,Healthy,healthy_p2p_tornado_16mib,tornado_16mib,"Tornado
+16 MiB",healthy_p2p,tornado,16,0,0,0,0,ecmp,p99_fct_us,1357.2908012491846,355.6671027160651,3.8161831411569493,3,ops;reps;mrc;sglb;ecmp
+p2p,Healthy,healthy_p2p_tornado_16mib,tornado_16mib,"Tornado
+16 MiB",healthy_p2p,tornado,16,0,0,0,0,ops,p99_fct_us,721.3817476709054,355.6671027160651,2.0282498498231822,3,ops;reps;mrc;sglb;ecmp
+p2p,Healthy,healthy_p2p_tornado_16mib,tornado_16mib,"Tornado
+16 MiB",healthy_p2p,tornado,16,0,0,0,0,reps,p99_fct_us,427.7609049245486,355.6671027160651,1.2027002263013264,3,ops;reps;mrc;sglb;ecmp
+p2p,Healthy,healthy_p2p_tornado_16mib,tornado_16mib,"Tornado
+16 MiB",healthy_p2p,tornado,16,0,0,0,0,mrc,p99_fct_us,355.6671027160651,355.6671027160651,1.0,3,ops;reps;mrc;sglb;ecmp
+p2p,Healthy,healthy_p2p_tornado_16mib,tornado_16mib,"Tornado
+16 MiB",healthy_p2p,tornado,16,0,0,0,0,sglb,p99_fct_us,366.8819664545682,355.6671027160651,1.0315319118716924,3,ops;reps;mrc;sglb;ecmp
+p2p,Healthy,healthy_p2p_tornado_16mib,tornado_16mib,"Tornado
+16 MiB",healthy_p2p,tornado,16,0,0,0,0,n-mrc,p99_fct_us,355.6709281704826,355.6671027160651,1.0000107557161975,3,ops;reps;mrc;sglb;ecmp
+p2p,Healthy,healthy_p2p_websearch_40pct,websearch_40pct,"WebSearch
+40%",healthy_p2p,websearch,0,40,0,0,0,ecmp,p99_fct_us,1750.5869263041648,1220.3361580924684,1.4345120520238799,3,ops;reps;mrc;sglb;ecmp
+p2p,Healthy,healthy_p2p_websearch_40pct,websearch_40pct,"WebSearch
+40%",healthy_p2p,websearch,0,40,0,0,0,ops,p99_fct_us,1257.471435523249,1220.3361580924684,1.0304303672267054,3,ops;reps;mrc;sglb;ecmp
+p2p,Healthy,healthy_p2p_websearch_40pct,websearch_40pct,"WebSearch
+40%",healthy_p2p,websearch,0,40,0,0,0,reps,p99_fct_us,1222.3382982965043,1220.3361580924684,1.0016406464651226,3,ops;reps;mrc;sglb;ecmp
+p2p,Healthy,healthy_p2p_websearch_40pct,websearch_40pct,"WebSearch
+40%",healthy_p2p,websearch,0,40,0,0,0,mrc,p99_fct_us,1221.460949541348,1220.3361580924684,1.0009217062375977,3,ops;reps;mrc;sglb;ecmp
+p2p,Healthy,healthy_p2p_websearch_40pct,websearch_40pct,"WebSearch
+40%",healthy_p2p,websearch,0,40,0,0,0,sglb,p99_fct_us,1220.3361580924684,1220.3361580924684,1.0,3,ops;reps;mrc;sglb;ecmp
+p2p,Healthy,healthy_p2p_websearch_40pct,websearch_40pct,"WebSearch
+40%",healthy_p2p,websearch,0,40,0,0,0,n-mrc,p99_fct_us,1215.482614854009,1220.3361580924684,0.996022781750525,3,ops;reps;mrc;sglb;ecmp
+p2p,Healthy,healthy_p2p_websearch_60pct,websearch_60pct,"WebSearch
+60%",healthy_p2p,websearch,0,60,0,0,0,ecmp,p99_fct_us,3012.508842150929,1993.9161478289293,1.5108503160632365,3,ops;reps;mrc;sglb;ecmp
+p2p,Healthy,healthy_p2p_websearch_60pct,websearch_60pct,"WebSearch
+60%",healthy_p2p,websearch,0,60,0,0,0,ops,p99_fct_us,2153.3829818522677,1993.9161478289293,1.0799767002223104,3,ops;reps;mrc;sglb;ecmp
+p2p,Healthy,healthy_p2p_websearch_60pct,websearch_60pct,"WebSearch
+60%",healthy_p2p,websearch,0,60,0,0,0,reps,p99_fct_us,2047.8159608398805,1993.9161478289293,1.0270321362659307,3,ops;reps;mrc;sglb;ecmp
+p2p,Healthy,healthy_p2p_websearch_60pct,websearch_60pct,"WebSearch
+60%",healthy_p2p,websearch,0,60,0,0,0,mrc,p99_fct_us,1993.9161478289293,1993.9161478289293,1.0,3,ops;reps;mrc;sglb;ecmp
+p2p,Healthy,healthy_p2p_websearch_60pct,websearch_60pct,"WebSearch
+60%",healthy_p2p,websearch,0,60,0,0,0,sglb,p99_fct_us,2014.1498115989193,1993.9161478289293,1.0101477004396706,3,ops;reps;mrc;sglb;ecmp
+p2p,Healthy,healthy_p2p_websearch_60pct,websearch_60pct,"WebSearch
+60%",healthy_p2p,websearch,0,60,0,0,0,n-mrc,p99_fct_us,2016.278167805384,1993.9161478289293,1.0112151255712551,3,ops;reps;mrc;sglb;ecmp
+p2p,Healthy,healthy_p2p_websearch_80pct,websearch_80pct,"WebSearch
+80%",healthy_p2p,websearch,0,80,0,0,0,ecmp,p99_fct_us,5033.446873904805,3804.222017068426,1.3231212193508184,3,ops;reps;mrc;sglb;ecmp
+p2p,Healthy,healthy_p2p_websearch_80pct,websearch_80pct,"WebSearch
+80%",healthy_p2p,websearch,0,80,0,0,0,ops,p99_fct_us,4138.391892933757,3804.222017068426,1.087841843711016,3,ops;reps;mrc;sglb;ecmp
+p2p,Healthy,healthy_p2p_websearch_80pct,websearch_80pct,"WebSearch
+80%",healthy_p2p,websearch,0,80,0,0,0,reps,p99_fct_us,3804.222017068426,3804.222017068426,1.0,3,ops;reps;mrc;sglb;ecmp
+p2p,Healthy,healthy_p2p_websearch_80pct,websearch_80pct,"WebSearch
+80%",healthy_p2p,websearch,0,80,0,0,0,mrc,p99_fct_us,3827.6892041453552,3804.222017068426,1.006168721744325,3,ops;reps;mrc;sglb;ecmp
+p2p,Healthy,healthy_p2p_websearch_80pct,websearch_80pct,"WebSearch
+80%",healthy_p2p,websearch,0,80,0,0,0,sglb,p99_fct_us,3840.1651538970123,3804.222017068426,1.0094482227029127,3,ops;reps;mrc;sglb;ecmp
+p2p,Healthy,healthy_p2p_websearch_80pct,websearch_80pct,"WebSearch
+80%",healthy_p2p,websearch,0,80,0,0,0,n-mrc,p99_fct_us,3994.877655085312,3804.222017068426,1.0501168536330083,3,ops;reps;mrc;sglb;ecmp
+p2p,Healthy,healthy_p2p_websearch_100pct,websearch_100pct,"WebSearch
+100%",healthy_p2p,websearch,0,100,0,0,0,ecmp,p99_fct_us,7468.734777435679,6629.069550126234,1.126664114919937,3,ops;reps;mrc;sglb;ecmp
+p2p,Healthy,healthy_p2p_websearch_100pct,websearch_100pct,"WebSearch
+100%",healthy_p2p,websearch,0,100,0,0,0,ops,p99_fct_us,6887.548272278045,6629.069550126234,1.0389917046724737,3,ops;reps;mrc;sglb;ecmp
+p2p,Healthy,healthy_p2p_websearch_100pct,websearch_100pct,"WebSearch
+100%",healthy_p2p,websearch,0,100,0,0,0,reps,p99_fct_us,6629.069550126234,6629.069550126234,1.0,3,ops;reps;mrc;sglb;ecmp
+p2p,Healthy,healthy_p2p_websearch_100pct,websearch_100pct,"WebSearch
+100%",healthy_p2p,websearch,0,100,0,0,0,mrc,p99_fct_us,6642.016465760279,6629.069550126234,1.0019530517120308,3,ops;reps;mrc;sglb;ecmp
+p2p,Healthy,healthy_p2p_websearch_100pct,websearch_100pct,"WebSearch
+100%",healthy_p2p,websearch,0,100,0,0,0,sglb,p99_fct_us,6647.017016570531,6629.069550126234,1.0027073884665993,3,ops;reps;mrc;sglb;ecmp
+p2p,Healthy,healthy_p2p_websearch_100pct,websearch_100pct,"WebSearch
+100%",healthy_p2p,websearch,0,100,0,0,0,n-mrc,p99_fct_us,8029.471270501152,6629.069550126234,1.2112516258557358,3,ops;reps;mrc;sglb;ecmp
+p2p,Asymmetric,asymmetric_p2p_permutation_4mib,permutation_4mib,"Permutation
+4 MiB",asymmetric_p2p,permutation,4,0,0,1,0,ops,p99_fct_us,234.04454806588885,109.71029648978053,2.1332961039594855,3,ops;reps;mrc;sglb
+p2p,Asymmetric,asymmetric_p2p_permutation_4mib,permutation_4mib,"Permutation
+4 MiB",asymmetric_p2p,permutation,4,0,0,1,0,reps,p99_fct_us,127.54523573594341,109.71029648978053,1.162563950848717,3,ops;reps;mrc;sglb
+p2p,Asymmetric,asymmetric_p2p_permutation_4mib,permutation_4mib,"Permutation
+4 MiB",asymmetric_p2p,permutation,4,0,0,1,0,mrc,p99_fct_us,125.891613116596,109.71029648978053,1.1474913216401958,3,ops;reps;mrc;sglb
+p2p,Asymmetric,asymmetric_p2p_permutation_4mib,permutation_4mib,"Permutation
+4 MiB",asymmetric_p2p,permutation,4,0,0,1,0,sglb,p99_fct_us,109.71029648978053,109.71029648978053,1.0,3,ops;reps;mrc;sglb
+p2p,Asymmetric,asymmetric_p2p_permutation_4mib,permutation_4mib,"Permutation
+4 MiB",asymmetric_p2p,permutation,4,0,0,1,0,n-mrc,p99_fct_us,103.86287334312016,109.71029648978053,0.9467012364951082,3,ops;reps;mrc;sglb
+p2p,Asymmetric,asymmetric_p2p_permutation_8mib,permutation_8mib,"Permutation
+8 MiB",asymmetric_p2p,permutation,8,0,0,1,0,ops,p99_fct_us,458.64198353291175,207.52842632848981,2.2100200519370907,3,ops;reps;mrc;sglb
+p2p,Asymmetric,asymmetric_p2p_permutation_8mib,permutation_8mib,"Permutation
+8 MiB",asymmetric_p2p,permutation,8,0,0,1,0,reps,p99_fct_us,243.00513204091473,207.52842632848981,1.1709486567217062,3,ops;reps;mrc;sglb
+p2p,Asymmetric,asymmetric_p2p_permutation_8mib,permutation_8mib,"Permutation
+8 MiB",asymmetric_p2p,permutation,8,0,0,1,0,mrc,p99_fct_us,250.65292668730206,207.52842632848981,1.2078004499034358,3,ops;reps;mrc;sglb
+p2p,Asymmetric,asymmetric_p2p_permutation_8mib,permutation_8mib,"Permutation
+8 MiB",asymmetric_p2p,permutation,8,0,0,1,0,sglb,p99_fct_us,207.52842632848981,207.52842632848981,1.0,3,ops;reps;mrc;sglb
+p2p,Asymmetric,asymmetric_p2p_permutation_8mib,permutation_8mib,"Permutation
+8 MiB",asymmetric_p2p,permutation,8,0,0,1,0,n-mrc,p99_fct_us,195.68944501790006,207.52842632848981,0.9429524835703701,3,ops;reps;mrc;sglb
+p2p,Asymmetric,asymmetric_p2p_permutation_16mib,permutation_16mib,"Permutation
+16 MiB",asymmetric_p2p,permutation,16,0,0,1,0,ops,p99_fct_us,907.1935474528273,410.6459288452389,2.2091867561037564,3,ops;reps;mrc;sglb
+p2p,Asymmetric,asymmetric_p2p_permutation_16mib,permutation_16mib,"Permutation
+16 MiB",asymmetric_p2p,permutation,16,0,0,1,0,reps,p99_fct_us,469.11863833410814,410.6459288452389,1.1423920350392807,3,ops;reps;mrc;sglb
+p2p,Asymmetric,asymmetric_p2p_permutation_16mib,permutation_16mib,"Permutation
+16 MiB",asymmetric_p2p,permutation,16,0,0,1,0,mrc,p99_fct_us,517.6373340219639,410.6459288452389,1.260544176043803,3,ops;reps;mrc;sglb
+p2p,Asymmetric,asymmetric_p2p_permutation_16mib,permutation_16mib,"Permutation
+16 MiB",asymmetric_p2p,permutation,16,0,0,1,0,sglb,p99_fct_us,410.6459288452389,410.6459288452389,1.0,3,ops;reps;mrc;sglb
+p2p,Asymmetric,asymmetric_p2p_permutation_16mib,permutation_16mib,"Permutation
+16 MiB",asymmetric_p2p,permutation,16,0,0,1,0,n-mrc,p99_fct_us,401.8538918943163,410.6459288452389,0.9785897379388458,3,ops;reps;mrc;sglb
+p2p,Asymmetric,asymmetric_p2p_tornado_4mib,tornado_4mib,"Tornado
+4 MiB",asymmetric_p2p,tornado,4,0,0,1,0,ops,p99_fct_us,243.5066535992339,107.60142156233158,2.2630430905429524,3,ops;reps;mrc;sglb
+p2p,Asymmetric,asymmetric_p2p_tornado_4mib,tornado_4mib,"Tornado
+4 MiB",asymmetric_p2p,tornado,4,0,0,1,0,reps,p99_fct_us,123.67775292046525,107.60142156233158,1.1494063101092111,3,ops;reps;mrc;sglb
+p2p,Asymmetric,asymmetric_p2p_tornado_4mib,tornado_4mib,"Tornado
+4 MiB",asymmetric_p2p,tornado,4,0,0,1,0,mrc,p99_fct_us,125.38752591763914,107.60142156233158,1.1652961837962743,3,ops;reps;mrc;sglb
+p2p,Asymmetric,asymmetric_p2p_tornado_4mib,tornado_4mib,"Tornado
+4 MiB",asymmetric_p2p,tornado,4,0,0,1,0,sglb,p99_fct_us,107.60142156233158,107.60142156233158,1.0,3,ops;reps;mrc;sglb
+p2p,Asymmetric,asymmetric_p2p_tornado_4mib,tornado_4mib,"Tornado
+4 MiB",asymmetric_p2p,tornado,4,0,0,1,0,n-mrc,p99_fct_us,103.21746763515664,107.60142156233158,0.9592574720340902,3,ops;reps;mrc;sglb
+p2p,Asymmetric,asymmetric_p2p_tornado_8mib,tornado_8mib,"Tornado
+8 MiB",asymmetric_p2p,tornado,8,0,0,1,0,ops,p99_fct_us,482.6482748894352,201.9624105334566,2.3897926035571895,3,ops;reps;mrc;sglb
+p2p,Asymmetric,asymmetric_p2p_tornado_8mib,tornado_8mib,"Tornado
+8 MiB",asymmetric_p2p,tornado,8,0,0,1,0,reps,p99_fct_us,234.7458384353554,201.9624105334566,1.1623244039091523,3,ops;reps;mrc;sglb
+p2p,Asymmetric,asymmetric_p2p_tornado_8mib,tornado_8mib,"Tornado
+8 MiB",asymmetric_p2p,tornado,8,0,0,1,0,mrc,p99_fct_us,248.68381199998382,201.9624105334566,1.231337115372702,3,ops;reps;mrc;sglb
+p2p,Asymmetric,asymmetric_p2p_tornado_8mib,tornado_8mib,"Tornado
+8 MiB",asymmetric_p2p,tornado,8,0,0,1,0,sglb,p99_fct_us,201.9624105334566,201.9624105334566,1.0,3,ops;reps;mrc;sglb
+p2p,Asymmetric,asymmetric_p2p_tornado_8mib,tornado_8mib,"Tornado
+8 MiB",asymmetric_p2p,tornado,8,0,0,1,0,n-mrc,p99_fct_us,195.1805101434976,201.9624105334566,0.9664199869072393,3,ops;reps;mrc;sglb
+p2p,Asymmetric,asymmetric_p2p_tornado_16mib,tornado_16mib,"Tornado
+16 MiB",asymmetric_p2p,tornado,16,0,0,1,0,ops,p99_fct_us,936.0276888479033,391.10653783544853,2.3932805982438503,3,ops;reps;mrc;sglb
+p2p,Asymmetric,asymmetric_p2p_tornado_16mib,tornado_16mib,"Tornado
+16 MiB",asymmetric_p2p,tornado,16,0,0,1,0,reps,p99_fct_us,452.66565758461627,391.10653783544853,1.1573973170836322,3,ops;reps;mrc;sglb
+p2p,Asymmetric,asymmetric_p2p_tornado_16mib,tornado_16mib,"Tornado
+16 MiB",asymmetric_p2p,tornado,16,0,0,1,0,mrc,p99_fct_us,519.6002280631321,391.10653783544853,1.3285388450390598,3,ops;reps;mrc;sglb
+p2p,Asymmetric,asymmetric_p2p_tornado_16mib,tornado_16mib,"Tornado
+16 MiB",asymmetric_p2p,tornado,16,0,0,1,0,sglb,p99_fct_us,391.10653783544853,391.10653783544853,1.0,3,ops;reps;mrc;sglb
+p2p,Asymmetric,asymmetric_p2p_tornado_16mib,tornado_16mib,"Tornado
+16 MiB",asymmetric_p2p,tornado,16,0,0,1,0,n-mrc,p99_fct_us,382.85547708507266,391.10653783544853,0.9789032911696113,3,ops;reps;mrc;sglb
+p2p,Asymmetric,asymmetric_p2p_websearch_40pct,websearch_40pct,"WebSearch
+40%",asymmetric_p2p,websearch,0,40,0,1,0,ops,p99_fct_us,1312.0914338398777,1220.2159989609072,1.0752944027591904,3,ops;reps;mrc;sglb
+p2p,Asymmetric,asymmetric_p2p_websearch_40pct,websearch_40pct,"WebSearch
+40%",asymmetric_p2p,websearch,0,40,0,1,0,reps,p99_fct_us,1222.4497950415614,1220.2159989609072,1.0018306562793444,3,ops;reps;mrc;sglb
+p2p,Asymmetric,asymmetric_p2p_websearch_40pct,websearch_40pct,"WebSearch
+40%",asymmetric_p2p,websearch,0,40,0,1,0,mrc,p99_fct_us,1227.9349608309428,1220.2159989609072,1.006325897936602,3,ops;reps;mrc;sglb
+p2p,Asymmetric,asymmetric_p2p_websearch_40pct,websearch_40pct,"WebSearch
+40%",asymmetric_p2p,websearch,0,40,0,1,0,sglb,p99_fct_us,1220.2159989609072,1220.2159989609072,1.0,3,ops;reps;mrc;sglb
+p2p,Asymmetric,asymmetric_p2p_websearch_40pct,websearch_40pct,"WebSearch
+40%",asymmetric_p2p,websearch,0,40,0,1,0,n-mrc,p99_fct_us,1220.984875710077,1220.2159989609072,1.0006301152827242,3,ops;reps;mrc;sglb
+p2p,Asymmetric,asymmetric_p2p_websearch_60pct,websearch_60pct,"WebSearch
+60%",asymmetric_p2p,websearch,0,60,0,1,0,ops,p99_fct_us,2442.087121175633,2008.914297152958,1.2156253378437145,3,ops;reps;mrc;sglb
+p2p,Asymmetric,asymmetric_p2p_websearch_60pct,websearch_60pct,"WebSearch
+60%",asymmetric_p2p,websearch,0,60,0,1,0,reps,p99_fct_us,2025.0120826725695,2008.914297152958,1.00801317684006,3,ops;reps;mrc;sglb
+p2p,Asymmetric,asymmetric_p2p_websearch_60pct,websearch_60pct,"WebSearch
+60%",asymmetric_p2p,websearch,0,60,0,1,0,mrc,p99_fct_us,2057.892540867176,2008.914297152958,1.0243804545488229,3,ops;reps;mrc;sglb
+p2p,Asymmetric,asymmetric_p2p_websearch_60pct,websearch_60pct,"WebSearch
+60%",asymmetric_p2p,websearch,0,60,0,1,0,sglb,p99_fct_us,2008.914297152958,2008.914297152958,1.0,3,ops;reps;mrc;sglb
+p2p,Asymmetric,asymmetric_p2p_websearch_60pct,websearch_60pct,"WebSearch
+60%",asymmetric_p2p,websearch,0,60,0,1,0,n-mrc,p99_fct_us,2013.450207427122,2008.914297152958,1.002257891379733,3,ops;reps;mrc;sglb
+p2p,Asymmetric,asymmetric_p2p_websearch_80pct,websearch_80pct,"WebSearch
+80%",asymmetric_p2p,websearch,0,80,0,1,0,ops,p99_fct_us,5024.549297372821,3826.8475220515743,1.3129734771034614,3,ops;reps;mrc;sglb
+p2p,Asymmetric,asymmetric_p2p_websearch_80pct,websearch_80pct,"WebSearch
+80%",asymmetric_p2p,websearch,0,80,0,1,0,reps,p99_fct_us,3826.8475220515743,3826.8475220515743,1.0,3,ops;reps;mrc;sglb
+p2p,Asymmetric,asymmetric_p2p_websearch_80pct,websearch_80pct,"WebSearch
+80%",asymmetric_p2p,websearch,0,80,0,1,0,mrc,p99_fct_us,3899.753922731579,3826.8475220515743,1.0190512949000172,3,ops;reps;mrc;sglb
+p2p,Asymmetric,asymmetric_p2p_websearch_80pct,websearch_80pct,"WebSearch
+80%",asymmetric_p2p,websearch,0,80,0,1,0,sglb,p99_fct_us,3833.8250444854666,3826.8475220515743,1.0018233081913208,3,ops;reps;mrc;sglb
+p2p,Asymmetric,asymmetric_p2p_websearch_80pct,websearch_80pct,"WebSearch
+80%",asymmetric_p2p,websearch,0,80,0,1,0,n-mrc,p99_fct_us,4061.3133276805193,3826.8475220515743,1.061268656322959,3,ops;reps;mrc;sglb
+p2p,Asymmetric,asymmetric_p2p_websearch_100pct,websearch_100pct,"WebSearch
+100%",asymmetric_p2p,websearch,0,100,0,1,0,ops,p99_fct_us,7738.604365655229,6606.897367874086,1.1712917478155551,3,ops;reps;mrc;sglb
+p2p,Asymmetric,asymmetric_p2p_websearch_100pct,websearch_100pct,"WebSearch
+100%",asymmetric_p2p,websearch,0,100,0,1,0,reps,p99_fct_us,6606.897367874086,6606.897367874086,1.0,3,ops;reps;mrc;sglb
+p2p,Asymmetric,asymmetric_p2p_websearch_100pct,websearch_100pct,"WebSearch
+100%",asymmetric_p2p,websearch,0,100,0,1,0,mrc,p99_fct_us,6698.235176446293,6606.897367874086,1.0138246144122558,3,ops;reps;mrc;sglb
+p2p,Asymmetric,asymmetric_p2p_websearch_100pct,websearch_100pct,"WebSearch
+100%",asymmetric_p2p,websearch,0,100,0,1,0,sglb,p99_fct_us,6727.762407320479,6606.897367874086,1.0182937667586751,3,ops;reps;mrc;sglb
+p2p,Asymmetric,asymmetric_p2p_websearch_100pct,websearch_100pct,"WebSearch
+100%",asymmetric_p2p,websearch,0,100,0,1,0,n-mrc,p99_fct_us,8066.7172484888015,6606.897367874086,1.220953921232841,3,ops;reps;mrc;sglb
+alltoall,All-to-All,healthy_alltoall_64mib_p4,64mib_healthy_p4,"64 MiB
+Healthy · bg off
+P=4",healthy_alltoall,alltoall,64,0,4,0,0,ops,all_to_all_cct_us,2996.68170913146,2254.894504859701,1.3289675870303799,3,ops;reps;mrc;sglb
+alltoall,All-to-All,healthy_alltoall_64mib_p4,64mib_healthy_p4,"64 MiB
+Healthy · bg off
+P=4",healthy_alltoall,alltoall,64,0,4,0,0,reps,all_to_all_cct_us,2455.5978633222926,2254.894504859701,1.0890078706697985,3,ops;reps;mrc;sglb
+alltoall,All-to-All,healthy_alltoall_64mib_p4,64mib_healthy_p4,"64 MiB
+Healthy · bg off
+P=4",healthy_alltoall,alltoall,64,0,4,0,0,mrc,all_to_all_cct_us,2254.894504859701,2254.894504859701,1.0,3,ops;reps;mrc;sglb
+alltoall,All-to-All,healthy_alltoall_64mib_p4,64mib_healthy_p4,"64 MiB
+Healthy · bg off
+P=4",healthy_alltoall,alltoall,64,0,4,0,0,sglb,all_to_all_cct_us,2332.818602041864,2254.894504859701,1.0345577573648002,3,ops;reps;mrc;sglb
+alltoall,All-to-All,healthy_alltoall_64mib_p4,64mib_healthy_p4,"64 MiB
+Healthy · bg off
+P=4",healthy_alltoall,alltoall,64,0,4,0,0,n-mrc,all_to_all_cct_us,2306.478252885482,2254.894504859701,1.022876346505173,3,ops;reps;mrc;sglb
+alltoall,All-to-All,healthy_alltoall_64mib_p8,64mib_healthy_p8,"64 MiB
+Healthy · bg off
+P=8",healthy_alltoall,alltoall,64,0,8,0,0,ops,all_to_all_cct_us,1913.5749149494343,1710.5250715701525,1.1187061486289092,3,ops;reps;mrc;sglb
+alltoall,All-to-All,healthy_alltoall_64mib_p8,64mib_healthy_p8,"64 MiB
+Healthy · bg off
+P=8",healthy_alltoall,alltoall,64,0,8,0,0,reps,all_to_all_cct_us,1777.680228226614,1710.5250715701525,1.039259966294921,3,ops;reps;mrc;sglb
+alltoall,All-to-All,healthy_alltoall_64mib_p8,64mib_healthy_p8,"64 MiB
+Healthy · bg off
+P=8",healthy_alltoall,alltoall,64,0,8,0,0,mrc,all_to_all_cct_us,1710.5250715701525,1710.5250715701525,1.0,3,ops;reps;mrc;sglb
+alltoall,All-to-All,healthy_alltoall_64mib_p8,64mib_healthy_p8,"64 MiB
+Healthy · bg off
+P=8",healthy_alltoall,alltoall,64,0,8,0,0,sglb,all_to_all_cct_us,1854.5094968321328,1710.5250715701525,1.0841755713816061,3,ops;reps;mrc;sglb
+alltoall,All-to-All,healthy_alltoall_64mib_p8,64mib_healthy_p8,"64 MiB
+Healthy · bg off
+P=8",healthy_alltoall,alltoall,64,0,8,0,0,n-mrc,all_to_all_cct_us,1842.9663393393485,1710.5250715701525,1.0774272590156329,3,ops;reps;mrc;sglb
+alltoall,All-to-All,healthy_alltoall_64mib_p16,64mib_healthy_p16,"64 MiB
+Healthy · bg off
+P=16",healthy_alltoall,alltoall,64,0,16,0,0,ops,all_to_all_cct_us,1812.9330420301546,1734.9530240216973,1.0449464722841293,3,ops;reps;mrc;sglb
+alltoall,All-to-All,healthy_alltoall_64mib_p16,64mib_healthy_p16,"64 MiB
+Healthy · bg off
+P=16",healthy_alltoall,alltoall,64,0,16,0,0,reps,all_to_all_cct_us,1807.220790565482,1734.9530240216973,1.0416540191827586,3,ops;reps;mrc;sglb
+alltoall,All-to-All,healthy_alltoall_64mib_p16,64mib_healthy_p16,"64 MiB
+Healthy · bg off
+P=16",healthy_alltoall,alltoall,64,0,16,0,0,mrc,all_to_all_cct_us,1734.9530240216973,1734.9530240216973,1.0,3,ops;reps;mrc;sglb
+alltoall,All-to-All,healthy_alltoall_64mib_p16,64mib_healthy_p16,"64 MiB
+Healthy · bg off
+P=16",healthy_alltoall,alltoall,64,0,16,0,0,sglb,all_to_all_cct_us,1922.6172205883904,1734.9530240216973,1.1081667307231635,3,ops;reps;mrc;sglb
+alltoall,All-to-All,healthy_alltoall_64mib_p16,64mib_healthy_p16,"64 MiB
+Healthy · bg off
+P=16",healthy_alltoall,alltoall,64,0,16,0,0,n-mrc,all_to_all_cct_us,1798.7329306119186,1734.9530240216973,1.036761748420356,3,ops;reps;mrc;sglb
+alltoall,All-to-All,asymmetric_alltoall_background_64mib_p4,64mib_degraded_bg_p4,"64 MiB
+3% half-rate · bg on
+P=4",asymmetric_alltoall_background,alltoall,64,0,4,1,1,ops,all_to_all_cct_us,2611.4696161848233,2377.656503021989,1.0983376332391408,3,ops;reps;mrc;sglb
+alltoall,All-to-All,asymmetric_alltoall_background_64mib_p4,64mib_degraded_bg_p4,"64 MiB
+3% half-rate · bg on
+P=4",asymmetric_alltoall_background,alltoall,64,0,4,1,1,reps,all_to_all_cct_us,2377.656503021989,2377.656503021989,1.0,3,ops;reps;mrc;sglb
+alltoall,All-to-All,asymmetric_alltoall_background_64mib_p4,64mib_degraded_bg_p4,"64 MiB
+3% half-rate · bg on
+P=4",asymmetric_alltoall_background,alltoall,64,0,4,1,1,mrc,all_to_all_cct_us,3037.560992731515,2377.656503021989,1.2775440812711132,3,ops;reps;mrc;sglb
+alltoall,All-to-All,asymmetric_alltoall_background_64mib_p4,64mib_degraded_bg_p4,"64 MiB
+3% half-rate · bg on
+P=4",asymmetric_alltoall_background,alltoall,64,0,4,1,1,sglb,all_to_all_cct_us,2455.454208623707,2377.656503021989,1.0327203300825152,3,ops;reps;mrc;sglb
+alltoall,All-to-All,asymmetric_alltoall_background_64mib_p4,64mib_degraded_bg_p4,"64 MiB
+3% half-rate · bg on
+P=4",asymmetric_alltoall_background,alltoall,64,0,4,1,1,n-mrc,all_to_all_cct_us,2564.800805983046,2377.656503021989,1.0787095624297276,3,ops;reps;mrc;sglb
+alltoall,All-to-All,asymmetric_alltoall_background_64mib_p8,64mib_degraded_bg_p8,"64 MiB
+3% half-rate · bg on
+P=8",asymmetric_alltoall_background,alltoall,64,0,8,1,1,ops,all_to_all_cct_us,2339.558875504619,2000.0080507789658,1.1697747289534184,3,ops;reps;mrc;sglb
+alltoall,All-to-All,asymmetric_alltoall_background_64mib_p8,64mib_degraded_bg_p8,"64 MiB
+3% half-rate · bg on
+P=8",asymmetric_alltoall_background,alltoall,64,0,8,1,1,reps,all_to_all_cct_us,2095.146642568481,2000.0080507789658,1.047569104410585,3,ops;reps;mrc;sglb
+alltoall,All-to-All,asymmetric_alltoall_background_64mib_p8,64mib_degraded_bg_p8,"64 MiB
+3% half-rate · bg on
+P=8",asymmetric_alltoall_background,alltoall,64,0,8,1,1,mrc,all_to_all_cct_us,2027.677610856193,2000.0080507789658,1.0138347243484598,3,ops;reps;mrc;sglb
+alltoall,All-to-All,asymmetric_alltoall_background_64mib_p8,64mib_degraded_bg_p8,"64 MiB
+3% half-rate · bg on
+P=8",asymmetric_alltoall_background,alltoall,64,0,8,1,1,sglb,all_to_all_cct_us,2000.0080507789658,2000.0080507789658,1.0,3,ops;reps;mrc;sglb
+alltoall,All-to-All,asymmetric_alltoall_background_64mib_p8,64mib_degraded_bg_p8,"64 MiB
+3% half-rate · bg on
+P=8",asymmetric_alltoall_background,alltoall,64,0,8,1,1,n-mrc,all_to_all_cct_us,2119.3041856384775,2000.0080507789658,1.059647827324019,3,ops;reps;mrc;sglb
+alltoall,All-to-All,asymmetric_alltoall_background_64mib_p16,64mib_degraded_bg_p16,"64 MiB
+3% half-rate · bg on
+P=16",asymmetric_alltoall_background,alltoall,64,0,16,1,1,ops,all_to_all_cct_us,2157.199096907581,1953.119227022409,1.1044892022266855,3,ops;reps;mrc;sglb
+alltoall,All-to-All,asymmetric_alltoall_background_64mib_p16,64mib_degraded_bg_p16,"64 MiB
+3% half-rate · bg on
+P=16",asymmetric_alltoall_background,alltoall,64,0,16,1,1,reps,all_to_all_cct_us,1993.414139815377,1953.119227022409,1.020631056330544,3,ops;reps;mrc;sglb
+alltoall,All-to-All,asymmetric_alltoall_background_64mib_p16,64mib_degraded_bg_p16,"64 MiB
+3% half-rate · bg on
+P=16",asymmetric_alltoall_background,alltoall,64,0,16,1,1,mrc,all_to_all_cct_us,2004.494352184249,1953.119227022409,1.0263041418317114,3,ops;reps;mrc;sglb
+alltoall,All-to-All,asymmetric_alltoall_background_64mib_p16,64mib_degraded_bg_p16,"64 MiB
+3% half-rate · bg on
+P=16",asymmetric_alltoall_background,alltoall,64,0,16,1,1,sglb,all_to_all_cct_us,1953.119227022409,1953.119227022409,1.0,3,ops;reps;mrc;sglb
+alltoall,All-to-All,asymmetric_alltoall_background_64mib_p16,64mib_degraded_bg_p16,"64 MiB
+3% half-rate · bg on
+P=16",asymmetric_alltoall_background,alltoall,64,0,16,1,1,n-mrc,all_to_all_cct_us,1989.2390572911902,1953.119227022409,1.0184934077597747,3,ops;reps;mrc;sglb
+alltoall,All-to-All,healthy_alltoall_256mib_p4,256mib_healthy_p4,"256 MiB
+Healthy · bg off
+P=4",healthy_alltoall,alltoall,256,0,4,0,0,ops,all_to_all_cct_us,11984.930649944547,9081.084635251847,1.3197686324186721,3,ops;reps;mrc;sglb
+alltoall,All-to-All,healthy_alltoall_256mib_p4,256mib_healthy_p4,"256 MiB
+Healthy · bg off
+P=4",healthy_alltoall,alltoall,256,0,4,0,0,reps,all_to_all_cct_us,10734.966336795898,9081.084635251847,1.1821238065686395,3,ops;reps;mrc;sglb
+alltoall,All-to-All,healthy_alltoall_256mib_p4,256mib_healthy_p4,"256 MiB
+Healthy · bg off
+P=4",healthy_alltoall,alltoall,256,0,4,0,0,mrc,all_to_all_cct_us,9081.084635251847,9081.084635251847,1.0,3,ops;reps;mrc;sglb
+alltoall,All-to-All,healthy_alltoall_256mib_p4,256mib_healthy_p4,"256 MiB
+Healthy · bg off
+P=4",healthy_alltoall,alltoall,256,0,4,0,0,sglb,all_to_all_cct_us,10236.264242999152,9081.084635251847,1.1272072284474715,3,ops;reps;mrc;sglb
+alltoall,All-to-All,healthy_alltoall_256mib_p4,256mib_healthy_p4,"256 MiB
+Healthy · bg off
+P=4",healthy_alltoall,alltoall,256,0,4,0,0,n-mrc,all_to_all_cct_us,10562.9382253492,9081.084635251847,1.1631802421865938,3,ops;reps;mrc;sglb
+alltoall,All-to-All,healthy_alltoall_256mib_p8,256mib_healthy_p8,"256 MiB
+Healthy · bg off
+P=8",healthy_alltoall,alltoall,256,0,8,0,0,ops,all_to_all_cct_us,8855.767530677995,8424.365047020337,1.0512089019468882,3,ops;reps;mrc;sglb
+alltoall,All-to-All,healthy_alltoall_256mib_p8,256mib_healthy_p8,"256 MiB
+Healthy · bg off
+P=8",healthy_alltoall,alltoall,256,0,8,0,0,reps,all_to_all_cct_us,8686.686000412396,8424.365047020337,1.0311383649601984,3,ops;reps;mrc;sglb
+alltoall,All-to-All,healthy_alltoall_256mib_p8,256mib_healthy_p8,"256 MiB
+Healthy · bg off
+P=8",healthy_alltoall,alltoall,256,0,8,0,0,mrc,all_to_all_cct_us,8424.365047020337,8424.365047020337,1.0,3,ops;reps;mrc;sglb
+alltoall,All-to-All,healthy_alltoall_256mib_p8,256mib_healthy_p8,"256 MiB
+Healthy · bg off
+P=8",healthy_alltoall,alltoall,256,0,8,0,0,sglb,all_to_all_cct_us,8451.941765022626,8424.365047020337,1.0032734476543181,3,ops;reps;mrc;sglb
+alltoall,All-to-All,healthy_alltoall_256mib_p8,256mib_healthy_p8,"256 MiB
+Healthy · bg off
+P=8",healthy_alltoall,alltoall,256,0,8,0,0,n-mrc,all_to_all_cct_us,8638.684926522063,8424.365047020337,1.025440478695487,3,ops;reps;mrc;sglb
+alltoall,All-to-All,healthy_alltoall_256mib_p16,256mib_healthy_p16,"256 MiB
+Healthy · bg off
+P=16",healthy_alltoall,alltoall,256,0,16,0,0,ops,all_to_all_cct_us,7695.130906748964,6842.448396393257,1.1246165788850035,3,ops;reps;mrc;sglb
+alltoall,All-to-All,healthy_alltoall_256mib_p16,256mib_healthy_p16,"256 MiB
+Healthy · bg off
+P=16",healthy_alltoall,alltoall,256,0,16,0,0,reps,all_to_all_cct_us,7721.784171215191,6842.448396393257,1.1285118606499749,3,ops;reps;mrc;sglb
+alltoall,All-to-All,healthy_alltoall_256mib_p16,256mib_healthy_p16,"256 MiB
+Healthy · bg off
+P=16",healthy_alltoall,alltoall,256,0,16,0,0,mrc,all_to_all_cct_us,6842.448396393257,6842.448396393257,1.0,3,ops;reps;mrc;sglb
+alltoall,All-to-All,healthy_alltoall_256mib_p16,256mib_healthy_p16,"256 MiB
+Healthy · bg off
+P=16",healthy_alltoall,alltoall,256,0,16,0,0,sglb,all_to_all_cct_us,7486.722270370134,6842.448396393257,1.094158382592477,3,ops;reps;mrc;sglb
+alltoall,All-to-All,healthy_alltoall_256mib_p16,256mib_healthy_p16,"256 MiB
+Healthy · bg off
+P=16",healthy_alltoall,alltoall,256,0,16,0,0,n-mrc,all_to_all_cct_us,6980.918795404335,6842.448396393257,1.0202369665051574,3,ops;reps;mrc;sglb
+alltoall,All-to-All,asymmetric_alltoall_background_256mib_p4,256mib_degraded_bg_p4,"256 MiB
+3% half-rate · bg on
+P=4",asymmetric_alltoall_background,alltoall,256,0,4,1,1,ops,all_to_all_cct_us,11823.69525164999,10544.762105216862,1.1212861071375329,3,ops;reps;mrc;sglb
+alltoall,All-to-All,asymmetric_alltoall_background_256mib_p4,256mib_degraded_bg_p4,"256 MiB
+3% half-rate · bg on
+P=4",asymmetric_alltoall_background,alltoall,256,0,4,1,1,reps,all_to_all_cct_us,10544.762105216862,10544.762105216862,1.0,3,ops;reps;mrc;sglb
+alltoall,All-to-All,asymmetric_alltoall_background_256mib_p4,256mib_degraded_bg_p4,"256 MiB
+3% half-rate · bg on
+P=4",asymmetric_alltoall_background,alltoall,256,0,4,1,1,mrc,all_to_all_cct_us,11006.007582375449,10544.762105216862,1.04374166743225,3,ops;reps;mrc;sglb
+alltoall,All-to-All,asymmetric_alltoall_background_256mib_p4,256mib_degraded_bg_p4,"256 MiB
+3% half-rate · bg on
+P=4",asymmetric_alltoall_background,alltoall,256,0,4,1,1,sglb,all_to_all_cct_us,10876.251203702039,10544.762105216862,1.031436375252238,3,ops;reps;mrc;sglb
+alltoall,All-to-All,asymmetric_alltoall_background_256mib_p4,256mib_degraded_bg_p4,"256 MiB
+3% half-rate · bg on
+P=4",asymmetric_alltoall_background,alltoall,256,0,4,1,1,n-mrc,all_to_all_cct_us,11255.757568125622,10544.762105216862,1.0674264109341078,3,ops;reps;mrc;sglb
+alltoall,All-to-All,asymmetric_alltoall_background_256mib_p8,256mib_degraded_bg_p8,"256 MiB
+3% half-rate · bg on
+P=8",asymmetric_alltoall_background,alltoall,256,0,8,1,1,ops,all_to_all_cct_us,10222.73184133151,9003.669126888055,1.1353962142836762,3,ops;reps;mrc;sglb
+alltoall,All-to-All,asymmetric_alltoall_background_256mib_p8,256mib_degraded_bg_p8,"256 MiB
+3% half-rate · bg on
+P=8",asymmetric_alltoall_background,alltoall,256,0,8,1,1,reps,all_to_all_cct_us,9003.669126888055,9003.669126888055,1.0,3,ops;reps;mrc;sglb
+alltoall,All-to-All,asymmetric_alltoall_background_256mib_p8,256mib_degraded_bg_p8,"256 MiB
+3% half-rate · bg on
+P=8",asymmetric_alltoall_background,alltoall,256,0,8,1,1,mrc,all_to_all_cct_us,9280.525561942115,9003.669126888055,1.030749290222946,3,ops;reps;mrc;sglb
+alltoall,All-to-All,asymmetric_alltoall_background_256mib_p8,256mib_degraded_bg_p8,"256 MiB
+3% half-rate · bg on
+P=8",asymmetric_alltoall_background,alltoall,256,0,8,1,1,sglb,all_to_all_cct_us,9022.462598768861,9003.669126888055,1.0020873125851195,3,ops;reps;mrc;sglb
+alltoall,All-to-All,asymmetric_alltoall_background_256mib_p8,256mib_degraded_bg_p8,"256 MiB
+3% half-rate · bg on
+P=8",asymmetric_alltoall_background,alltoall,256,0,8,1,1,n-mrc,all_to_all_cct_us,9801.78526286326,9003.669126888055,1.0886434324415317,3,ops;reps;mrc;sglb
+alltoall,All-to-All,asymmetric_alltoall_background_256mib_p16,256mib_degraded_bg_p16,"256 MiB
+3% half-rate · bg on
+P=16",asymmetric_alltoall_background,alltoall,256,0,16,1,1,ops,all_to_all_cct_us,9126.714715402222,7631.897439981213,1.1958644343921752,3,ops;reps;mrc;sglb
+alltoall,All-to-All,asymmetric_alltoall_background_256mib_p16,256mib_degraded_bg_p16,"256 MiB
+3% half-rate · bg on
+P=16",asymmetric_alltoall_background,alltoall,256,0,16,1,1,reps,all_to_all_cct_us,7888.047079862817,7631.897439981213,1.033563034867281,3,ops;reps;mrc;sglb
+alltoall,All-to-All,asymmetric_alltoall_background_256mib_p16,256mib_degraded_bg_p16,"256 MiB
+3% half-rate · bg on
+P=16",asymmetric_alltoall_background,alltoall,256,0,16,1,1,mrc,all_to_all_cct_us,7845.713017055971,7631.897439981213,1.0280160443397264,3,ops;reps;mrc;sglb
+alltoall,All-to-All,asymmetric_alltoall_background_256mib_p16,256mib_degraded_bg_p16,"256 MiB
+3% half-rate · bg on
+P=16",asymmetric_alltoall_background,alltoall,256,0,16,1,1,sglb,all_to_all_cct_us,7631.897439981213,7631.897439981213,1.0,3,ops;reps;mrc;sglb
+alltoall,All-to-All,asymmetric_alltoall_background_256mib_p16,256mib_degraded_bg_p16,"256 MiB
+3% half-rate · bg on
+P=16",asymmetric_alltoall_background,alltoall,256,0,16,1,1,n-mrc,all_to_all_cct_us,7691.999620535441,7631.897439981213,1.0078751294847557,3,ops;reps;mrc;sglb
+alltoall,All-to-All,healthy_alltoall_1024mib_p4,1024mib_healthy_p4,"1 GiB
+Healthy · bg off
+P=4",healthy_alltoall,alltoall,1024,0,4,0,0,ops,all_to_all_cct_us,37922.03136282506,33583.37146726884,1.12919071868007,3,ops;reps;mrc;sglb
+alltoall,All-to-All,healthy_alltoall_1024mib_p4,1024mib_healthy_p4,"1 GiB
+Healthy · bg off
+P=4",healthy_alltoall,alltoall,1024,0,4,0,0,reps,all_to_all_cct_us,37872.58880607735,33583.37146726884,1.1277184854114153,3,ops;reps;mrc;sglb
+alltoall,All-to-All,healthy_alltoall_1024mib_p4,1024mib_healthy_p4,"1 GiB
+Healthy · bg off
+P=4",healthy_alltoall,alltoall,1024,0,4,0,0,mrc,all_to_all_cct_us,33583.37146726884,33583.37146726884,1.0,3,ops;reps;mrc;sglb
+alltoall,All-to-All,healthy_alltoall_1024mib_p4,1024mib_healthy_p4,"1 GiB
+Healthy · bg off
+P=4",healthy_alltoall,alltoall,1024,0,4,0,0,sglb,all_to_all_cct_us,40964.41311958836,33583.37146726884,1.21978262842113,3,ops;reps;mrc;sglb
+alltoall,All-to-All,healthy_alltoall_1024mib_p4,1024mib_healthy_p4,"1 GiB
+Healthy · bg off
+P=4",healthy_alltoall,alltoall,1024,0,4,0,0,n-mrc,all_to_all_cct_us,37483.51001305735,33583.37146726884,1.116133025821713,3,ops;reps;mrc;sglb
+alltoall,All-to-All,healthy_alltoall_1024mib_p8,1024mib_healthy_p8,"1 GiB
+Healthy · bg off
+P=8",healthy_alltoall,alltoall,1024,0,8,0,0,ops,all_to_all_cct_us,29016.61294469026,28099.13775164412,1.0326513646488122,3,ops;reps;mrc;sglb
+alltoall,All-to-All,healthy_alltoall_1024mib_p8,1024mib_healthy_p8,"1 GiB
+Healthy · bg off
+P=8",healthy_alltoall,alltoall,1024,0,8,0,0,reps,all_to_all_cct_us,28940.2646419734,28099.13775164412,1.0299342598254662,3,ops;reps;mrc;sglb
+alltoall,All-to-All,healthy_alltoall_1024mib_p8,1024mib_healthy_p8,"1 GiB
+Healthy · bg off
+P=8",healthy_alltoall,alltoall,1024,0,8,0,0,mrc,all_to_all_cct_us,28099.13775164412,28099.13775164412,1.0,3,ops;reps;mrc;sglb
+alltoall,All-to-All,healthy_alltoall_1024mib_p8,1024mib_healthy_p8,"1 GiB
+Healthy · bg off
+P=8",healthy_alltoall,alltoall,1024,0,8,0,0,sglb,all_to_all_cct_us,29909.0341071588,28099.13775164412,1.0644110994263083,3,ops;reps;mrc;sglb
+alltoall,All-to-All,healthy_alltoall_1024mib_p8,1024mib_healthy_p8,"1 GiB
+Healthy · bg off
+P=8",healthy_alltoall,alltoall,1024,0,8,0,0,n-mrc,all_to_all_cct_us,30160.370703163673,28099.13775164412,1.0733557367396067,3,ops;reps;mrc;sglb
+alltoall,All-to-All,healthy_alltoall_1024mib_p16,1024mib_healthy_p16,"1 GiB
+Healthy · bg off
+P=16",healthy_alltoall,alltoall,1024,0,16,0,0,ops,all_to_all_cct_us,24120.025425145228,23445.322697435113,1.0287777112909573,3,ops;reps;mrc;sglb
+alltoall,All-to-All,healthy_alltoall_1024mib_p16,1024mib_healthy_p16,"1 GiB
+Healthy · bg off
+P=16",healthy_alltoall,alltoall,1024,0,16,0,0,reps,all_to_all_cct_us,23445.322697435113,23445.322697435113,1.0,3,ops;reps;mrc;sglb
+alltoall,All-to-All,healthy_alltoall_1024mib_p16,1024mib_healthy_p16,"1 GiB
+Healthy · bg off
+P=16",healthy_alltoall,alltoall,1024,0,16,0,0,mrc,all_to_all_cct_us,24189.99710639432,23445.322697435113,1.031762173571647,3,ops;reps;mrc;sglb
+alltoall,All-to-All,healthy_alltoall_1024mib_p16,1024mib_healthy_p16,"1 GiB
+Healthy · bg off
+P=16",healthy_alltoall,alltoall,1024,0,16,0,0,sglb,all_to_all_cct_us,25007.962928506528,23445.322697435113,1.0666504040587321,3,ops;reps;mrc;sglb
+alltoall,All-to-All,healthy_alltoall_1024mib_p16,1024mib_healthy_p16,"1 GiB
+Healthy · bg off
+P=16",healthy_alltoall,alltoall,1024,0,16,0,0,n-mrc,all_to_all_cct_us,28074.09442238927,23445.322697435113,1.1974283649105217,3,ops;reps;mrc;sglb
+alltoall,All-to-All,asymmetric_alltoall_background_1024mib_p4,1024mib_degraded_bg_p4,"1 GiB
+3% half-rate · bg on
+P=4",asymmetric_alltoall_background,alltoall,1024,0,4,1,1,ops,all_to_all_cct_us,47168.61860851939,35679.02411057711,1.3220265908151947,3,ops;reps;mrc;sglb
+alltoall,All-to-All,asymmetric_alltoall_background_1024mib_p4,1024mib_degraded_bg_p4,"1 GiB
+3% half-rate · bg on
+P=4",asymmetric_alltoall_background,alltoall,1024,0,4,1,1,reps,all_to_all_cct_us,35679.02411057711,35679.02411057711,1.0,3,ops;reps;mrc;sglb
+alltoall,All-to-All,asymmetric_alltoall_background_1024mib_p4,1024mib_degraded_bg_p4,"1 GiB
+3% half-rate · bg on
+P=4",asymmetric_alltoall_background,alltoall,1024,0,4,1,1,mrc,all_to_all_cct_us,41637.893345738834,35679.02411057711,1.1670132349106264,3,ops;reps;mrc;sglb
+alltoall,All-to-All,asymmetric_alltoall_background_1024mib_p4,1024mib_degraded_bg_p4,"1 GiB
+3% half-rate · bg on
+P=4",asymmetric_alltoall_background,alltoall,1024,0,4,1,1,sglb,all_to_all_cct_us,39996.49183765444,35679.02411057711,1.1210085711340239,3,ops;reps;mrc;sglb
+alltoall,All-to-All,asymmetric_alltoall_background_1024mib_p4,1024mib_degraded_bg_p4,"1 GiB
+3% half-rate · bg on
+P=4",asymmetric_alltoall_background,alltoall,1024,0,4,1,1,n-mrc,all_to_all_cct_us,37808.71310217673,35679.02411057711,1.0596902254108531,3,ops;reps;mrc;sglb
+alltoall,All-to-All,asymmetric_alltoall_background_1024mib_p8,1024mib_degraded_bg_p8,"1 GiB
+3% half-rate · bg on
+P=8",asymmetric_alltoall_background,alltoall,1024,0,8,1,1,ops,all_to_all_cct_us,43107.75699504807,30284.763887957917,1.4234140029795292,3,ops;reps;mrc;sglb
+alltoall,All-to-All,asymmetric_alltoall_background_1024mib_p8,1024mib_degraded_bg_p8,"1 GiB
+3% half-rate · bg on
+P=8",asymmetric_alltoall_background,alltoall,1024,0,8,1,1,reps,all_to_all_cct_us,30415.20100928138,30284.763887957917,1.0043070212403185,3,ops;reps;mrc;sglb
+alltoall,All-to-All,asymmetric_alltoall_background_1024mib_p8,1024mib_degraded_bg_p8,"1 GiB
+3% half-rate · bg on
+P=8",asymmetric_alltoall_background,alltoall,1024,0,8,1,1,mrc,all_to_all_cct_us,33797.20386804135,30284.763887957917,1.115980431383851,3,ops;reps;mrc;sglb
+alltoall,All-to-All,asymmetric_alltoall_background_1024mib_p8,1024mib_degraded_bg_p8,"1 GiB
+3% half-rate · bg on
+P=8",asymmetric_alltoall_background,alltoall,1024,0,8,1,1,sglb,all_to_all_cct_us,30284.763887957917,30284.763887957917,1.0,3,ops;reps;mrc;sglb
+alltoall,All-to-All,asymmetric_alltoall_background_1024mib_p8,1024mib_degraded_bg_p8,"1 GiB
+3% half-rate · bg on
+P=8",asymmetric_alltoall_background,alltoall,1024,0,8,1,1,n-mrc,all_to_all_cct_us,31191.367461663405,30284.763887957917,1.0299359630822804,3,ops;reps;mrc;sglb
+alltoall,All-to-All,asymmetric_alltoall_background_1024mib_p16,1024mib_degraded_bg_p16,"1 GiB
+3% half-rate · bg on
+P=16",asymmetric_alltoall_background,alltoall,1024,0,16,1,1,ops,all_to_all_cct_us,38081.91965405476,26491.410104663097,1.4375195394884421,3,ops;reps;mrc;sglb
+alltoall,All-to-All,asymmetric_alltoall_background_1024mib_p16,1024mib_degraded_bg_p16,"1 GiB
+3% half-rate · bg on
+P=16",asymmetric_alltoall_background,alltoall,1024,0,16,1,1,reps,all_to_all_cct_us,26534.08134934259,26491.410104663097,1.001610757770572,3,ops;reps;mrc;sglb
+alltoall,All-to-All,asymmetric_alltoall_background_1024mib_p16,1024mib_degraded_bg_p16,"1 GiB
+3% half-rate · bg on
+P=16",asymmetric_alltoall_background,alltoall,1024,0,16,1,1,mrc,all_to_all_cct_us,29333.290803640604,26491.410104663097,1.107275554141879,3,ops;reps;mrc;sglb
+alltoall,All-to-All,asymmetric_alltoall_background_1024mib_p16,1024mib_degraded_bg_p16,"1 GiB
+3% half-rate · bg on
+P=16",asymmetric_alltoall_background,alltoall,1024,0,16,1,1,sglb,all_to_all_cct_us,26491.410104663097,26491.410104663097,1.0,3,ops;reps;mrc;sglb
+alltoall,All-to-All,asymmetric_alltoall_background_1024mib_p16,1024mib_degraded_bg_p16,"1 GiB
+3% half-rate · bg on
+P=16",asymmetric_alltoall_background,alltoall,1024,0,16,1,1,n-mrc,all_to_all_cct_us,29659.010705265162,26491.410104663097,1.119570856669668,3,ops;reps;mrc;sglb
+mixed,Tested traffic (bg=0),mixed_deployment_permutation_4mib,permutation_4mib,"Permutation
+4 MiB",mixed_deployment,permutation,4,0,0,0,0,ops,main_max_fct_us,225.12949001574935,112.05301301997181,2.0091337479307523,3,ops;reps;mrc;sglb
+mixed,Tested traffic (bg=0),mixed_deployment_permutation_4mib,permutation_4mib,"Permutation
+4 MiB",mixed_deployment,permutation,4,0,0,0,0,reps,main_max_fct_us,142.5452939986881,112.05301301997181,1.2721237042798794,3,ops;reps;mrc;sglb
+mixed,Tested traffic (bg=0),mixed_deployment_permutation_4mib,permutation_4mib,"Permutation
+4 MiB",mixed_deployment,permutation,4,0,0,0,0,mrc,main_max_fct_us,116.2438506236081,112.05301301997181,1.0374004900956062,3,ops;reps;mrc;sglb
+mixed,Tested traffic (bg=0),mixed_deployment_permutation_4mib,permutation_4mib,"Permutation
+4 MiB",mixed_deployment,permutation,4,0,0,0,0,sglb,main_max_fct_us,112.05301301997181,112.05301301997181,1.0,3,ops;reps;mrc;sglb
+mixed,Tested traffic (bg=0),mixed_deployment_permutation_4mib,permutation_4mib,"Permutation
+4 MiB",mixed_deployment,permutation,4,0,0,0,0,n-mrc,main_max_fct_us,106.98207874813444,112.05301301997181,0.9547452216127954,3,ops;reps;mrc;sglb
+mixed,ECMP traffic (bg=1),mixed_deployment_permutation_4mib,permutation_4mib,"Permutation
+4 MiB",mixed_deployment,permutation,4,0,0,0,0,ops,ecmp_background_max_fct_us,272.8148200564017,180.49047385754878,1.5115192188576083,3,ops;reps;mrc;sglb
+mixed,ECMP traffic (bg=1),mixed_deployment_permutation_4mib,permutation_4mib,"Permutation
+4 MiB",mixed_deployment,permutation,4,0,0,0,0,reps,ecmp_background_max_fct_us,180.49047385754878,180.49047385754878,1.0,3,ops;reps;mrc;sglb
+mixed,ECMP traffic (bg=1),mixed_deployment_permutation_4mib,permutation_4mib,"Permutation
+4 MiB",mixed_deployment,permutation,4,0,0,0,0,mrc,ecmp_background_max_fct_us,249.10408676419507,180.49047385754878,1.380150882427176,3,ops;reps;mrc;sglb
+mixed,ECMP traffic (bg=1),mixed_deployment_permutation_4mib,permutation_4mib,"Permutation
+4 MiB",mixed_deployment,permutation,4,0,0,0,0,sglb,ecmp_background_max_fct_us,195.94978656663457,180.49047385754878,1.0856516822116993,3,ops;reps;mrc;sglb
+mixed,ECMP traffic (bg=1),mixed_deployment_permutation_4mib,permutation_4mib,"Permutation
+4 MiB",mixed_deployment,permutation,4,0,0,0,0,n-mrc,ecmp_background_max_fct_us,199.51033190181795,180.49047385754878,1.1053787362721452,3,ops;reps;mrc;sglb
+mixed,Tested traffic (bg=0),mixed_deployment_permutation_8mib,permutation_8mib,"Permutation
+8 MiB",mixed_deployment,permutation,8,0,0,0,0,ops,main_max_fct_us,453.9788809268007,211.54472033701552,2.146018488211661,3,ops;reps;mrc;sglb
+mixed,Tested traffic (bg=0),mixed_deployment_permutation_8mib,permutation_8mib,"Permutation
+8 MiB",mixed_deployment,permutation,8,0,0,0,0,reps,main_max_fct_us,264.82587746723215,211.54472033701552,1.2518671089750362,3,ops;reps;mrc;sglb
+mixed,Tested traffic (bg=0),mixed_deployment_permutation_8mib,permutation_8mib,"Permutation
+8 MiB",mixed_deployment,permutation,8,0,0,0,0,mrc,main_max_fct_us,221.63983098653532,211.54472033701552,1.0477209293308625,3,ops;reps;mrc;sglb
+mixed,Tested traffic (bg=0),mixed_deployment_permutation_8mib,permutation_8mib,"Permutation
+8 MiB",mixed_deployment,permutation,8,0,0,0,0,sglb,main_max_fct_us,211.54472033701552,211.54472033701552,1.0,3,ops;reps;mrc;sglb
+mixed,Tested traffic (bg=0),mixed_deployment_permutation_8mib,permutation_8mib,"Permutation
+8 MiB",mixed_deployment,permutation,8,0,0,0,0,n-mrc,main_max_fct_us,201.46674706189592,211.54472033701552,0.9523600813148907,3,ops;reps;mrc;sglb
+mixed,ECMP traffic (bg=1),mixed_deployment_permutation_8mib,permutation_8mib,"Permutation
+8 MiB",mixed_deployment,permutation,8,0,0,0,0,ops,ecmp_background_max_fct_us,516.3582784951344,344.7937555254899,1.4975859342584905,3,ops;reps;mrc;sglb
+mixed,ECMP traffic (bg=1),mixed_deployment_permutation_8mib,permutation_8mib,"Permutation
+8 MiB",mixed_deployment,permutation,8,0,0,0,0,reps,ecmp_background_max_fct_us,344.7937555254899,344.7937555254899,1.0,3,ops;reps;mrc;sglb
+mixed,ECMP traffic (bg=1),mixed_deployment_permutation_8mib,permutation_8mib,"Permutation
+8 MiB",mixed_deployment,permutation,8,0,0,0,0,mrc,ecmp_background_max_fct_us,473.76030070448667,344.7937555254899,1.3740396776688797,3,ops;reps;mrc;sglb
+mixed,ECMP traffic (bg=1),mixed_deployment_permutation_8mib,permutation_8mib,"Permutation
+8 MiB",mixed_deployment,permutation,8,0,0,0,0,sglb,ecmp_background_max_fct_us,398.02937363651154,344.7937555254899,1.154398440394858,3,ops;reps;mrc;sglb
+mixed,ECMP traffic (bg=1),mixed_deployment_permutation_8mib,permutation_8mib,"Permutation
+8 MiB",mixed_deployment,permutation,8,0,0,0,0,n-mrc,ecmp_background_max_fct_us,394.50705653964206,344.7937555254899,1.1441827185599274,3,ops;reps;mrc;sglb
+mixed,Tested traffic (bg=0),mixed_deployment_permutation_16mib,permutation_16mib,"Permutation
+16 MiB",mixed_deployment,permutation,16,0,0,0,0,ops,main_max_fct_us,823.3530956924379,403.30146403059206,2.0415326229264155,3,ops;reps;mrc;sglb
+mixed,Tested traffic (bg=0),mixed_deployment_permutation_16mib,permutation_16mib,"Permutation
+16 MiB",mixed_deployment,permutation,16,0,0,0,0,reps,main_max_fct_us,490.98448005464707,403.30146403059206,1.2174130863492325,3,ops;reps;mrc;sglb
+mixed,Tested traffic (bg=0),mixed_deployment_permutation_16mib,permutation_16mib,"Permutation
+16 MiB",mixed_deployment,permutation,16,0,0,0,0,mrc,main_max_fct_us,418.7789384211819,403.30146403059206,1.038376935793657,3,ops;reps;mrc;sglb
+mixed,Tested traffic (bg=0),mixed_deployment_permutation_16mib,permutation_16mib,"Permutation
+16 MiB",mixed_deployment,permutation,16,0,0,0,0,sglb,main_max_fct_us,403.30146403059206,403.30146403059206,1.0,3,ops;reps;mrc;sglb
+mixed,Tested traffic (bg=0),mixed_deployment_permutation_16mib,permutation_16mib,"Permutation
+16 MiB",mixed_deployment,permutation,16,0,0,0,0,n-mrc,main_max_fct_us,448.1139976941852,403.30146403059206,1.1111142350333594,3,ops;reps;mrc;sglb
+mixed,ECMP traffic (bg=1),mixed_deployment_permutation_16mib,permutation_16mib,"Permutation
+16 MiB",mixed_deployment,permutation,16,0,0,0,0,ops,ecmp_background_max_fct_us,943.608847832737,643.6794754493621,1.465960751931681,3,ops;reps;mrc;sglb
+mixed,ECMP traffic (bg=1),mixed_deployment_permutation_16mib,permutation_16mib,"Permutation
+16 MiB",mixed_deployment,permutation,16,0,0,0,0,reps,ecmp_background_max_fct_us,643.6794754493621,643.6794754493621,1.0,3,ops;reps;mrc;sglb
+mixed,ECMP traffic (bg=1),mixed_deployment_permutation_16mib,permutation_16mib,"Permutation
+16 MiB",mixed_deployment,permutation,16,0,0,0,0,mrc,ecmp_background_max_fct_us,906.1806292921135,643.6794754493621,1.40781345973397,3,ops;reps;mrc;sglb
+mixed,ECMP traffic (bg=1),mixed_deployment_permutation_16mib,permutation_16mib,"Permutation
+16 MiB",mixed_deployment,permutation,16,0,0,0,0,sglb,ecmp_background_max_fct_us,791.31801263557,643.6794754493621,1.2293665447125515,3,ops;reps;mrc;sglb
+mixed,ECMP traffic (bg=1),mixed_deployment_permutation_16mib,permutation_16mib,"Permutation
+16 MiB",mixed_deployment,permutation,16,0,0,0,0,n-mrc,ecmp_background_max_fct_us,777.8950181946101,643.6794754493621,1.2085130066506315,3,ops;reps;mrc;sglb
+mixed,Tested traffic (bg=0),mixed_deployment_tornado_4mib,tornado_4mib,"Tornado
+4 MiB",mixed_deployment,tornado,4,0,0,0,0,ops,main_max_fct_us,208.03981286473126,103.01605673376568,2.0194891889755455,3,ops;reps;mrc;sglb
+mixed,Tested traffic (bg=0),mixed_deployment_tornado_4mib,tornado_4mib,"Tornado
+4 MiB",mixed_deployment,tornado,4,0,0,0,0,reps,main_max_fct_us,129.67062492763088,103.01605673376568,1.2587418800425565,3,ops;reps;mrc;sglb
+mixed,Tested traffic (bg=0),mixed_deployment_tornado_4mib,tornado_4mib,"Tornado
+4 MiB",mixed_deployment,tornado,4,0,0,0,0,mrc,main_max_fct_us,106.89290080090309,103.01605673376568,1.0376333960943265,3,ops;reps;mrc;sglb
+mixed,Tested traffic (bg=0),mixed_deployment_tornado_4mib,tornado_4mib,"Tornado
+4 MiB",mixed_deployment,tornado,4,0,0,0,0,sglb,main_max_fct_us,103.01605673376568,103.01605673376568,1.0,3,ops;reps;mrc;sglb
+mixed,Tested traffic (bg=0),mixed_deployment_tornado_4mib,tornado_4mib,"Tornado
+4 MiB",mixed_deployment,tornado,4,0,0,0,0,n-mrc,main_max_fct_us,100.05518551710384,103.01605673376568,0.9712581580916662,3,ops;reps;mrc;sglb
+mixed,ECMP traffic (bg=1),mixed_deployment_tornado_4mib,tornado_4mib,"Tornado
+4 MiB",mixed_deployment,tornado,4,0,0,0,0,ops,ecmp_background_max_fct_us,291.3367696422772,142.24407993396852,2.0481468879233455,3,ops;reps;mrc;sglb
+mixed,ECMP traffic (bg=1),mixed_deployment_tornado_4mib,tornado_4mib,"Tornado
+4 MiB",mixed_deployment,tornado,4,0,0,0,0,reps,ecmp_background_max_fct_us,163.89689598691373,142.24407993396852,1.1522229681755243,3,ops;reps;mrc;sglb
+mixed,ECMP traffic (bg=1),mixed_deployment_tornado_4mib,tornado_4mib,"Tornado
+4 MiB",mixed_deployment,tornado,4,0,0,0,0,mrc,ecmp_background_max_fct_us,226.72388951334133,142.24407993396852,1.5939073852394376,3,ops;reps;mrc;sglb
+mixed,ECMP traffic (bg=1),mixed_deployment_tornado_4mib,tornado_4mib,"Tornado
+4 MiB",mixed_deployment,tornado,4,0,0,0,0,sglb,ecmp_background_max_fct_us,142.24407993396852,142.24407993396852,1.0,3,ops;reps;mrc;sglb
+mixed,ECMP traffic (bg=1),mixed_deployment_tornado_4mib,tornado_4mib,"Tornado
+4 MiB",mixed_deployment,tornado,4,0,0,0,0,n-mrc,ecmp_background_max_fct_us,145.48646693464244,142.24407993396852,1.0227945303746846,3,ops;reps;mrc;sglb
+mixed,Tested traffic (bg=0),mixed_deployment_tornado_8mib,tornado_8mib,"Tornado
+8 MiB",mixed_deployment,tornado,8,0,0,0,0,ops,main_max_fct_us,391.32121572275844,193.29023450815595,2.0245265712388925,3,ops;reps;mrc;sglb
+mixed,Tested traffic (bg=0),mixed_deployment_tornado_8mib,tornado_8mib,"Tornado
+8 MiB",mixed_deployment,tornado,8,0,0,0,0,reps,main_max_fct_us,249.73053509949523,193.29023450815595,1.2919976828366762,3,ops;reps;mrc;sglb
+mixed,Tested traffic (bg=0),mixed_deployment_tornado_8mib,tornado_8mib,"Tornado
+8 MiB",mixed_deployment,tornado,8,0,0,0,0,mrc,main_max_fct_us,202.27114849585786,193.29023450815595,1.0464633612275065,3,ops;reps;mrc;sglb
+mixed,Tested traffic (bg=0),mixed_deployment_tornado_8mib,tornado_8mib,"Tornado
+8 MiB",mixed_deployment,tornado,8,0,0,0,0,sglb,main_max_fct_us,193.29023450815595,193.29023450815595,1.0,3,ops;reps;mrc;sglb
+mixed,Tested traffic (bg=0),mixed_deployment_tornado_8mib,tornado_8mib,"Tornado
+8 MiB",mixed_deployment,tornado,8,0,0,0,0,n-mrc,main_max_fct_us,186.711059204036,193.29023450815595,0.9659621950334881,3,ops;reps;mrc;sglb
+mixed,ECMP traffic (bg=1),mixed_deployment_tornado_8mib,tornado_8mib,"Tornado
+8 MiB",mixed_deployment,tornado,8,0,0,0,0,ops,ecmp_background_max_fct_us,523.432942087014,301.8038137974832,1.7343483354330593,3,ops;reps;mrc;sglb
+mixed,ECMP traffic (bg=1),mixed_deployment_tornado_8mib,tornado_8mib,"Tornado
+8 MiB",mixed_deployment,tornado,8,0,0,0,0,reps,ecmp_background_max_fct_us,310.34024347141167,301.8038137974832,1.0282846978191489,3,ops;reps;mrc;sglb
+mixed,ECMP traffic (bg=1),mixed_deployment_tornado_8mib,tornado_8mib,"Tornado
+8 MiB",mixed_deployment,tornado,8,0,0,0,0,mrc,ecmp_background_max_fct_us,447.5706643557503,301.8038137974832,1.4829854491371,3,ops;reps;mrc;sglb
+mixed,ECMP traffic (bg=1),mixed_deployment_tornado_8mib,tornado_8mib,"Tornado
+8 MiB",mixed_deployment,tornado,8,0,0,0,0,sglb,ecmp_background_max_fct_us,301.8038137974832,301.8038137974832,1.0,3,ops;reps;mrc;sglb
+mixed,ECMP traffic (bg=1),mixed_deployment_tornado_8mib,tornado_8mib,"Tornado
+8 MiB",mixed_deployment,tornado,8,0,0,0,0,n-mrc,ecmp_background_max_fct_us,308.60126909584085,301.8038137974832,1.0225227614350787,3,ops;reps;mrc;sglb
+mixed,Tested traffic (bg=0),mixed_deployment_tornado_16mib,tornado_16mib,"Tornado
+16 MiB",mixed_deployment,tornado,16,0,0,0,0,ops,main_max_fct_us,769.8827942890115,367.8256574960156,2.093064414075984,3,ops;reps;mrc;sglb
+mixed,Tested traffic (bg=0),mixed_deployment_tornado_16mib,tornado_16mib,"Tornado
+16 MiB",mixed_deployment,tornado,16,0,0,0,0,reps,main_max_fct_us,480.6690067392444,367.8256574960156,1.306784877410166,3,ops;reps;mrc;sglb
+mixed,Tested traffic (bg=0),mixed_deployment_tornado_16mib,tornado_16mib,"Tornado
+16 MiB",mixed_deployment,tornado,16,0,0,0,0,mrc,main_max_fct_us,382.6336711466655,367.8256574960156,1.0402582401441376,3,ops;reps;mrc;sglb
+mixed,Tested traffic (bg=0),mixed_deployment_tornado_16mib,tornado_16mib,"Tornado
+16 MiB",mixed_deployment,tornado,16,0,0,0,0,sglb,main_max_fct_us,367.8256574960156,367.8256574960156,1.0,3,ops;reps;mrc;sglb
+mixed,Tested traffic (bg=0),mixed_deployment_tornado_16mib,tornado_16mib,"Tornado
+16 MiB",mixed_deployment,tornado,16,0,0,0,0,n-mrc,main_max_fct_us,359.7958201229406,367.8256574960156,0.9781694473742306,3,ops;reps;mrc;sglb
+mixed,ECMP traffic (bg=1),mixed_deployment_tornado_16mib,tornado_16mib,"Tornado
+16 MiB",mixed_deployment,tornado,16,0,0,0,0,ops,ecmp_background_max_fct_us,934.6233636951413,584.9565374851003,1.5977654813695412,3,ops;reps;mrc;sglb
+mixed,ECMP traffic (bg=1),mixed_deployment_tornado_16mib,tornado_16mib,"Tornado
+16 MiB",mixed_deployment,tornado,16,0,0,0,0,reps,ecmp_background_max_fct_us,584.9565374851003,584.9565374851003,1.0,3,ops;reps;mrc;sglb
+mixed,ECMP traffic (bg=1),mixed_deployment_tornado_16mib,tornado_16mib,"Tornado
+16 MiB",mixed_deployment,tornado,16,0,0,0,0,mrc,ecmp_background_max_fct_us,816.5238037062055,584.9565374851003,1.3958708919070821,3,ops;reps;mrc;sglb
+mixed,ECMP traffic (bg=1),mixed_deployment_tornado_16mib,tornado_16mib,"Tornado
+16 MiB",mixed_deployment,tornado,16,0,0,0,0,sglb,ecmp_background_max_fct_us,613.8588278946866,584.9565374851003,1.0494092954903038,3,ops;reps;mrc;sglb
+mixed,ECMP traffic (bg=1),mixed_deployment_tornado_16mib,tornado_16mib,"Tornado
+16 MiB",mixed_deployment,tornado,16,0,0,0,0,n-mrc,ecmp_background_max_fct_us,613.1243780617733,584.9565374851003,1.048153732408522,3,ops;reps;mrc;sglb

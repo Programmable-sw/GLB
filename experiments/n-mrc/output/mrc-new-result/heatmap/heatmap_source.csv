@@ -1,0 +1,271 @@
+figure,panel,scenario,column_key,column_label,family,traffic,size_mib,websearch_load_pct,parallel,degraded,periodic_background,scheme,metric,geomean_us,baseline_us,ratio,seed_count,baseline_schemes,implementation,seed_values_us
+alltoall,All-to-All,healthy_alltoall_64mib_p4,64mib_healthy_p4,"64 MiB
+Healthy · bg off
+P=4",healthy_alltoall,alltoall,64,0,4,0,0,ops,all_to_all_cct_us,2996.68170913146,2332.818602041864,1.2845755372957552,3,ops;reps;mrc;sglb,archived,archived_three_seed
+alltoall,All-to-All,healthy_alltoall_64mib_p4,64mib_healthy_p4,"64 MiB
+Healthy · bg off
+P=4",healthy_alltoall,alltoall,64,0,4,0,0,reps,all_to_all_cct_us,2455.5978633222926,2332.818602041864,1.0526312938232587,3,ops;reps;mrc;sglb,archived,archived_three_seed
+alltoall,All-to-All,healthy_alltoall_64mib_p4,64mib_healthy_p4,"64 MiB
+Healthy · bg off
+P=4",healthy_alltoall,alltoall,64,0,4,0,0,mrc,all_to_all_cct_us,2476.94557700523,2332.818602041864,1.0617823326842537,3,ops;reps;mrc;sglb,one_cycle_no_rearm,13:2475.040000;29:2691.700000;47:2281.080000
+alltoall,All-to-All,healthy_alltoall_64mib_p4,64mib_healthy_p4,"64 MiB
+Healthy · bg off
+P=4",healthy_alltoall,alltoall,64,0,4,0,0,sglb,all_to_all_cct_us,2332.818602041864,2332.818602041864,1.0,3,ops;reps;mrc;sglb,archived,archived_three_seed
+alltoall,All-to-All,healthy_alltoall_64mib_p4,64mib_healthy_p4,"64 MiB
+Healthy · bg off
+P=4",healthy_alltoall,alltoall,64,0,4,0,0,n-mrc,all_to_all_cct_us,2306.478252885482,2332.818602041864,0.9887087881015152,3,ops;reps;mrc;sglb,archived,archived_three_seed
+alltoall,All-to-All,healthy_alltoall_64mib_p8,64mib_healthy_p8,"64 MiB
+Healthy · bg off
+P=8",healthy_alltoall,alltoall,64,0,8,0,0,ops,all_to_all_cct_us,1913.5749149494343,1725.5666495477155,1.1089545080458048,3,ops;reps;mrc;sglb,archived,archived_three_seed
+alltoall,All-to-All,healthy_alltoall_64mib_p8,64mib_healthy_p8,"64 MiB
+Healthy · bg off
+P=8",healthy_alltoall,alltoall,64,0,8,0,0,reps,all_to_all_cct_us,1777.680228226614,1725.5666495477155,1.0302008494963424,3,ops;reps;mrc;sglb,archived,archived_three_seed
+alltoall,All-to-All,healthy_alltoall_64mib_p8,64mib_healthy_p8,"64 MiB
+Healthy · bg off
+P=8",healthy_alltoall,alltoall,64,0,8,0,0,mrc,all_to_all_cct_us,1725.5666495477155,1725.5666495477155,1.0,3,ops;reps;mrc;sglb,one_cycle_no_rearm,13:1712.510000;29:1724.310000;47:1739.990000
+alltoall,All-to-All,healthy_alltoall_64mib_p8,64mib_healthy_p8,"64 MiB
+Healthy · bg off
+P=8",healthy_alltoall,alltoall,64,0,8,0,0,sglb,all_to_all_cct_us,1854.5094968321328,1725.5666495477155,1.0747249301081556,3,ops;reps;mrc;sglb,archived,archived_three_seed
+alltoall,All-to-All,healthy_alltoall_64mib_p8,64mib_healthy_p8,"64 MiB
+Healthy · bg off
+P=8",healthy_alltoall,alltoall,64,0,8,0,0,n-mrc,all_to_all_cct_us,1842.9663393393485,1725.5666495477155,1.0680354420516902,3,ops;reps;mrc;sglb,archived,archived_three_seed
+alltoall,All-to-All,healthy_alltoall_64mib_p16,64mib_healthy_p16,"64 MiB
+Healthy · bg off
+P=16",healthy_alltoall,alltoall,64,0,16,0,0,ops,all_to_all_cct_us,1812.9330420301546,1720.9332838234438,1.0534592241730094,3,ops;reps;mrc;sglb,archived,archived_three_seed
+alltoall,All-to-All,healthy_alltoall_64mib_p16,64mib_healthy_p16,"64 MiB
+Healthy · bg off
+P=16",healthy_alltoall,alltoall,64,0,16,0,0,reps,all_to_all_cct_us,1807.220790565482,1720.9332838234438,1.0501399488016938,3,ops;reps;mrc;sglb,archived,archived_three_seed
+alltoall,All-to-All,healthy_alltoall_64mib_p16,64mib_healthy_p16,"64 MiB
+Healthy · bg off
+P=16",healthy_alltoall,alltoall,64,0,16,0,0,mrc,all_to_all_cct_us,1720.9332838234438,1720.9332838234438,1.0,3,ops;reps;mrc;sglb,one_cycle_no_rearm,13:1751.360000;29:1703.840000;47:1708.000000
+alltoall,All-to-All,healthy_alltoall_64mib_p16,64mib_healthy_p16,"64 MiB
+Healthy · bg off
+P=16",healthy_alltoall,alltoall,64,0,16,0,0,sglb,all_to_all_cct_us,1922.6172205883904,1720.9332838234438,1.1171945122223796,3,ops;reps;mrc;sglb,archived,archived_three_seed
+alltoall,All-to-All,healthy_alltoall_64mib_p16,64mib_healthy_p16,"64 MiB
+Healthy · bg off
+P=16",healthy_alltoall,alltoall,64,0,16,0,0,n-mrc,all_to_all_cct_us,1798.7329306119186,1720.9332838234438,1.0452078227086323,3,ops;reps;mrc;sglb,archived,archived_three_seed
+alltoall,All-to-All,asymmetric_alltoall_background_64mib_p4,64mib_degraded_bg_p4,"64 MiB
+3% half-rate · bg on
+P=4",asymmetric_alltoall_background,alltoall,64,0,4,1,1,ops,all_to_all_cct_us,2611.4696161848233,2377.656503021989,1.0983376332391408,3,ops;reps;mrc;sglb,archived,archived_three_seed
+alltoall,All-to-All,asymmetric_alltoall_background_64mib_p4,64mib_degraded_bg_p4,"64 MiB
+3% half-rate · bg on
+P=4",asymmetric_alltoall_background,alltoall,64,0,4,1,1,reps,all_to_all_cct_us,2377.656503021989,2377.656503021989,1.0,3,ops;reps;mrc;sglb,archived,archived_three_seed
+alltoall,All-to-All,asymmetric_alltoall_background_64mib_p4,64mib_degraded_bg_p4,"64 MiB
+3% half-rate · bg on
+P=4",asymmetric_alltoall_background,alltoall,64,0,4,1,1,mrc,all_to_all_cct_us,2623.2654543754747,2377.656503021989,1.1032987528018947,3,ops;reps;mrc;sglb,one_cycle_no_rearm,13:2523.110000;29:2739.380000;47:2611.790000
+alltoall,All-to-All,asymmetric_alltoall_background_64mib_p4,64mib_degraded_bg_p4,"64 MiB
+3% half-rate · bg on
+P=4",asymmetric_alltoall_background,alltoall,64,0,4,1,1,sglb,all_to_all_cct_us,2455.454208623707,2377.656503021989,1.0327203300825152,3,ops;reps;mrc;sglb,archived,archived_three_seed
+alltoall,All-to-All,asymmetric_alltoall_background_64mib_p4,64mib_degraded_bg_p4,"64 MiB
+3% half-rate · bg on
+P=4",asymmetric_alltoall_background,alltoall,64,0,4,1,1,n-mrc,all_to_all_cct_us,2564.800805983046,2377.656503021989,1.0787095624297276,3,ops;reps;mrc;sglb,archived,archived_three_seed
+alltoall,All-to-All,asymmetric_alltoall_background_64mib_p8,64mib_degraded_bg_p8,"64 MiB
+3% half-rate · bg on
+P=8",asymmetric_alltoall_background,alltoall,64,0,8,1,1,ops,all_to_all_cct_us,2339.558875504619,2000.0080507789658,1.1697747289534184,3,ops;reps;mrc;sglb,archived,archived_three_seed
+alltoall,All-to-All,asymmetric_alltoall_background_64mib_p8,64mib_degraded_bg_p8,"64 MiB
+3% half-rate · bg on
+P=8",asymmetric_alltoall_background,alltoall,64,0,8,1,1,reps,all_to_all_cct_us,2095.146642568481,2000.0080507789658,1.047569104410585,3,ops;reps;mrc;sglb,archived,archived_three_seed
+alltoall,All-to-All,asymmetric_alltoall_background_64mib_p8,64mib_degraded_bg_p8,"64 MiB
+3% half-rate · bg on
+P=8",asymmetric_alltoall_background,alltoall,64,0,8,1,1,mrc,all_to_all_cct_us,2031.434582365346,2000.0080507789658,1.01571320254143,3,ops;reps;mrc;sglb,one_cycle_no_rearm,13:2043.560000;29:2023.270000;47:2027.530000
+alltoall,All-to-All,asymmetric_alltoall_background_64mib_p8,64mib_degraded_bg_p8,"64 MiB
+3% half-rate · bg on
+P=8",asymmetric_alltoall_background,alltoall,64,0,8,1,1,sglb,all_to_all_cct_us,2000.0080507789658,2000.0080507789658,1.0,3,ops;reps;mrc;sglb,archived,archived_three_seed
+alltoall,All-to-All,asymmetric_alltoall_background_64mib_p8,64mib_degraded_bg_p8,"64 MiB
+3% half-rate · bg on
+P=8",asymmetric_alltoall_background,alltoall,64,0,8,1,1,n-mrc,all_to_all_cct_us,2119.3041856384775,2000.0080507789658,1.059647827324019,3,ops;reps;mrc;sglb,archived,archived_three_seed
+alltoall,All-to-All,asymmetric_alltoall_background_64mib_p16,64mib_degraded_bg_p16,"64 MiB
+3% half-rate · bg on
+P=16",asymmetric_alltoall_background,alltoall,64,0,16,1,1,ops,all_to_all_cct_us,2157.199096907581,1953.119227022409,1.1044892022266855,3,ops;reps;mrc;sglb,archived,archived_three_seed
+alltoall,All-to-All,asymmetric_alltoall_background_64mib_p16,64mib_degraded_bg_p16,"64 MiB
+3% half-rate · bg on
+P=16",asymmetric_alltoall_background,alltoall,64,0,16,1,1,reps,all_to_all_cct_us,1993.414139815377,1953.119227022409,1.020631056330544,3,ops;reps;mrc;sglb,archived,archived_three_seed
+alltoall,All-to-All,asymmetric_alltoall_background_64mib_p16,64mib_degraded_bg_p16,"64 MiB
+3% half-rate · bg on
+P=16",asymmetric_alltoall_background,alltoall,64,0,16,1,1,mrc,all_to_all_cct_us,1998.6154449320206,1953.119227022409,1.0232941324216915,3,ops;reps;mrc;sglb,one_cycle_no_rearm,13:2119.650000;29:1955.370000;47:1926.170000
+alltoall,All-to-All,asymmetric_alltoall_background_64mib_p16,64mib_degraded_bg_p16,"64 MiB
+3% half-rate · bg on
+P=16",asymmetric_alltoall_background,alltoall,64,0,16,1,1,sglb,all_to_all_cct_us,1953.119227022409,1953.119227022409,1.0,3,ops;reps;mrc;sglb,archived,archived_three_seed
+alltoall,All-to-All,asymmetric_alltoall_background_64mib_p16,64mib_degraded_bg_p16,"64 MiB
+3% half-rate · bg on
+P=16",asymmetric_alltoall_background,alltoall,64,0,16,1,1,n-mrc,all_to_all_cct_us,1989.2390572911902,1953.119227022409,1.0184934077597747,3,ops;reps;mrc;sglb,archived,archived_three_seed
+alltoall,All-to-All,healthy_alltoall_256mib_p4,256mib_healthy_p4,"256 MiB
+Healthy · bg off
+P=4",healthy_alltoall,alltoall,256,0,4,0,0,ops,all_to_all_cct_us,11984.930649944547,8900.774559159869,1.3465042362645556,3,ops;reps;mrc;sglb,archived,archived_three_seed
+alltoall,All-to-All,healthy_alltoall_256mib_p4,256mib_healthy_p4,"256 MiB
+Healthy · bg off
+P=4",healthy_alltoall,alltoall,256,0,4,0,0,reps,all_to_all_cct_us,10734.966336795898,8900.774559159869,1.206071029599154,3,ops;reps;mrc;sglb,archived,archived_three_seed
+alltoall,All-to-All,healthy_alltoall_256mib_p4,256mib_healthy_p4,"256 MiB
+Healthy · bg off
+P=4",healthy_alltoall,alltoall,256,0,4,0,0,mrc,all_to_all_cct_us,8900.774559159869,8900.774559159869,1.0,3,ops;reps;mrc;sglb,one_cycle_no_rearm,13:8730.580000;29:9420.590000;47:8573.580000
+alltoall,All-to-All,healthy_alltoall_256mib_p4,256mib_healthy_p4,"256 MiB
+Healthy · bg off
+P=4",healthy_alltoall,alltoall,256,0,4,0,0,sglb,all_to_all_cct_us,10236.264242999152,8900.774559159869,1.150041962636265,3,ops;reps;mrc;sglb,archived,archived_three_seed
+alltoall,All-to-All,healthy_alltoall_256mib_p4,256mib_healthy_p4,"256 MiB
+Healthy · bg off
+P=4",healthy_alltoall,alltoall,256,0,4,0,0,n-mrc,all_to_all_cct_us,10562.9382253492,8900.774559159869,1.1867437103525764,3,ops;reps;mrc;sglb,archived,archived_three_seed
+alltoall,All-to-All,healthy_alltoall_256mib_p8,256mib_healthy_p8,"256 MiB
+Healthy · bg off
+P=8",healthy_alltoall,alltoall,256,0,8,0,0,ops,all_to_all_cct_us,8855.767530677995,7927.532182780141,1.1170900762678868,3,ops;reps;mrc;sglb,archived,archived_three_seed
+alltoall,All-to-All,healthy_alltoall_256mib_p8,256mib_healthy_p8,"256 MiB
+Healthy · bg off
+P=8",healthy_alltoall,alltoall,256,0,8,0,0,reps,all_to_all_cct_us,8686.686000412396,7927.532182780141,1.0957616822144547,3,ops;reps;mrc;sglb,archived,archived_three_seed
+alltoall,All-to-All,healthy_alltoall_256mib_p8,256mib_healthy_p8,"256 MiB
+Healthy · bg off
+P=8",healthy_alltoall,alltoall,256,0,8,0,0,mrc,all_to_all_cct_us,7927.532182780141,7927.532182780141,1.0,3,ops;reps;mrc;sglb,one_cycle_no_rearm,13:7650.420000;29:8078.890000;47:8060.780000
+alltoall,All-to-All,healthy_alltoall_256mib_p8,256mib_healthy_p8,"256 MiB
+Healthy · bg off
+P=8",healthy_alltoall,alltoall,256,0,8,0,0,sglb,all_to_all_cct_us,8451.941765022626,7927.532182780141,1.066150419847123,3,ops;reps;mrc;sglb,archived,archived_three_seed
+alltoall,All-to-All,healthy_alltoall_256mib_p8,256mib_healthy_p8,"256 MiB
+Healthy · bg off
+P=8",healthy_alltoall,alltoall,256,0,8,0,0,n-mrc,all_to_all_cct_us,8638.684926522063,7927.532182780141,1.089706699051523,3,ops;reps;mrc;sglb,archived,archived_three_seed
+alltoall,All-to-All,healthy_alltoall_256mib_p16,256mib_healthy_p16,"256 MiB
+Healthy · bg off
+P=16",healthy_alltoall,alltoall,256,0,16,0,0,ops,all_to_all_cct_us,7695.130906748964,7048.958610767029,1.0916691857141747,3,ops;reps;mrc;sglb,archived,archived_three_seed
+alltoall,All-to-All,healthy_alltoall_256mib_p16,256mib_healthy_p16,"256 MiB
+Healthy · bg off
+P=16",healthy_alltoall,alltoall,256,0,16,0,0,reps,all_to_all_cct_us,7721.784171215191,7048.958610767029,1.0954503491367427,3,ops;reps;mrc;sglb,archived,archived_three_seed
+alltoall,All-to-All,healthy_alltoall_256mib_p16,256mib_healthy_p16,"256 MiB
+Healthy · bg off
+P=16",healthy_alltoall,alltoall,256,0,16,0,0,mrc,all_to_all_cct_us,7048.958610767029,7048.958610767029,1.0,3,ops;reps;mrc;sglb,one_cycle_no_rearm,13:6662.870000;29:7121.130000;47:7381.840000
+alltoall,All-to-All,healthy_alltoall_256mib_p16,256mib_healthy_p16,"256 MiB
+Healthy · bg off
+P=16",healthy_alltoall,alltoall,256,0,16,0,0,sglb,all_to_all_cct_us,7486.722270370134,7048.958610767029,1.0621033096909431,3,ops;reps;mrc;sglb,archived,archived_three_seed
+alltoall,All-to-All,healthy_alltoall_256mib_p16,256mib_healthy_p16,"256 MiB
+Healthy · bg off
+P=16",healthy_alltoall,alltoall,256,0,16,0,0,n-mrc,all_to_all_cct_us,6980.918795404335,7048.958610767029,0.9903475365483397,3,ops;reps;mrc;sglb,archived,archived_three_seed
+alltoall,All-to-All,asymmetric_alltoall_background_256mib_p4,256mib_degraded_bg_p4,"256 MiB
+3% half-rate · bg on
+P=4",asymmetric_alltoall_background,alltoall,256,0,4,1,1,ops,all_to_all_cct_us,11823.69525164999,10544.762105216862,1.1212861071375329,3,ops;reps;mrc;sglb,archived,archived_three_seed
+alltoall,All-to-All,asymmetric_alltoall_background_256mib_p4,256mib_degraded_bg_p4,"256 MiB
+3% half-rate · bg on
+P=4",asymmetric_alltoall_background,alltoall,256,0,4,1,1,reps,all_to_all_cct_us,10544.762105216862,10544.762105216862,1.0,3,ops;reps;mrc;sglb,archived,archived_three_seed
+alltoall,All-to-All,asymmetric_alltoall_background_256mib_p4,256mib_degraded_bg_p4,"256 MiB
+3% half-rate · bg on
+P=4",asymmetric_alltoall_background,alltoall,256,0,4,1,1,mrc,all_to_all_cct_us,11836.938544946654,10544.762105216862,1.1225420191405273,3,ops;reps;mrc;sglb,one_cycle_no_rearm,13:12559.400000;29:10737.700000;47:12298.100000
+alltoall,All-to-All,asymmetric_alltoall_background_256mib_p4,256mib_degraded_bg_p4,"256 MiB
+3% half-rate · bg on
+P=4",asymmetric_alltoall_background,alltoall,256,0,4,1,1,sglb,all_to_all_cct_us,10876.251203702039,10544.762105216862,1.031436375252238,3,ops;reps;mrc;sglb,archived,archived_three_seed
+alltoall,All-to-All,asymmetric_alltoall_background_256mib_p4,256mib_degraded_bg_p4,"256 MiB
+3% half-rate · bg on
+P=4",asymmetric_alltoall_background,alltoall,256,0,4,1,1,n-mrc,all_to_all_cct_us,11255.757568125622,10544.762105216862,1.0674264109341078,3,ops;reps;mrc;sglb,archived,archived_three_seed
+alltoall,All-to-All,asymmetric_alltoall_background_256mib_p8,256mib_degraded_bg_p8,"256 MiB
+3% half-rate · bg on
+P=8",asymmetric_alltoall_background,alltoall,256,0,8,1,1,ops,all_to_all_cct_us,10222.73184133151,9003.669126888055,1.1353962142836762,3,ops;reps;mrc;sglb,archived,archived_three_seed
+alltoall,All-to-All,asymmetric_alltoall_background_256mib_p8,256mib_degraded_bg_p8,"256 MiB
+3% half-rate · bg on
+P=8",asymmetric_alltoall_background,alltoall,256,0,8,1,1,reps,all_to_all_cct_us,9003.669126888055,9003.669126888055,1.0,3,ops;reps;mrc;sglb,archived,archived_three_seed
+alltoall,All-to-All,asymmetric_alltoall_background_256mib_p8,256mib_degraded_bg_p8,"256 MiB
+3% half-rate · bg on
+P=8",asymmetric_alltoall_background,alltoall,256,0,8,1,1,mrc,all_to_all_cct_us,9398.235206070167,9003.669126888055,1.0438228097480617,3,ops;reps;mrc;sglb,one_cycle_no_rearm,13:9127.770000;29:10320.500000;47:8811.980000
+alltoall,All-to-All,asymmetric_alltoall_background_256mib_p8,256mib_degraded_bg_p8,"256 MiB
+3% half-rate · bg on
+P=8",asymmetric_alltoall_background,alltoall,256,0,8,1,1,sglb,all_to_all_cct_us,9022.462598768861,9003.669126888055,1.0020873125851195,3,ops;reps;mrc;sglb,archived,archived_three_seed
+alltoall,All-to-All,asymmetric_alltoall_background_256mib_p8,256mib_degraded_bg_p8,"256 MiB
+3% half-rate · bg on
+P=8",asymmetric_alltoall_background,alltoall,256,0,8,1,1,n-mrc,all_to_all_cct_us,9801.78526286326,9003.669126888055,1.0886434324415317,3,ops;reps;mrc;sglb,archived,archived_three_seed
+alltoall,All-to-All,asymmetric_alltoall_background_256mib_p16,256mib_degraded_bg_p16,"256 MiB
+3% half-rate · bg on
+P=16",asymmetric_alltoall_background,alltoall,256,0,16,1,1,ops,all_to_all_cct_us,9126.714715402222,7631.897439981213,1.1958644343921752,3,ops;reps;mrc;sglb,archived,archived_three_seed
+alltoall,All-to-All,asymmetric_alltoall_background_256mib_p16,256mib_degraded_bg_p16,"256 MiB
+3% half-rate · bg on
+P=16",asymmetric_alltoall_background,alltoall,256,0,16,1,1,reps,all_to_all_cct_us,7888.047079862817,7631.897439981213,1.033563034867281,3,ops;reps;mrc;sglb,archived,archived_three_seed
+alltoall,All-to-All,asymmetric_alltoall_background_256mib_p16,256mib_degraded_bg_p16,"256 MiB
+3% half-rate · bg on
+P=16",asymmetric_alltoall_background,alltoall,256,0,16,1,1,mrc,all_to_all_cct_us,7923.142941311151,7631.897439981213,1.0381616110043868,3,ops;reps;mrc;sglb,one_cycle_no_rearm,13:8767.850000;29:7598.700000;47:7465.520000
+alltoall,All-to-All,asymmetric_alltoall_background_256mib_p16,256mib_degraded_bg_p16,"256 MiB
+3% half-rate · bg on
+P=16",asymmetric_alltoall_background,alltoall,256,0,16,1,1,sglb,all_to_all_cct_us,7631.897439981213,7631.897439981213,1.0,3,ops;reps;mrc;sglb,archived,archived_three_seed
+alltoall,All-to-All,asymmetric_alltoall_background_256mib_p16,256mib_degraded_bg_p16,"256 MiB
+3% half-rate · bg on
+P=16",asymmetric_alltoall_background,alltoall,256,0,16,1,1,n-mrc,all_to_all_cct_us,7691.999620535441,7631.897439981213,1.0078751294847557,3,ops;reps;mrc;sglb,archived,archived_three_seed
+alltoall,All-to-All,healthy_alltoall_1024mib_p4,1024mib_healthy_p4,"1 GiB
+Healthy · bg off
+P=4",healthy_alltoall,alltoall,1024,0,4,0,0,ops,all_to_all_cct_us,37922.03136282506,31620.391612007,1.199290376543761,3,ops;reps;mrc;sglb,archived,archived_three_seed
+alltoall,All-to-All,healthy_alltoall_1024mib_p4,1024mib_healthy_p4,"1 GiB
+Healthy · bg off
+P=4",healthy_alltoall,alltoall,1024,0,4,0,0,reps,all_to_all_cct_us,37872.58880607735,31620.391612007,1.1977267476882305,3,ops;reps;mrc;sglb,archived,archived_three_seed
+alltoall,All-to-All,healthy_alltoall_1024mib_p4,1024mib_healthy_p4,"1 GiB
+Healthy · bg off
+P=4",healthy_alltoall,alltoall,1024,0,4,0,0,mrc,all_to_all_cct_us,31620.391612007,31620.391612007,1.0,3,ops;reps;mrc;sglb,one_cycle_no_rearm,13:31859.600000;29:31092.600000;47:31915.700000
+alltoall,All-to-All,healthy_alltoall_1024mib_p4,1024mib_healthy_p4,"1 GiB
+Healthy · bg off
+P=4",healthy_alltoall,alltoall,1024,0,4,0,0,sglb,all_to_all_cct_us,40964.41311958836,31620.391612007,1.2955061917713004,3,ops;reps;mrc;sglb,archived,archived_three_seed
+alltoall,All-to-All,healthy_alltoall_1024mib_p4,1024mib_healthy_p4,"1 GiB
+Healthy · bg off
+P=4",healthy_alltoall,alltoall,1024,0,4,0,0,n-mrc,all_to_all_cct_us,37483.51001305735,31620.391612007,1.1854220679172103,3,ops;reps;mrc;sglb,archived,archived_three_seed
+alltoall,All-to-All,healthy_alltoall_1024mib_p8,1024mib_healthy_p8,"1 GiB
+Healthy · bg off
+P=8",healthy_alltoall,alltoall,1024,0,8,0,0,ops,all_to_all_cct_us,29016.61294469026,27409.06960623945,1.058650051298526,3,ops;reps;mrc;sglb,archived,archived_three_seed
+alltoall,All-to-All,healthy_alltoall_1024mib_p8,1024mib_healthy_p8,"1 GiB
+Healthy · bg off
+P=8",healthy_alltoall,alltoall,1024,0,8,0,0,reps,all_to_all_cct_us,28940.2646419734,27409.06960623945,1.0558645389183654,3,ops;reps;mrc;sglb,archived,archived_three_seed
+alltoall,All-to-All,healthy_alltoall_1024mib_p8,1024mib_healthy_p8,"1 GiB
+Healthy · bg off
+P=8",healthy_alltoall,alltoall,1024,0,8,0,0,mrc,all_to_all_cct_us,27409.06960623945,27409.06960623945,1.0,3,ops;reps;mrc;sglb,one_cycle_no_rearm,13:26948.100000;29:27839.500000;47:27446.900000
+alltoall,All-to-All,healthy_alltoall_1024mib_p8,1024mib_healthy_p8,"1 GiB
+Healthy · bg off
+P=8",healthy_alltoall,alltoall,1024,0,8,0,0,sglb,all_to_all_cct_us,29909.0341071588,27409.06960623945,1.0912093893311232,3,ops;reps;mrc;sglb,archived,archived_three_seed
+alltoall,All-to-All,healthy_alltoall_1024mib_p8,1024mib_healthy_p8,"1 GiB
+Healthy · bg off
+P=8",healthy_alltoall,alltoall,1024,0,8,0,0,n-mrc,all_to_all_cct_us,30160.370703163673,27409.06960623945,1.1003792225146494,3,ops;reps;mrc;sglb,archived,archived_three_seed
+alltoall,All-to-All,healthy_alltoall_1024mib_p16,1024mib_healthy_p16,"1 GiB
+Healthy · bg off
+P=16",healthy_alltoall,alltoall,1024,0,16,0,0,ops,all_to_all_cct_us,24120.025425145228,23445.322697435113,1.0287777112909573,3,ops;reps;mrc;sglb,archived,archived_three_seed
+alltoall,All-to-All,healthy_alltoall_1024mib_p16,1024mib_healthy_p16,"1 GiB
+Healthy · bg off
+P=16",healthy_alltoall,alltoall,1024,0,16,0,0,reps,all_to_all_cct_us,23445.322697435113,23445.322697435113,1.0,3,ops;reps;mrc;sglb,archived,archived_three_seed
+alltoall,All-to-All,healthy_alltoall_1024mib_p16,1024mib_healthy_p16,"1 GiB
+Healthy · bg off
+P=16",healthy_alltoall,alltoall,1024,0,16,0,0,mrc,all_to_all_cct_us,24420.126880536143,23445.322697435113,1.0415777677996163,3,ops;reps;mrc;sglb,one_cycle_no_rearm,13:24298.900000;29:23954.600000;47:25018.900000
+alltoall,All-to-All,healthy_alltoall_1024mib_p16,1024mib_healthy_p16,"1 GiB
+Healthy · bg off
+P=16",healthy_alltoall,alltoall,1024,0,16,0,0,sglb,all_to_all_cct_us,25007.962928506528,23445.322697435113,1.0666504040587321,3,ops;reps;mrc;sglb,archived,archived_three_seed
+alltoall,All-to-All,healthy_alltoall_1024mib_p16,1024mib_healthy_p16,"1 GiB
+Healthy · bg off
+P=16",healthy_alltoall,alltoall,1024,0,16,0,0,n-mrc,all_to_all_cct_us,28074.09442238927,23445.322697435113,1.1974283649105217,3,ops;reps;mrc;sglb,archived,archived_three_seed
+alltoall,All-to-All,asymmetric_alltoall_background_1024mib_p4,1024mib_degraded_bg_p4,"1 GiB
+3% half-rate · bg on
+P=4",asymmetric_alltoall_background,alltoall,1024,0,4,1,1,ops,all_to_all_cct_us,47168.61860851939,35679.02411057711,1.3220265908151947,3,ops;reps;mrc;sglb,archived,archived_three_seed
+alltoall,All-to-All,asymmetric_alltoall_background_1024mib_p4,1024mib_degraded_bg_p4,"1 GiB
+3% half-rate · bg on
+P=4",asymmetric_alltoall_background,alltoall,1024,0,4,1,1,reps,all_to_all_cct_us,35679.02411057711,35679.02411057711,1.0,3,ops;reps;mrc;sglb,archived,archived_three_seed
+alltoall,All-to-All,asymmetric_alltoall_background_1024mib_p4,1024mib_degraded_bg_p4,"1 GiB
+3% half-rate · bg on
+P=4",asymmetric_alltoall_background,alltoall,1024,0,4,1,1,mrc,all_to_all_cct_us,43492.18930471159,35679.02411057711,1.2189848346165457,3,ops;reps;mrc;sglb,one_cycle_no_rearm,13:46488.600000;29:42446.400000;47:41691.400000
+alltoall,All-to-All,asymmetric_alltoall_background_1024mib_p4,1024mib_degraded_bg_p4,"1 GiB
+3% half-rate · bg on
+P=4",asymmetric_alltoall_background,alltoall,1024,0,4,1,1,sglb,all_to_all_cct_us,39996.49183765444,35679.02411057711,1.1210085711340239,3,ops;reps;mrc;sglb,archived,archived_three_seed
+alltoall,All-to-All,asymmetric_alltoall_background_1024mib_p4,1024mib_degraded_bg_p4,"1 GiB
+3% half-rate · bg on
+P=4",asymmetric_alltoall_background,alltoall,1024,0,4,1,1,n-mrc,all_to_all_cct_us,37808.71310217673,35679.02411057711,1.0596902254108531,3,ops;reps;mrc;sglb,archived,archived_three_seed
+alltoall,All-to-All,asymmetric_alltoall_background_1024mib_p8,1024mib_degraded_bg_p8,"1 GiB
+3% half-rate · bg on
+P=8",asymmetric_alltoall_background,alltoall,1024,0,8,1,1,ops,all_to_all_cct_us,43107.75699504807,30284.763887957917,1.4234140029795292,3,ops;reps;mrc;sglb,archived,archived_three_seed
+alltoall,All-to-All,asymmetric_alltoall_background_1024mib_p8,1024mib_degraded_bg_p8,"1 GiB
+3% half-rate · bg on
+P=8",asymmetric_alltoall_background,alltoall,1024,0,8,1,1,reps,all_to_all_cct_us,30415.20100928138,30284.763887957917,1.0043070212403185,3,ops;reps;mrc;sglb,archived,archived_three_seed
+alltoall,All-to-All,asymmetric_alltoall_background_1024mib_p8,1024mib_degraded_bg_p8,"1 GiB
+3% half-rate · bg on
+P=8",asymmetric_alltoall_background,alltoall,1024,0,8,1,1,mrc,all_to_all_cct_us,34123.91153473024,30284.763887957917,1.126768287214512,3,ops;reps;mrc;sglb,one_cycle_no_rearm,13:36842.800000;29:32628.700000;47:33054.000000
+alltoall,All-to-All,asymmetric_alltoall_background_1024mib_p8,1024mib_degraded_bg_p8,"1 GiB
+3% half-rate · bg on
+P=8",asymmetric_alltoall_background,alltoall,1024,0,8,1,1,sglb,all_to_all_cct_us,30284.763887957917,30284.763887957917,1.0,3,ops;reps;mrc;sglb,archived,archived_three_seed
+alltoall,All-to-All,asymmetric_alltoall_background_1024mib_p8,1024mib_degraded_bg_p8,"1 GiB
+3% half-rate · bg on
+P=8",asymmetric_alltoall_background,alltoall,1024,0,8,1,1,n-mrc,all_to_all_cct_us,31191.367461663405,30284.763887957917,1.0299359630822804,3,ops;reps;mrc;sglb,archived,archived_three_seed
+alltoall,All-to-All,asymmetric_alltoall_background_1024mib_p16,1024mib_degraded_bg_p16,"1 GiB
+3% half-rate · bg on
+P=16",asymmetric_alltoall_background,alltoall,1024,0,16,1,1,ops,all_to_all_cct_us,38081.91965405476,26491.410104663097,1.4375195394884421,3,ops;reps;mrc;sglb,archived,archived_three_seed
+alltoall,All-to-All,asymmetric_alltoall_background_1024mib_p16,1024mib_degraded_bg_p16,"1 GiB
+3% half-rate · bg on
+P=16",asymmetric_alltoall_background,alltoall,1024,0,16,1,1,reps,all_to_all_cct_us,26534.08134934259,26491.410104663097,1.001610757770572,3,ops;reps;mrc;sglb,archived,archived_three_seed
+alltoall,All-to-All,asymmetric_alltoall_background_1024mib_p16,1024mib_degraded_bg_p16,"1 GiB
+3% half-rate · bg on
+P=16",asymmetric_alltoall_background,alltoall,1024,0,16,1,1,mrc,all_to_all_cct_us,29561.108545630002,26491.410104663097,1.1158752376275571,3,ops;reps;mrc;sglb,one_cycle_no_rearm,13:32103.700000;29:28756.400000;47:27981.600000
+alltoall,All-to-All,asymmetric_alltoall_background_1024mib_p16,1024mib_degraded_bg_p16,"1 GiB
+3% half-rate · bg on
+P=16",asymmetric_alltoall_background,alltoall,1024,0,16,1,1,sglb,all_to_all_cct_us,26491.410104663097,26491.410104663097,1.0,3,ops;reps;mrc;sglb,archived,archived_three_seed
+alltoall,All-to-All,asymmetric_alltoall_background_1024mib_p16,1024mib_degraded_bg_p16,"1 GiB
+3% half-rate · bg on
+P=16",asymmetric_alltoall_background,alltoall,1024,0,16,1,1,n-mrc,all_to_all_cct_us,29659.010705265162,26491.410104663097,1.119570856669668,3,ops;reps;mrc;sglb,archived,archived_three_seed
