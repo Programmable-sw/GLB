@@ -1,0 +1,16 @@
+path	branch	head	dirty_tracked	dirty_untracked	bytes
+/home/user/workspace/csg-htsim	main-htsim	8186330ce0f0126613462d7756c943815cb32369	0	0	18768798962
+/home/user/.cache/codex/csg-htsim-sglb-baseline-replay-20260715	DETACHED	69d0cf959924b671447aff1e519ce92fee84d1f1	0	0	64852842
+/home/user/.config/superpowers/worktrees/csg-htsim/avail-grade-p2p-diagnosis	codex/avail-bounded-p2p-seed13	fb8fd5261451ca2f09b2e499610f5de6d7b028a0	0	0	85669122
+/home/user/.config/superpowers/worktrees/csg-htsim/feedback-cadence-eval	codex/nmrc-share-cap	3d694799e55fa22c68557bf14336e1ea2ee5927e	21	38	4474363030
+/home/user/.config/superpowers/worktrees/csg-htsim/final-512-comparison	codex/final-512-comparison	ad5f7acfccd0493df491d3a730ea1a235a996f21	8	4	671893846
+/home/user/.config/superpowers/worktrees/csg-htsim/mrc_exact_bounded_recovery	mrc_exact_bounded_recovery	6c5d9fd86dfc8cadd11f0578a0d5214f2beecbbe	0	0	901789763
+/home/user/workspace/csg-htsim/.worktrees/asan-mrc-repro-20260720	codex/asan-mrc-repro-20260720	ab80a4656166af6cd33a943ba71820a145e6807a	7	7	675367035
+/home/user/workspace/csg-htsim/.worktrees/clean-build-compare-20260721x	codex/clean-build-compare-20260721	ab80a4656166af6cd33a943ba71820a145e6807a	7	2	113595207
+/home/user/workspace/csg-htsim/.worktrees/four-scheme-comparison	four-scheme-comparison-20260725	6a0d928a3a1792b1368fd6a6fa6336ed37480685	0	0	1364708449
+/home/user/workspace/csg-htsim/.worktrees/mrc-skip-baseline-sim	DETACHED	21e75d17e363f12ea09986190f1eb81ed2e64823	1	0	699098735
+/home/user/workspace/csg-htsim/.worktrees/mrc-skip-policy-redesign	codex/mrc-skip-policy-redesign	f56c95ffa73d430fe2e4946bf2d110007ccf1637	0	0	1106587321
+/home/user/workspace/csg-htsim/.worktrees/netaware-topk-replay-20260723	DETACHED	2e7e58fca9d0b7476ff519dbd23461378e8a8e9f	0	0	639916396
+/home/user/workspace/csg-htsim/.worktrees/nmrc-routing-cooldown-pinned	DETACHED	c582f926aa5bb37bd6bf6d6f20dd23e4b67e0717	0	0	684854316
+/home/user/workspace/csg-htsim/.worktrees/remote-sync-15us	remote-sync-15us	37a92fe6b9e8e905d768a4ce9af85f746d81fd6e	17	7	943166327
+/home/user/workspace/csg-htsim/.worktrees/sglb-nmrc-a2a-tuning	tune/sglb-nmrc-a2a	aa5e0d50564b5438adbc5e12b36cdb90d0a5a7f1	0	0	275830331
