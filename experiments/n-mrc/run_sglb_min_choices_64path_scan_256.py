@@ -51,6 +51,11 @@ PARETO_METRICS = (
     "a2a_cct_us", "a2a_p99_fct_us", "retransmissions", "trims",
     "ecn_marks", "healthy_p2p_p99_ratio", "healthy_websearch_p99_ratio",
 )
+COMPLETION_RE = re.compile(
+    r"^\.*Flow Roce_(\d+)_(\d+)\s+(\d+) finished at ([0-9.]+) "
+    r"total bytes (\d+) bg traffic ([01]) flowid (\d+)$",
+    re.MULTILINE,
+)
 
 
 @dataclass(frozen=True)
@@ -239,32 +244,32 @@ def _diag(text, prefix):
 
 
 def _config_ok(text, spec, returncode):
-    expected_config = (
+    config_prefix = (
         "SGLB effective config: score mode nmrc_quantized_topk, "
         "OFAT factor real_gcn_raw_linear, local quality update 1us, "
-        "GCN update 15us, aging 30us, quality levels 4, bucket 8, "
-        f"min choices {spec.min_choices},"
+        "GCN update 15us, aging 30us,"
     )
     required = (
         "Standard 2-tier leaf-spine: nodes 256 leaves 4 spines 64 ",
         "RoceTransportConfig semantics=mrc_exact_bounded",
         "topology_path_combo=64",
-        expected_config,
+        config_prefix,
+        f"min choices {spec.min_choices},",
+        "nmrc_levels 4,",
     )
     return returncode == 0 and all(item in text for item in required)
 
 
 def parse_run(spec, text, returncode, runtime_s):
     finishes = {}
-    for match in metrics.FINISH_RE.finditer(text):
-        finishes[int(match.group(3))] = float(match.group(4))
-    id_map = metrics.source_id_map(spec.output, spec.flows_data)
+    for match in COMPLETION_RE.finditer(text):
+        finishes[int(match.group(7))] = float(match.group(4))
     fcts = []
-    for source_id, finish_us in finishes.items():
+    for flow_id, finish_us in finishes.items():
         if spec.flows_data is None:
             fcts.append(finish_us)
-        elif source_id in id_map:
-            fcts.append(finish_us - id_map[source_id].start_us)
+        elif 1 <= flow_id <= len(spec.flows_data):
+            fcts.append(finish_us - spec.flows_data[flow_id - 1].start_us)
     roce = _diag(text, "RoceDiag")
     queue = _diag(text, "QueueDiag")
     cv = _diag(text, "QueueCvDiag")
