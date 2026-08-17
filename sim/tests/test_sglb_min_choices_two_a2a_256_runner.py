@@ -53,6 +53,20 @@ def main():
     assert next(row for row in summary if row["selected"])["min_choices"] == 28
     assert {row["metric"] for row in rankings} == set(runner.RANKING_METRICS)
 
+    tied_rows = [dict(row, cct_us=100.0, mean_fct_us=50.0,
+                      p95_fct_us=90.0, p99_fct_us=95.0,
+                      max_fct_us=100.0, retransmissions=0, rtos=0,
+                      trims=0, ecn_marks=0, queue_p99_fraction=0.02,
+                      spine_queue_cv=0.5, avg_candidate_choices=63.5,
+                      nonbest_fraction=0, avoid_fraction=0)
+                 for row in rows]
+    tied_summary, tied_rankings = runner.summarize(tied_rows)
+    assert not any(row["selected"] for row in tied_summary)
+    assert {row["selection_status"] for row in tied_summary} == {
+        "indistinguishable"}
+    assert {row["rank"] for row in tied_rankings
+            if row["metric"] == "overall_cct_us"} == {1}
+
 
 if __name__ == "__main__":
     main()

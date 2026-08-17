@@ -169,15 +169,30 @@ def summarize(rows):
             item[output] = geometric_mean(row[source] for row in candidate)
         item["selected"] = False
         summary.append(item)
-    winner = min(summary, key=lambda row: (
+    best_key = min((
         row["overall_cct_us"], row["overall_p99_fct_us"],
-        row["trims"], row["retransmissions"], row["min_choices"]))
-    winner["selected"] = True
+        row["trims"], row["retransmissions"], row["ecn_marks"])
+        for row in summary)
+    winners = [row for row in summary if (
+        row["overall_cct_us"], row["overall_p99_fct_us"],
+        row["trims"], row["retransmissions"], row["ecn_marks"]
+    ) == best_key]
+    if len(winners) == 1:
+        winners[0]["selected"] = True
+    for row in summary:
+        row["selection_status"] = (
+            "winner" if row["selected"] else
+            "indistinguishable" if len(winners) > 1 else "not_selected")
     summary.sort(key=lambda row: (not row["selected"], row["overall_cct_us"]))
     rankings = []
     for metric in RANKING_METRICS:
         ordered = sorted(summary, key=lambda row: (row[metric], row["min_choices"]))
-        for rank, row in enumerate(ordered, 1):
+        rank = 0
+        previous = None
+        for position, row in enumerate(ordered, 1):
+            if previous is None or row[metric] != previous:
+                rank = position
+                previous = row[metric]
             rankings.append({
                 "metric": metric, "rank": rank,
                 "min_choices": row["min_choices"], "value": row[metric],
@@ -186,11 +201,18 @@ def summarize(rows):
 
 
 def _report(path, summary, rankings, sample_scale):
-    winner = next(row for row in summary if row["selected"])
+    winner = next((row for row in summary if row["selected"]), None)
+    conclusion = (
+        f"Selected **min{winner['min_choices']}** by the geometric-mean CCT "
+        "across symmetric and asymmetric A2A."
+        if winner else
+        "**No unique winner:** every tested min-choice value is "
+        "indistinguishable on every recorded aggregate metric. Retain min24 "
+        "as the existing default; this scan provides no evidence to change it."
+    )
     lines = [
         "# SGLB min-choice: two-A2A focused scan", "",
-        f"Selected **min{winner['min_choices']}** by the geometric-mean CCT "
-        "across symmetric and asymmetric A2A.", "",
+        conclusion, "",
         f"This is a quick screening scan with `sample_scale={sample_scale:g}`. "
         "Each source sends {:.3g} MiB rather than 256 MiB; topology, 65,280 "
         "ordered pairs, p16 scheduling, and all seven min-choice candidates "
@@ -200,7 +222,7 @@ def _report(path, summary, rankings, sample_scale):
         "random-sparse ToR-to-Spine uplinks.", "",
         "## Summary", "",
         base._markdown_table(summary, (
-            "min_choices", "selected", "overall_cct_us",
+            "min_choices", "selection_status", "overall_cct_us",
             "symmetric_cct_us", "asymmetric_cct_us",
             "overall_p99_fct_us", "retransmissions", "trims",
             "ecn_marks", "spine_queue_cv", "avg_candidate_choices")), "",
@@ -292,8 +314,9 @@ def main(argv=None):
     base.write_csv(args.out / "summary.csv", summary)
     base.write_csv(args.out / "rankings.csv", rankings)
     _report(args.out / "report.md", summary, rankings, args.sample_scale)
-    winner = next(row for row in summary if row["selected"])
-    print(f"selected min{winner['min_choices']}")
+    winner = next((row for row in summary if row["selected"]), None)
+    print(f"selected min{winner['min_choices']}" if winner else
+          "no unique winner; retain min24")
     return 0
 
 
