@@ -43,6 +43,10 @@ def test_complete_matrix(runner):
                 spec.min_choices)
             assert ("-sglb_background" in spec.command) == spec.asymmetric
             assert spec.parallel == (16 if spec.load == "medium" else 32)
+            assert spec.per_source_mib == (
+                64 if spec.load == "medium" else 256)
+            assert option(spec.command, "-end") == (
+                "25000" if spec.load == "medium" else "100000")
         runner.validate_specs(specs)
 
 
@@ -84,11 +88,37 @@ def test_execution_uses_matrix_validator(runner):
         raise AssertionError("custom execution validator was not called")
 
 
+def test_pressure_gate(runner):
+    with tempfile.TemporaryDirectory() as temporary:
+        args = runner.parse_args(["--out", temporary, "--dry-run"])
+        gate = runner.make_gate_specs(args)
+        assert len(gate) == 4
+        assert {spec.policy for spec in gate} == {"exact_min"}
+        assert {spec.min_choices for spec in gate} == {24}
+
+    rows = []
+    for scenario in runner.SCENARIOS:
+        asymmetric = scenario.startswith("asymmetric_")
+        rows.append({
+            "scenario": scenario, "config_ok": True,
+            "all_flows_completed": True, "gcn_stale": 0,
+            "cct_us": 2000,
+            "avg_best_quality_choices": 30 if asymmetric else 60,
+            "avg_candidate_choices": 30 if asymmetric else 60,
+        })
+    passed, _ = runner.evaluate_pressure_gate(rows)
+    assert passed
+    rows[-1]["avg_best_quality_choices"] = 63
+    passed, _ = runner.evaluate_pressure_gate(rows)
+    assert not passed
+
+
 def main():
     runner = load_runner()
     test_complete_matrix(runner)
     test_each_policy_is_tuned_before_comparison(runner)
     test_execution_uses_matrix_validator(runner)
+    test_pressure_gate(runner)
 
 
 if __name__ == "__main__":

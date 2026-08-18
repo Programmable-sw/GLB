@@ -28,8 +28,7 @@ SCENARIOS = (
 RANKING_METRICS = staged.RANKING_METRICS
 SEED = 13
 WORKLOAD = staged.WORKLOAD
-SAMPLE_SCALE = 1 / 16
-PER_SOURCE_MIB = 16
+PER_SOURCE_MIB = {"medium": 64, "high": 256}
 DEFAULT_SIM = ROOT / "sim/datacenter/htsim_roce"
 DEFAULT_OUT = SCRIPT_DIR / "output/sglb_min_policy_matrix_256"
 
@@ -51,32 +50,38 @@ class CellSpec:
     load: str
     asymmetric: bool
     parallel: int
+    per_source_mib: int
 
 
 def _materialize_traffic(args, load):
     traffic_dir = args.out / "traffic"
     traffic_dir.mkdir(parents=True, exist_ok=True)
     parallel = 16 if load == "medium" else 32
-    traffic = traffic_dir / f"a2a_p{parallel}_16mib_seed13.cm"
-    flow_size = (PER_SOURCE_MIB * base.common.MIB) // base.NODES
+    per_source_mib = PER_SOURCE_MIB[load]
+    traffic = traffic_dir / f"a2a_p{parallel}_{per_source_mib}mib_seed13.cm"
+    flow_size = (per_source_mib * base.common.MIB) // base.NODES
     plan = base.common.alltoall_plan(
         base.NODES, base.NODES, parallel, flow_size, 0, SEED)
     if not traffic.exists():
         base.common.write_alltoall_matrix(traffic, plan)
     return (traffic, metrics.file_sha256(traffic), plan.connection_count,
-            None, parallel)
+            None, parallel, per_source_mib)
 
 
 def _command(args, traffic, output, connections, choice, scenario, policy):
+    load = "medium" if scenario.endswith("_medium") else "high"
+    sample_scale = PER_SOURCE_MIB[load] / 256
     command = list(base.build_command(
         args.sim, traffic, output, connections, SEED, WORKLOAD,
-        choice, SAMPLE_SCALE))
+        choice, sample_scale))
     asymmetric = scenario.startswith("asymmetric_")
     if not asymmetric:
         command = command[:command.index("-sglb_background")]
     elif scenario.endswith("_medium"):
         rate_index = command.index("-sglb_bg_rate_gbps") + 1
-        command[rate_index] = "250"
+        command[rate_index] = "300"
+        command[command.index("-sglb_bg_on_us") + 1] = "200"
+        command[command.index("-sglb_bg_off_us") + 1] = "200"
     command.extend(("-sglb_candidate_policy", policy))
     return tuple(command)
 
@@ -90,7 +95,8 @@ def make_specs(args):
     for scenario in SCENARIOS:
         load = "medium" if scenario.endswith("_medium") else "high"
         asymmetric = scenario.startswith("asymmetric_")
-        traffic, digest, connections, flows, parallel = materials[load]
+        (traffic, digest, connections, flows, parallel,
+         per_source_mib) = materials[load]
         for policy in POLICIES:
             for choice in MIN_CHOICES:
                 case_dir = args.out / "runs" / scenario / policy / f"min{choice}"
@@ -99,7 +105,8 @@ def make_specs(args):
                     WORKLOAD, scenario, policy, SEED, choice, traffic, digest,
                     connections, flows, case_dir, output,
                     _command(args, traffic, output, connections, choice,
-                             scenario, policy), load, asymmetric, parallel))
+                             scenario, policy), load, asymmetric, parallel,
+                    per_source_mib))
     return specs
 
 
@@ -117,7 +124,8 @@ def validate_specs(specs):
         command = list(spec.command)
         expected = {
             "-nodes": "256", "-paths": "64", "-conns": "65280",
-            "-end": "6250", "-sglb_min_choices": str(spec.min_choices),
+            "-end": "25000" if spec.load == "medium" else "100000",
+            "-sglb_min_choices": str(spec.min_choices),
             "-sglb_candidate_policy": spec.policy,
         }
         for option, value in expected.items():
@@ -130,9 +138,11 @@ def validate_specs(specs):
             for option, value in {
                     "-sglb_bg_links_per_direction": "2",
                     "-sglb_bg_rate_gbps":
-                        "250" if spec.load == "medium" else "350",
-                    "-sglb_bg_on_us": "400",
-                    "-sglb_bg_off_us": "400"}.items():
+                        "300" if spec.load == "medium" else "350",
+                    "-sglb_bg_on_us":
+                        "200" if spec.load == "medium" else "400",
+                    "-sglb_bg_off_us":
+                        "200" if spec.load == "medium" else "400"}.items():
                 if command[command.index(option) + 1] != value:
                     raise ValueError(f"cell {key}: incorrect {option}")
     if any(len(hashes) != 1 for hashes in traffic_hashes_by_load.values()):
@@ -186,10 +196,35 @@ def select_policy_optima(rows):
         row["asymmetric_ecn_marks"], row["load"], row["policy"]))
 
 
+def make_gate_specs(args):
+    return [spec for spec in make_specs(args)
+            if spec.policy == "exact_min" and spec.min_choices == 24]
+
+
+def evaluate_pressure_gate(rows):
+    reasons = []
+    if len(rows) != 4:
+        reasons.append(f"expected 4 gate rows, got {len(rows)}")
+    for row in rows:
+        scenario = row["scenario"]
+        if (not row.get("config_ok") or not row.get("all_flows_completed")
+                or int(row.get("gcn_stale", 0)) != 0):
+            reasons.append(f"{scenario}: invalid or incomplete")
+        if float(row.get("cct_us", 0)) < 1000:
+            reasons.append(f"{scenario}: CCT below sustained-pressure floor")
+        if scenario.startswith("asymmetric_"):
+            if float(row.get("avg_best_quality_choices", 64)) >= 40:
+                reasons.append(f"{scenario}: best-quality set did not fall below 40")
+            if float(row.get("avg_candidate_choices", 64)) >= 48:
+                reasons.append(f"{scenario}: candidate set did not fall below 48")
+    return not reasons, reasons
+
+
 def _write_report(path, optima):
     lines = [
         "# SGLB min × candidate-policy complete matrix", "",
-        "Single seed 13; 256-host global p16/p32 A2A; 16 MiB per source; "
+        "Single seed 13; 256-host global A2A; medium=p16/64 MiB per source, "
+        "high=p32/256 MiB per source; "
         "64 paths; async GCN. Each policy is tuned independently per load.", "",
         "Healthy CCT must be within 1% of that policy/load's healthy optimum; "
         "the eligible min with the lowest asymmetric CCT is selected.", "",
@@ -213,6 +248,7 @@ def parse_args(argv=None):
     parser.add_argument("--timeout", type=int, default=1800)
     parser.add_argument("--force", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--gate", action="store_true")
     return parser.parse_args(argv)
 
 
@@ -228,8 +264,8 @@ def main(argv=None):
     manifest = staged._manifest(args, specs)
     manifest.update({
         "matrix_cells": 84, "parallel_per_source": [16, 32],
-        "per_source_mib": PER_SOURCE_MIB, "sample_scale": SAMPLE_SCALE,
-        "background_rate_gbps": {"medium": 250, "high": 350},
+        "per_source_mib": PER_SOURCE_MIB,
+        "background_rate_gbps": {"medium": 300, "high": 350},
     })
     base.atomic_write_text(
         args.out / "manifest.json",
@@ -245,6 +281,19 @@ def main(argv=None):
         return 0
     if not args.sim.exists():
         raise FileNotFoundError(args.sim)
+    if args.gate:
+        rows = staged.run_specs(make_gate_specs(args), args, lambda specs: None)
+        base.write_csv(args.out / "gate_cells.csv", rows)
+        passed, reasons = evaluate_pressure_gate(rows)
+        base.atomic_write_text(
+            args.out / "gate.txt",
+            ("PASS\n" if passed else "FAIL\n") + "\n".join(reasons) + "\n")
+        if not passed:
+            for reason in reasons:
+                print(reason, file=sys.stderr)
+            return 2
+        print("pressure gate passed")
+        return 0
     rows = staged.run_specs(specs, args, validate_specs)
     base.write_csv(args.out / "cells.csv", rows)
     base.write_csv(args.out / "rankings.csv", staged._rank(rows))
