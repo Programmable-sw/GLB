@@ -87,7 +87,6 @@ def _command(args, traffic, output, connections, choice, scenario, policy,
         command[command.index("-sglb_bg_off_us") + 1] = "200"
     command.extend((
         "-sglb_candidate_policy", policy,
-        "-sglb_candidate_dispatch", "random",
         "-sglb_gcn_cadence", cadence))
     return tuple(command)
 
@@ -135,7 +134,6 @@ def validate_specs(specs):
             "-end": "25000" if spec.load == "medium" else "100000",
             "-sglb_min_choices": str(spec.min_choices),
             "-sglb_candidate_policy": spec.policy,
-            "-sglb_candidate_dispatch": "random",
             "-sglb_gcn_cadence": spec.cadence,
         }
         for option, value in expected.items():

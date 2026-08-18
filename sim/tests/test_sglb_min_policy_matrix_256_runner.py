@@ -39,7 +39,7 @@ def test_complete_matrix(runner):
             "medium": 1, "high": 1}
         for spec in specs:
             assert option(spec.command, "-sglb_candidate_policy") == spec.policy
-            assert option(spec.command, "-sglb_candidate_dispatch") == "random"
+            assert "-sglb_candidate_dispatch" not in spec.command
             assert option(spec.command, "-sglb_gcn_cadence") == spec.cadence
             assert option(spec.command, "-sglb_min_choices") == str(
                 spec.min_choices)
