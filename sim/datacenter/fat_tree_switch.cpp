@@ -1038,13 +1038,13 @@ double FatTreeSwitch::_sglb_quality_bucket = 20.0;
 uint32_t FatTreeSwitch::_sglb_max_quality = 7;
 simtime_picosec FatTreeSwitch::_sglb_update_interval = timeFromUs(1.0);
 uint32_t FatTreeSwitch::_sglb_quality_levels = 8;
-uint32_t FatTreeSwitch::_sglb_min_choices = 3;
+uint32_t FatTreeSwitch::_sglb_min_choices = 20;
 FatTreeSwitch::SglbCandidatePolicy FatTreeSwitch::_sglb_candidate_policy =
-    FatTreeSwitch::SGLB_CANDIDATE_EXACT_MIN;
+    FatTreeSwitch::SGLB_CANDIDATE_WHOLE_GRADE_MIN;
 FatTreeSwitch::SglbCandidateDispatch FatTreeSwitch::_sglb_candidate_dispatch =
     FatTreeSwitch::SGLB_DISPATCH_RANDOM;
 FatTreeSwitch::SglbGcnCadence FatTreeSwitch::_sglb_gcn_cadence =
-    FatTreeSwitch::SGLB_GCN_SYNCHRONIZED;
+    FatTreeSwitch::SGLB_GCN_INDEPENDENT;
 simtime_picosec FatTreeSwitch::_sglb_gcn_update_interval = timeFromUs(15.0);
 simtime_picosec FatTreeSwitch::_sglb_gcn_aging_interval = timeFromUs(30.0);
 simtime_picosec FatTreeSwitch::_paper_sglb_sample_interval = timeFromUs(1.0);
@@ -1866,6 +1866,8 @@ void FatTreeSwitch::configure_sglb_scheme_defaults(bool legacy) {
     if (legacy) {
         _sglb_ofat_factor = SGLB_OFAT_BASELINE;
         _sglb_min_choices = 3;
+        _sglb_candidate_dispatch = SGLB_DISPATCH_RANDOM;
+        _sglb_gcn_cadence = SGLB_GCN_INDEPENDENT;
         _sglb_nmrc_degraded_threshold = 0.10;
         _sglb_nmrc_bad_threshold = 0.40;
         _sglb_nmrc_avoid_threshold = 0.60;
@@ -1873,7 +1875,10 @@ void FatTreeSwitch::configure_sglb_scheme_defaults(bool legacy) {
     }
 
     _sglb_ofat_factor = SGLB_OFAT_REAL_GCN_RAW_LINEAR;
-    _sglb_min_choices = 24;
+    _sglb_min_choices = 20;
+    _sglb_candidate_policy = SGLB_CANDIDATE_WHOLE_GRADE_MIN;
+    _sglb_candidate_dispatch = SGLB_DISPATCH_RANDOM;
+    _sglb_gcn_cadence = SGLB_GCN_INDEPENDENT;
     _sglb_nmrc_degraded_threshold = 0.05;
     _sglb_nmrc_bad_threshold = 0.10;
     _sglb_nmrc_avoid_threshold = 0.20;

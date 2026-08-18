@@ -13,7 +13,7 @@ int main() {
     FatTreeSwitch::configure_sglb_scheme_defaults(false);
     assert(FatTreeSwitch::_sglb_ofat_factor ==
            FatTreeSwitch::SGLB_OFAT_REAL_GCN_RAW_LINEAR);
-    assert(FatTreeSwitch::_sglb_min_choices == 24);
+    assert(FatTreeSwitch::_sglb_min_choices == 20);
     assert(FatTreeSwitch::_sglb_gcn_update_interval == timeFromUs(15.0));
     assert(FatTreeSwitch::_sglb_nmrc_degraded_threshold == 0.05);
     assert(FatTreeSwitch::_sglb_nmrc_bad_threshold == 0.10);
@@ -134,11 +134,11 @@ int main() {
     assert((strict_filled == vector<uint32_t>{3, 2, 1}));
 
     assert(FatTreeSwitch::_sglb_candidate_policy ==
-           FatTreeSwitch::SGLB_CANDIDATE_EXACT_MIN);
+           FatTreeSwitch::SGLB_CANDIDATE_WHOLE_GRADE_MIN);
     assert(FatTreeSwitch::_sglb_candidate_dispatch ==
            FatTreeSwitch::SGLB_DISPATCH_RANDOM);
     assert(FatTreeSwitch::_sglb_gcn_cadence ==
-           FatTreeSwitch::SGLB_GCN_SYNCHRONIZED);
+           FatTreeSwitch::SGLB_GCN_INDEPENDENT);
 
     vector<uint8_t> oversized_best_levels{0, 0, 0, 0, 1};
     vector<bool> oversized_best_available(oversized_best_levels.size(), true);
