@@ -1,5 +1,7 @@
 # MRC 固有局限：控制变量验证结果与证据
 
+> **历史实验记录。** 本文结果来自已删除的 active-EV/cooldown 对照实现，不能代表当前固定 64-EV OCP SKIP_ONCE 模型；原 runner 已随旧机制一起移除，既有输出仅作为历史产物保留。
+
 ## 结论先行
 
 本次结果不支持“MRC 失败”，而支持一个更具体的边界判断：
@@ -392,7 +394,7 @@ K=2 的 100% 覆盖不能解释为最好：它只需要选择两个 EV 就能“
 - 实验 2 图：[`exp2_per_qp_repeated_exploration.png`](output/mrc_inherent_limitations_128/figures/exp2_per_qp_repeated_exploration.png)；
 - 实验 3 图：[`exp3_active_ev_coverage_and_fct.png`](output/mrc_inherent_limitations_128/figures/exp3_active_ev_coverage_and_fct.png)；
 - 实验 3 分流粒度 FCT 与 EV 覆盖图：[`exp3_flow_size_fct_and_ev_coverage.png`](output/mrc_inherent_limitations_128/figures/exp3_flow_size_fct_and_ev_coverage.png)，以及可缩放的 [`PDF`](output/mrc_inherent_limitations_128/figures/exp3_flow_size_fct_and_ev_coverage.pdf)；
-- 运行与聚合脚本：[`run_mrc_inherent_limitations.py`](run_mrc_inherent_limitations.py)。
+- 原运行与聚合脚本已随旧 active-EV/cooldown 对照机制删除。
 
 完整本地审计数据还包括：
 
@@ -403,12 +405,4 @@ K=2 的 100% 覆盖不能解释为最好：它只需要选择两个 EV 就能“
 
 完整审计数据约 1.8 GiB，位于 `output/mrc_inherent_limitations_128/`，默认不纳入 Git；紧凑统计、图和本报告用于版本化交付。
 
-复现命令：
-
-```bash
-python3 experiments/n-mrc/run_mrc_inherent_limitations.py run \
-  --seeds 13,29,47 \
-  --workers 3 \
-  --timeout 3600 \
-  --out experiments/n-mrc/output/mrc_inherent_limitations_128
-```
+该结果不再提供当前代码复现入口。

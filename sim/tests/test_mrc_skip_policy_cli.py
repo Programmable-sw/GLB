@@ -8,6 +8,18 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 BINARY = ROOT / "sim/datacenter/htsim_roce"
 
+REMOVED_FLAGS = {
+    "-mrc_congestion_policy": "skip_token",
+    "-mrc_cooldown_mode": "one_cycle",
+    "-mrc_cooldown_reference_pkts": "128",
+    "-mrc_all_cooling_fallback": "round_robin",
+    "-mrc_active_evs": "64",
+    "-mrc_failed_retry_us": "100",
+    "-mrc_probe_interval_pkts": "64",
+    "-mrc_failure_recovery": "on",
+    "-mrc_probe_success_threshold": "3",
+}
+
 
 def run(traffic: Path, topology: Path, output: Path, extra_args,
         nodes="256"):
@@ -58,12 +70,13 @@ def main():
         default = run(traffic, topology, temp / "default.dat", [])
         expect_success(
             default,
-            "MrcPolicyDiag policy=skip_token "
-            "all_skip_resolution=natural_rotation")
+            "MrcPolicyDiag policy=skip_once "
+            "all_skip_resolution=ordinary_rotation")
         expect_success(
             default,
-            "MrcFailureRecoveryDiag enabled=0 probe_success_threshold=3 "
-            "assumed_bad=0 probe_packets=0")
+            "MrcEvModelDiag mrc_ev_model=encoded "
+            "mrc_active_evs=64 mrc_backup_evs=0")
+        expect_success(default, "MrcFailureRecoveryDiag enabled=0")
 
         noncanonical_topology = temp / "leaf4-spine32.top"
         noncanonical_topology.write_text(
@@ -89,52 +102,12 @@ def main():
         if "requires exactly 64 physical paths" not in noncanonical.stdout:
             raise AssertionError(noncanonical.stdout)
 
-        for policy in ("skip_token", "skip_rotation", "one_cycle",
-                       "cwnd_scaled"):
+        for flag, value in REMOVED_FLAGS.items():
             result = run(
-                traffic, topology, temp / f"{policy}.dat",
-                ["-mrc_congestion_policy", policy,
-                 "-mrc_active_evs", "64"])
-            expect_success(result, f"MrcPolicyDiag policy={policy} ")
-            expect_success(
-                result, "MrcEvModelDiag mrc_ev_model=encoded "
-                "mrc_active_evs=64 mrc_backup_evs=0 ")
-
-        invalid_profile = run(
-            traffic, topology, temp / "invalid_profile.dat",
-            ["-mrc_congestion_policy", "skip_token",
-             "-mrc_active_evs", "63"])
-        if invalid_profile.returncode == 0:
-            raise AssertionError("canonical policy accepted a partial EV profile")
-
-        invalid = run(
-            traffic, topology, temp / "invalid.dat",
-            ["-mrc_congestion_policy", "invalid"])
-        if invalid.returncode == 0:
-            raise AssertionError("invalid MRC policy was accepted")
-
-        mixed = run(
-            traffic, topology, temp / "mixed.dat",
-            ["-mrc_congestion_policy", "skip_token",
-             "-mrc_cooldown_mode", "one_cycle"])
-        if mixed.returncode == 0:
-            raise AssertionError("mixed new and legacy policy flags were accepted")
-
-        legacy = run(
-            traffic, topology, temp / "legacy.dat",
-            ["-mrc_cooldown_mode", "cwnd_scaled"])
-        expect_success(legacy, "MrcPolicyDiag policy=cwnd_scaled ")
-        expect_success(
-            legacy, "MrcEvModelDiag mrc_ev_model=encoded "
-            "mrc_active_evs=32 mrc_backup_evs=32 ")
-
-        enabled = run(
-            traffic, topology, temp / "failure_enabled.dat",
-            ["-mrc_failure_recovery", "on",
-             "-mrc_probe_success_threshold", "5"])
-        expect_success(
-            enabled,
-            "MrcFailureRecoveryDiag enabled=1 probe_success_threshold=5 ")
+                traffic, topology, temp / f"removed-{flag[1:]}.dat",
+                [flag, value])
+            if result.returncode == 0:
+                raise AssertionError(f"removed MRC flag was accepted: {flag}")
 
 
 if __name__ == "__main__":

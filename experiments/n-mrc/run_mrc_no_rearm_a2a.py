@@ -12,7 +12,7 @@ import run_final_512_comparison as base
 ROOT = Path(__file__).resolve().parents[2]
 BASELINE = ROOT / "experiments/n-mrc/output/n-mrc-results"
 DEFAULT_OUT = (
-    ROOT / "experiments/n-mrc/output/mrc_one_cycle_no_rearm_a2a")
+    ROOT / "experiments/n-mrc/output/mrc_skip_once_no_rearm_a2a")
 
 
 def parse_args():
@@ -98,7 +98,7 @@ def main():
         "paths": 64,
         "seeds": seeds,
         "scheme": "mrc",
-        "cooldown_mode": "one_cycle",
+        "congestion_reaction": "skip_once",
         "cooldown_rearm": False,
         "scenario_count": len(scenarios),
         "case_count": len(specs),

@@ -846,9 +846,6 @@ void exit_error(char* progr) {
     cout << "\t[-nmrc_graded_cooldown selective|full|none]" << endl;
     cout << "\t[-nmrc_graded_reroute_delta VALUE]" << endl;
     cout << "\t[-nmrc_route_delta VALUE] [-nmrc_cooldown_delta VALUE]" << endl;
-    cout << "\t[-mrc_congestion_policy skip_token|skip_rotation|one_cycle|cwnd_scaled]" << endl;
-    cout << "\t[-mrc_failure_recovery on|off] [-mrc_probe_success_threshold N]" << endl;
-    cout << "\t[-mrc_active_evs K]" << endl;
     cout << "\t[-queue_cv_sample_us x]" << endl;
     cout << "\t[-path_selection_timeline file] "
          << "[-path_selection_timeline_every N]" << endl;
@@ -1017,24 +1014,8 @@ int main(int argc, char **argv) {
     uint32_t mrc_logical_evs = 0;
     uint32_t mrc_active_paths = 0;
     uint32_t mrc_backup_paths = 0;
-    uint32_t mrc_active_evs = 0;
-    bool mrc_active_evs_user_set = false;
     uint32_t mrc_min_active_paths = 1;
     uint32_t mrc_path_bits = 0;
-    RoceSrc::mrc_congestion_policy_t mrc_congestion_policy =
-        RoceSrc::MRC_POLICY_SKIP_TOKEN;
-    bool mrc_congestion_policy_user_set = false;
-    bool mrc_cooldown_mode_user_set = false;
-    RoceSrc::mrc_cooldown_mode_t mrc_cooldown_mode =
-        RoceSrc::MRC_COOLDOWN_ONE_CYCLE;
-    uint32_t mrc_cooldown_reference_pkts = 0;
-    bool mrc_cooldown_reference_user_set = false;
-    RoceSrc::mrc_all_cooling_fallback_t mrc_all_cooling_fallback =
-        RoceSrc::MRC_ALL_COOLING_EARLIEST;
-    double mrc_failed_retry_us = 100.0;
-    uint32_t mrc_probe_interval_pkts = 256;
-    bool mrc_failure_recovery_enabled = false;
-    uint32_t mrc_probe_success_threshold = 3;
 
     bool log_sink = false;
     bool log_tor_downqueue = false;
@@ -1405,118 +1386,6 @@ int main(int argc, char **argv) {
                 ecn_thresh = 0.0;
             ecn_thresh_user_set = true;
             cout << "Composite RED ECN Kmax fraction " << ecn_thresh << endl;
-            i++;
-        } else if (!strcmp(argv[i],"-mrc_congestion_policy")){
-            if (i + 1 >= argc) {
-                cerr << "missing value for -mrc_congestion_policy" << endl;
-                exit(1);
-            }
-            if (!strcmp(argv[i+1], "skip_token"))
-                mrc_congestion_policy = RoceSrc::MRC_POLICY_SKIP_TOKEN;
-            else if (!strcmp(argv[i+1], "skip_rotation"))
-                mrc_congestion_policy = RoceSrc::MRC_POLICY_SKIP_ROTATION;
-            else if (!strcmp(argv[i+1], "one_cycle")) {
-                mrc_congestion_policy = RoceSrc::MRC_POLICY_ONE_CYCLE;
-                mrc_cooldown_mode = RoceSrc::MRC_COOLDOWN_ONE_CYCLE;
-            } else if (!strcmp(argv[i+1], "cwnd_scaled")) {
-                mrc_congestion_policy = RoceSrc::MRC_POLICY_CWND_SCALED;
-                mrc_cooldown_mode = RoceSrc::MRC_COOLDOWN_CWND_SCALED;
-            } else {
-                cerr << "Unknown MRC congestion policy " << argv[i+1]
-                     << endl;
-                exit(1);
-            }
-            mrc_congestion_policy_user_set = true;
-            cout << "MRC congestion policy " << argv[i+1] << endl;
-            i++;
-        } else if (!strcmp(argv[i],"-mrc_cooldown_mode")){
-            if (i + 1 >= argc) {
-                cerr << "missing value for -mrc_cooldown_mode" << endl;
-                exit(1);
-            }
-            if (!strcmp(argv[i+1], "cwnd_scaled")) {
-                mrc_cooldown_mode = RoceSrc::MRC_COOLDOWN_CWND_SCALED;
-                mrc_congestion_policy = RoceSrc::MRC_POLICY_CWND_SCALED;
-            } else if (!strcmp(argv[i+1], "one_cycle")) {
-                mrc_cooldown_mode = RoceSrc::MRC_COOLDOWN_ONE_CYCLE;
-                mrc_congestion_policy = RoceSrc::MRC_POLICY_ONE_CYCLE;
-            } else {
-                cout << "Unknown MRC cooldown mode " << argv[i+1] << endl;
-                exit_error(argv[0]);
-            }
-            mrc_cooldown_mode_user_set = true;
-            cout << "MRC cooldown mode " << argv[i+1] << endl;
-            i++;
-        } else if (!strcmp(argv[i],"-mrc_all_cooling_fallback")){
-            if (!strcmp(argv[i+1], "earliest"))
-                mrc_all_cooling_fallback =
-                    RoceSrc::MRC_ALL_COOLING_EARLIEST;
-            else if (!strcmp(argv[i+1], "round_robin"))
-                mrc_all_cooling_fallback =
-                    RoceSrc::MRC_ALL_COOLING_ROUND_ROBIN;
-            else {
-                cout << "Unknown MRC all-cooling fallback "
-                     << argv[i+1] << endl;
-                exit_error(argv[0]);
-            }
-            cout << "MRC all-cooling fallback " << argv[i+1] << endl;
-            i++;
-        } else if (!strcmp(argv[i],"-mrc_cooldown_reference_pkts")){
-            mrc_cooldown_reference_pkts = atoi(argv[i+1]);
-            if (!mrc_cooldown_reference_pkts)
-                mrc_cooldown_reference_pkts = 1;
-            mrc_cooldown_reference_user_set = true;
-            cout << "MRC cooldown reference "
-                 << mrc_cooldown_reference_pkts << " packets" << endl;
-            i++;
-        } else if (!strcmp(argv[i],"-mrc_failed_retry_us")){
-            mrc_failed_retry_us = atof(argv[i+1]);
-            if (mrc_failed_retry_us < 0)
-                mrc_failed_retry_us = 0;
-            cout << "MRC failed-path retry " << mrc_failed_retry_us << "us" << endl;
-            i++;
-        } else if (!strcmp(argv[i],"-mrc_probe_interval_pkts")){
-            mrc_probe_interval_pkts = atoi(argv[i+1]);
-            cout << "MRC background probe interval " << mrc_probe_interval_pkts << " packets" << endl;
-            i++;
-        } else if (!strcmp(argv[i],"-mrc_failure_recovery")){
-            if (i + 1 >= argc) {
-                cerr << "missing value for -mrc_failure_recovery" << endl;
-                exit(1);
-            }
-            if (!strcmp(argv[i+1], "on"))
-                mrc_failure_recovery_enabled = true;
-            else if (!strcmp(argv[i+1], "off"))
-                mrc_failure_recovery_enabled = false;
-            else {
-                cerr << "-mrc_failure_recovery requires on or off" << endl;
-                exit(1);
-            }
-            i++;
-        } else if (!strcmp(argv[i],"-mrc_probe_success_threshold")){
-            if (i + 1 >= argc) {
-                cerr << "missing value for -mrc_probe_success_threshold" << endl;
-                exit(1);
-            }
-            mrc_probe_success_threshold =
-                (uint32_t)strtoul(argv[i+1], NULL, 10);
-            if (!mrc_probe_success_threshold) {
-                cerr << "-mrc_probe_success_threshold must be positive" << endl;
-                exit(1);
-            }
-            i++;
-        } else if (!strcmp(argv[i],"-mrc_active_evs")){
-            if (i + 1 >= argc) {
-                cerr << "missing value for -mrc_active_evs" << endl;
-                exit(1);
-            }
-            mrc_active_evs = (uint32_t)strtoul(argv[i+1], NULL, 10);
-            if (!mrc_active_evs) {
-                cerr << "-mrc_active_evs must be positive" << endl;
-                exit(1);
-            }
-            mrc_active_evs_user_set = true;
-            cout << "MRC active EV override " << mrc_active_evs << endl;
             i++;
         } else if (!strcmp(argv[i],"-roce_rx_mode")){
             if (!strcmp(argv[i+1], "gbn") || !strcmp(argv[i+1], "default")) {
@@ -2776,30 +2645,12 @@ int main(int argc, char **argv) {
     srandom(seed);
     RoceSrc::setNmrcEvSeed(seed);
 
-    if (mrc_congestion_policy_user_set && mrc_cooldown_mode_user_set) {
-        cerr << "-mrc_congestion_policy cannot be combined with deprecated "
-             << "-mrc_cooldown_mode" << endl;
-        exit(1);
-    }
-    RoceSrc::setMrcCongestionPolicy(mrc_congestion_policy);
-
     if (grade_complex_score && lb_scheme_name != "grade") {
         cerr << "grade complex override requires -lb grade" << endl;
         exit(1);
     }
     if (avail_ecn_only && lb_scheme_name != "avail") {
         cerr << "avail ECN-only override requires -lb avail" << endl;
-        exit(1);
-    }
-    if (mrc_cooldown_reference_user_set &&
-        lb_scheme_name != "mrc" && lb_scheme_name != "mrc-shared") {
-        cerr << "MRC cooldown reference override requires -lb mrc or -lb mrc-shared" << endl;
-        exit(1);
-    }
-    if (mrc_active_evs_user_set &&
-        lb_scheme_name != "mrc" && lb_scheme_name != "mrc-shared" &&
-        lb_scheme_name != "rr") {
-        cerr << "-mrc_active_evs requires -lb mrc, -lb mrc-shared, or -lb rr" << endl;
         exit(1);
     }
     if (nmrc_relative_delta_user_set &&
@@ -3110,12 +2961,6 @@ int main(int argc, char **argv) {
                                                 Packet::data_packet_size());
     if (!estimated_bdp_pkts)
         estimated_bdp_pkts = 1;
-    if (!mrc_cooldown_reference_user_set)
-        mrc_cooldown_reference_pkts = estimated_bdp_pkts;
-    RoceSrc::setMrcCooldownReferencePkts(mrc_cooldown_reference_pkts);
-    const char* mrc_cooldown_reference_source =
-        mrc_cooldown_reference_user_set ? "explicit" : "topology_bdp";
-
     if (!queue_user_set) {
         queuesize = estimated_bdp_pkts;
         cout << "reps default queue size 1BDP = " << queuesize
@@ -3580,32 +3425,13 @@ int main(int argc, char **argv) {
     RoceSrc::setHostsPerTor(top->radix_down(TOR_TIER));
 
     uint32_t path_space = path_entropy_size ? path_entropy_size : 1;
-    bool mrc_canonical_policy =
-        mrc_congestion_policy == RoceSrc::MRC_POLICY_SKIP_TOKEN ||
-        mrc_congestion_policy == RoceSrc::MRC_POLICY_SKIP_ROTATION;
     if ((roce_lb_mode == RoceSrc::LB_MRC ||
          roce_lb_mode == RoceSrc::LB_MRC_SHARED) &&
-        mrc_canonical_policy && path_space != 64) {
-        cerr << "MRC policy "
-             << (mrc_congestion_policy == RoceSrc::MRC_POLICY_SKIP_TOKEN ?
-                 "skip_token" : "skip_rotation")
-             << " requires exactly 64 physical paths; topology provides "
+        path_space != 64) {
+        cerr << "MRC requires exactly 64 physical paths; topology provides "
              << path_space << endl;
         exit(1);
     }
-    if (mrc_canonical_policy && mrc_active_evs_user_set &&
-        mrc_active_evs != 64) {
-        cerr << "canonical 64-EV policies require -mrc_active_evs 64"
-             << endl;
-        exit(1);
-    }
-    if (mrc_active_evs_user_set &&
-        mrc_active_evs > path_space) {
-        cerr << "-mrc_active_evs exceeds the available active EV space "
-             << path_space << endl;
-        exit(1);
-    }
-    RoceSrc::setMrcActiveEvs(mrc_active_evs);
     FatTreeSwitch::_netaware_path_count = path_space;
     FatTreeSwitch::_netaware_enabled = roce_lb_mode == RoceSrc::LB_NETAWARE;
     FatTreeSwitch::_stor_path_count = path_space;
@@ -3800,21 +3626,14 @@ int main(int argc, char **argv) {
     }
     if (roce_lb_mode == RoceSrc::LB_MRC ||
         roce_lb_mode == RoceSrc::LB_MRC_SHARED) {
-        const char* mrc_cooldown_mode_name =
-            mrc_cooldown_mode == RoceSrc::MRC_COOLDOWN_ONE_CYCLE ?
-            "one_cycle" : "cwnd_scaled";
-        mrc_logical_evs = path_space;
-        mrc_active_paths = RoceSrc::resolvedMrcActiveEvs(path_space);
-        mrc_backup_paths = path_space - mrc_active_paths;
+        mrc_logical_evs = 64;
+        mrc_active_paths = 64;
+        mrc_backup_paths = 0;
         mrc_min_active_paths = 1;
-        uint32_t encoded_universe = path_space ? path_space : 1;
+        uint32_t encoded_universe = 64;
         while (((uint64_t)1 << mrc_path_bits) < encoded_universe &&
                mrc_path_bits < 31)
             mrc_path_bits++;
-        uint32_t mrc_cwnd_scaled_rotations =
-            RoceSrc::mrcCwndScaledRotations(mrc_active_paths);
-        uint64_t mrc_cwnd_scaled_skip_selections =
-            RoceSrc::mrcCwndScaledSkipSelections(mrc_active_paths);
         cout << "MRC: paths " << path_space
              << ", mrc_ev_model encoded"
              << ", physical_path_space " << path_space
@@ -3825,18 +3644,8 @@ int main(int argc, char **argv) {
              << ", path_bits " << mrc_path_bits
              << ", unique_active_physical_paths " << mrc_active_paths
              << ", min_active_paths " << mrc_min_active_paths
-             << ", cooldown_mode " << mrc_cooldown_mode_name
-             << ", mrc_cooldown_mode " << mrc_cooldown_mode_name
-             << ", mrc_cooldown_reference "
-             << mrc_cooldown_reference_source
-             << ", mrc_cooldown_reference_pkts "
-             << RoceSrc::mrcCooldownReferencePkts()
-             << ", mrc_cwnd_scaled_rotations "
-             << mrc_cwnd_scaled_rotations
-             << ", mrc_cwnd_scaled_skip_selections "
-             << mrc_cwnd_scaled_skip_selections
-             << ", failed_retry_us " << mrc_failed_retry_us
-             << ", probe_interval_pkts " << mrc_probe_interval_pkts
+             << ", congestion_reaction skip_once"
+             << ", failure_recovery disabled"
              << ", source_pathid_mode true"
              << ", ev_path_mapping encoded_identity"
              << ", alias_ratio 1"
@@ -3853,46 +3662,10 @@ int main(int argc, char **argv) {
              << " mrc_alias_ratio=1"
              << " mrc_ev_path_mapping=encoded_identity"
              << endl;
-        cout << "MrcPolicyDiag policy=";
-        switch (mrc_congestion_policy) {
-        case RoceSrc::MRC_POLICY_SKIP_TOKEN:
-            cout << "skip_token all_skip_resolution=natural_rotation";
-            break;
-        case RoceSrc::MRC_POLICY_SKIP_ROTATION:
-            cout << "skip_rotation all_skip_resolution=natural_rotation";
-            break;
-        case RoceSrc::MRC_POLICY_ONE_CYCLE:
-            cout << "one_cycle all_skip_resolution=legacy_fallback";
-            break;
-        case RoceSrc::MRC_POLICY_CWND_SCALED:
-            cout << "cwnd_scaled all_skip_resolution=legacy_fallback";
-            break;
-        }
-        cout << endl;
-        cout << "MrcFailureRecoveryDiag enabled="
-             << (mrc_failure_recovery_enabled ? 1 : 0)
-             << " probe_success_threshold=" << mrc_probe_success_threshold
+        cout << "MrcPolicyDiag policy=skip_once"
+             << " all_skip_resolution=ordinary_rotation" << endl;
+        cout << "MrcFailureRecoveryDiag enabled=0"
              << " assumed_bad=0 probe_packets=0" << endl;
-        if (mrc_congestion_policy == RoceSrc::MRC_POLICY_ONE_CYCLE ||
-            mrc_congestion_policy == RoceSrc::MRC_POLICY_CWND_SCALED) {
-            cout << "MrcCooldownDiag "
-                 << "mrc_cooldown_mode=" << mrc_cooldown_mode_name
-                 << " mrc_cooldown_reference="
-                 << mrc_cooldown_reference_source
-                 << " mrc_cooldown_reference_pkts="
-                 << RoceSrc::mrcCooldownReferencePkts()
-                 << " mrc_cwnd_scaled_rotations="
-                 << mrc_cwnd_scaled_rotations
-                 << " mrc_cwnd_scaled_skip_selections="
-                 << mrc_cwnd_scaled_skip_selections
-                 << endl;
-            cout << "MrcFallbackDiag "
-                 << "mrc_all_cooling_fallback="
-                 << (mrc_all_cooling_fallback ==
-                     RoceSrc::MRC_ALL_COOLING_EARLIEST ?
-                     "earliest" : "round_robin")
-                 << endl;
-        }
         if (roce_lb_mode == RoceSrc::LB_MRC_SHARED)
             cout << "MrcSharedConfig enabled=1 key=source_nic,destination_tor,ev"
                  << endl;
@@ -3901,16 +3674,11 @@ int main(int argc, char **argv) {
         cout << "RR: stateless_mrc true"
              << ", physical_path_space " << path_space
              << ", active_evs "
-             << RoceSrc::resolvedMrcActiveEvs(path_space)
+             << path_space
              << ", ev_path_mapping encoded_identity"
              << endl;
     }
-    RoceSrc::setMrcCooldownMode(mrc_cooldown_mode);
-    RoceSrc::setMrcAllCoolingFallback(mrc_all_cooling_fallback);
-    RoceSrc::setMrcFailedRetry(timeFromUs(mrc_failed_retry_us));
-    RoceSrc::setMrcProbeIntervalPkts(mrc_probe_interval_pkts);
-    RoceSrc::setMrcFailureRecoveryEnabled(mrc_failure_recovery_enabled);
-    RoceSrc::setMrcProbeSuccessThreshold(mrc_probe_success_threshold);
+    RoceSrc::setMrcFailureRecoveryEnabled(false);
     RoceSrc::setPathEntropySize(path_entropy_size);
 
     ofstream path_selection_timeline;
@@ -4245,8 +4013,6 @@ int main(int argc, char **argv) {
     uint64_t mrc_duplicate_feedback_ignored = 0;
     uint64_t mrc_skip_opportunities_consumed = 0;
     uint64_t mrc_data_on_non_good_violations = 0;
-    uint64_t mrc_cwnd_scaled_feedback_events = 0;
-    uint64_t mrc_cwnd_scaled_duplicate_feedback_ignored = 0;
     uint64_t mrc_probe_events = 0, mrc_backup_replacement_events = 0;
     uint64_t mrc_probe_success_events = 0, mrc_probe_fail_events = 0;
     uint64_t mrc_backup_replacement_diff_physical = 0;
@@ -4390,10 +4156,6 @@ int main(int argc, char **argv) {
             roce_srcs[ix]->_mrc_skip_opportunities_consumed;
         mrc_data_on_non_good_violations +=
             roce_srcs[ix]->_mrc_data_on_non_good_violations;
-        mrc_cwnd_scaled_feedback_events +=
-            roce_srcs[ix]->_mrc_cwnd_scaled_feedback_events;
-        mrc_cwnd_scaled_duplicate_feedback_ignored +=
-            roce_srcs[ix]->_mrc_cwnd_scaled_duplicate_feedback_ignored;
         mrc_probe_events += roce_srcs[ix]->_mrc_probe_events;
         mrc_probe_success_events += roce_srcs[ix]->_mrc_probe_success_events;
         mrc_probe_fail_events += roce_srcs[ix]->_mrc_probe_fail_events;
@@ -4597,10 +4359,6 @@ int main(int argc, char **argv) {
          << mrc_skip_opportunities_consumed
          << " data_on_non_good_violations="
          << mrc_data_on_non_good_violations
-         << " cwnd_scaled_feedback_events="
-         << mrc_cwnd_scaled_feedback_events
-         << " cwnd_scaled_duplicate_feedback_ignored="
-         << mrc_cwnd_scaled_duplicate_feedback_ignored
          << " cooling_skip_selection_avg="
          << (mrc_cooling_skip_selection_events ?
              (double)mrc_cooling_skip_selection_sum /

@@ -1,5 +1,9 @@
 # MRC skip-token 版本对齐审计
 
+> **历史记录：已被取代。** 本文记录对齐过程；当前实现以
+> `docs/superpowers/specs/2026-08-18-mrc-ocp-skip-once-consolidation-design.md`
+> 为准：64 EV 全部 active、OCP SKIP_ONCE、无公开策略或故障恢复 CLI。
+
 ## 结论
 
 当前 `main-htsim` 工作树原先只把 MRC/RR 修正为 64 个 active EV，实际 MRC 仍使用 legacy `one_cycle` cooldown，并没有与另一对话中的 skip-token 版本对齐。

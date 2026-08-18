@@ -94,14 +94,6 @@ RoceSrc::nmrc_all_cooling_policy_t RoceSrc::_nmrc_all_cooling_policy =
 uint32_t RoceSrc::_reps_buffer_size = 8;
 uint32_t RoceSrc::_reps_warmup_pkts = 0;
 uint32_t RoceSrc::_hosts_per_tor = 1;
-RoceSrc::mrc_congestion_policy_t RoceSrc::_mrc_congestion_policy =
-    RoceSrc::MRC_POLICY_SKIP_TOKEN;
-RoceSrc::mrc_cooldown_mode_t RoceSrc::_mrc_cooldown_mode =
-    RoceSrc::MRC_COOLDOWN_ONE_CYCLE;
-uint32_t RoceSrc::_mrc_cooldown_reference_pkts = 1;
-RoceSrc::mrc_all_cooling_fallback_t RoceSrc::_mrc_all_cooling_fallback =
-    RoceSrc::MRC_ALL_COOLING_EARLIEST;
-uint32_t RoceSrc::_mrc_active_evs = 0;
 simtime_picosec RoceSrc::_mrc_failed_retry = timeFromUs(100.0);
 uint32_t RoceSrc::_mrc_probe_interval_pkts = 256;
 bool RoceSrc::_mrc_failure_recovery_enabled = false;
@@ -381,8 +373,6 @@ RoceSrc::RoceSrc(RoceLogger* logger, TrafficLogger* pktlogger, EventList &eventl
     _mrc_cooling_skip_selection_sum = 0;
     _mrc_cooling_skip_selection_events = 0;
     _mrc_duplicate_feedback_ignored = 0;
-    _mrc_cwnd_scaled_feedback_events = 0;
-    _mrc_cwnd_scaled_duplicate_feedback_ignored = 0;
     _mrc_probe_events = 0;
     _mrc_probe_success_events = 0;
     _mrc_probe_fail_events = 0;
@@ -466,8 +456,6 @@ RoceSrc::RoceSrc(RoceLogger* logger, TrafficLogger* pktlogger, EventList &eventl
     _rr_cursor = 0;
     _rr_path_space = 0;
     _rr_paths_ready = false;
-    _mrc_active_cursor = 0;
-    _mrc_backup_cursor = 0;
     _mrc_path_space = 0;
     _mrc_paths_ready = false;
     _nmrc_cursor = 0;
@@ -1936,9 +1924,7 @@ std::array<uint32_t, 5> RoceSrc::mrc_state_physical_counts_for_diag() const {
 }
 
 uint32_t RoceSrc::mrc_backup_remaining_for_diag() const {
-    if (_mrc_backup.size() <= _mrc_backup_cursor)
-        return 0;
-    return (uint32_t)(_mrc_backup.size() - _mrc_backup_cursor);
+    return 0;
 }
 
 void RoceSrc::sample_mrc_state_counts() {
@@ -2895,7 +2881,6 @@ void RoceSrc::init_rr_paths(uint32_t path_space) {
     if (_rr_paths_ready && _rr_path_space == path_space)
         return;
     _rr_evs = build_mrc_ev_order(path_space);
-    _rr_evs.resize(resolvedMrcActiveEvs(path_space));
     _mrc_flow_metrics.active_evs = (uint32_t)_rr_evs.size();
     _mrc_flow_metrics.initial_active.clear();
     _mrc_flow_metrics.initial_active.insert(
@@ -2915,9 +2900,6 @@ uint32_t RoceSrc::choose_rr_path(uint32_t path_space) {
 void RoceSrc::reset_mrc_paths() {
     _mrc_evs.clear();
     _mrc_active.clear();
-    _mrc_backup.clear();
-    _mrc_active_cursor = 0;
-    _mrc_backup_cursor = 0;
     _mrc_path_space = 0;
     _mrc_paths_ready = false;
     _mrc_seq_ev.clear();
@@ -2929,26 +2911,14 @@ void RoceSrc::reset_mrc_paths() {
 }
 
 uint32_t RoceSrc::mrc_logical_ev_count(uint32_t path_space) const {
-    return path_space ? path_space : 1;
-}
-
-uint32_t RoceSrc::mrc_desired_active_paths(uint32_t path_space) const {
-    return resolvedMrcActiveEvs(path_space);
-}
-
-bool RoceSrc::mrc_ev_in_active(uint32_t logical_ev) const {
-    for (uint32_t i = 0; i < _mrc_active.size(); i++) {
-        if (_mrc_active[i] == logical_ev)
-            return true;
-    }
-    return false;
+    return path_space == MRC_EV_COUNT ? MRC_EV_COUNT : 0;
 }
 
 void RoceSrc::init_mrc_paths(uint32_t path_space) {
     if (path_space == 0)
         path_space = 1;
-    if (mrcUsesCanonical64Profile() && path_space != 64) {
-        cerr << "canonical MRC skip policies require exactly 64 paths; got "
+    if (path_space != MRC_EV_COUNT) {
+        cerr << "MRC requires exactly 64 paths; got "
              << path_space << endl;
         abort();
     }
@@ -2959,36 +2929,22 @@ void RoceSrc::init_mrc_paths(uint32_t path_space) {
 
     _mrc_evs.assign(logical_count, MrcEv());
     _mrc_active.clear();
-    _mrc_backup.clear();
-    _mrc_active_cursor = 0;
-    _mrc_backup_cursor = 0;
     _mrc_seq_ev.clear();
 
     vector<uint32_t> ids = build_mrc_ev_order(logical_count);
 
-    uint32_t desired_active = mrc_desired_active_paths(path_space);
-    uint32_t desired_backup = logical_count - desired_active;
-
     for (uint32_t logical = 0; logical < logical_count; logical++) {
         _mrc_evs[logical].logical_ev = logical;
         _mrc_evs[logical].physical_path = logical;
-        _mrc_evs[logical].state = MRC_PATH_UNUSED;
+        _mrc_evs[logical].state = MRC_EV_GOOD;
         _mrc_evs[logical].probe_successes = 0;
         _mrc_evs[logical].retry_after = 0;
-        _mrc_evs[logical].cool_until_select_count = 0;
         _mrc_evs[logical].skip_pending = false;
-        _mrc_evs[logical].resume_rotation = 0;
         _mrc_evs[logical].congestion_epoch = 0;
+        _mrc_active.push_back(ids[logical]);
     }
 
-    for (uint32_t i = 0; i < desired_active; i++) {
-        _mrc_evs[ids[i]].state = MRC_PATH_ACTIVE;
-        _mrc_active.push_back(ids[i]);
-    }
-    for (uint32_t i = desired_active; i < desired_active + desired_backup; i++)
-        _mrc_backup.push_back(ids[i]);
-
-    _mrc_flow_metrics.active_evs = desired_active;
+    _mrc_flow_metrics.active_evs = MRC_EV_COUNT;
     _mrc_flow_metrics.initial_active.clear();
     _mrc_flow_metrics.initial_active.insert(
         _mrc_active.begin(), _mrc_active.end());
@@ -2996,138 +2952,24 @@ void RoceSrc::init_mrc_paths(uint32_t path_space) {
     _mrc_path_space = path_space;
 }
 
-bool RoceSrc::mrc_cooling_expired(const MrcEv& ev) const {
-    if (ev.state != MRC_PATH_COOLING)
-        return false;
-    if (mrcUsesCanonical64Profile())
-        return false;
-    if (ev.cool_until_select_count)
-        return _mrc_select_counter >= ev.cool_until_select_count;
-    return eventlist().now() >= ev.retry_after;
-}
-
 RoceSrc::MrcChoice RoceSrc::mrc_note_selected_choice(const MrcChoice& choice) {
     _mrc_select_counter++;
     return choice;
 }
 
-uint64_t RoceSrc::mrc_current_cooldown_skip_selections() const {
-    uint32_t active_count = (uint32_t)_mrc_active.size();
-    if (!active_count)
-        active_count = 1;
-    return active_count;
-}
-
 bool RoceSrc::mrc_ev_selectable(uint32_t logical_ev) {
-    if (logical_ev >= _mrc_evs.size())
-        return false;
-
-    MrcEv& ev = _mrc_evs[logical_ev];
-    if (ev.state == MRC_PATH_ACTIVE)
-        return true;
-
-    if (ev.state == MRC_PATH_COOLING && mrc_cooling_expired(ev)) {
-        if (ev.cool_until_select_count)
-            _mrc_cycle_cooling_expiries++;
-        mrc_activate_ev(logical_ev);
-        return ev.state == MRC_PATH_ACTIVE;
-    }
-
-    return false;
+    return logical_ev < _mrc_evs.size() &&
+        _mrc_evs[logical_ev].state == MRC_EV_GOOD;
 }
 
 void RoceSrc::mrc_activate_ev(uint32_t logical_ev) {
     if (logical_ev >= _mrc_evs.size())
         return;
 
-    bool was_cooling =
-        _mrc_evs[logical_ev].state == MRC_PATH_COOLING;
-    if (!mrc_ev_in_active(logical_ev)) {
-        uint32_t path_space = _path_entropy_size ? _path_entropy_size : 1;
-        uint32_t desired = mrc_desired_active_paths(path_space);
-        if (_mrc_active.size() >= desired) {
-            _mrc_evs[logical_ev].state = MRC_PATH_UNUSED;
-            _mrc_evs[logical_ev].retry_after = 0;
-            _mrc_evs[logical_ev].cool_until_select_count = 0;
-            _mrc_evs[logical_ev].probe_successes = 0;
-            return;
-        }
-        _mrc_active.push_back(logical_ev);
-    }
-
-    _mrc_evs[logical_ev].state = MRC_PATH_ACTIVE;
+    _mrc_evs[logical_ev].state = MRC_EV_GOOD;
     _mrc_evs[logical_ev].retry_after = 0;
-    _mrc_evs[logical_ev].cool_until_select_count = 0;
     _mrc_evs[logical_ev].skip_pending = false;
-    _mrc_evs[logical_ev].resume_rotation = 0;
     _mrc_evs[logical_ev].probe_successes = 0;
-    if (was_cooling)
-        _mrc_evs[logical_ev].awaiting_post_cooldown_feedback = true;
-}
-
-void RoceSrc::mrc_remove_active_ev(uint32_t logical_ev) {
-    for (vector<uint32_t>::iterator it = _mrc_active.begin();
-         it != _mrc_active.end();) {
-        if (*it == logical_ev)
-            it = _mrc_active.erase(it);
-        else
-            it++;
-    }
-    if (!_mrc_active.empty())
-        _mrc_active_cursor %= _mrc_active.size();
-    else
-        _mrc_active_cursor = 0;
-}
-
-void RoceSrc::mrc_promote_backup(uint32_t path_space) {
-    uint32_t desired = mrc_desired_active_paths(path_space);
-    simtime_picosec now = eventlist().now();
-
-    while (_mrc_active.size() < desired &&
-           _mrc_backup_cursor < _mrc_backup.size()) {
-        uint32_t logical_ev = _mrc_backup[_mrc_backup_cursor++];
-        if (logical_ev >= _mrc_evs.size())
-            continue;
-        if (mrc_ev_in_active(logical_ev))
-            continue;
-        MrcEv& ev = _mrc_evs[logical_ev];
-        if (ev.state == MRC_PATH_FAILED && now < ev.retry_after)
-            continue;
-        if (ev.state == MRC_PATH_COOLING && !mrc_cooling_expired(ev))
-            continue;
-        if (ev.state == MRC_PATH_COOLING && ev.cool_until_select_count)
-            _mrc_cycle_cooling_expiries++;
-        ev.state = MRC_PATH_ACTIVE;
-        ev.retry_after = 0;
-        ev.cool_until_select_count = 0;
-        ev.probe_successes = 0;
-        _mrc_active.push_back(logical_ev);
-        _mrc_backup_replacement_events++;
-        _mrc_backup_replacement_diff_physical++;
-    }
-
-    for (uint32_t logical_ev = 0;
-         _mrc_active.size() < desired && logical_ev < _mrc_evs.size();
-         logical_ev++) {
-        if (mrc_ev_in_active(logical_ev))
-            continue;
-        MrcEv& ev = _mrc_evs[logical_ev];
-        if (ev.state == MRC_PATH_FAILED && now < ev.retry_after)
-            continue;
-        if (ev.state == MRC_PATH_COOLING && !mrc_cooling_expired(ev))
-            continue;
-        if (ev.state == MRC_PATH_COOLING && ev.cool_until_select_count)
-            _mrc_cycle_cooling_expiries++;
-        ev.state = MRC_PATH_ACTIVE;
-        ev.retry_after = 0;
-        ev.cool_until_select_count = 0;
-        ev.probe_successes = 0;
-        _mrc_active.push_back(logical_ev);
-        _mrc_backup_replacement_events++;
-        _mrc_backup_replacement_diff_physical++;
-    }
-
-    sample_mrc_state_counts();
 }
 
 bool RoceSrc::mrc_mark_congested(uint32_t logical_ev,
@@ -3135,98 +2977,37 @@ bool RoceSrc::mrc_mark_congested(uint32_t logical_ev,
     if (logical_ev >= _mrc_evs.size())
         return false;
     MrcEv& ev = _mrc_evs[logical_ev];
-    if (mrcUsesCanonical64Profile()) {
-        if (ev.state != MRC_EV_GOOD) {
-            if (ev.state == MRC_EV_SKIP)
-                _mrc_duplicate_feedback_ignored++;
-            return false;
-        }
-        ev.state = MRC_EV_SKIP;
-        ev.skip_pending = false;
-        ev.resume_rotation = 0;
-        ev.retry_after = 0;
-        ev.cool_until_select_count = 0;
-        ev.probe_successes = 0;
-        ev.awaiting_post_cooldown_feedback = false;
-        ev.congestion_epoch++;
-        if (_mrc_congestion_policy == MRC_POLICY_SKIP_TOKEN)
-            ev.skip_pending = true;
-        else
-            ev.resume_rotation = _mrc_rotation + 1;
-        _mrc_cycle_cooling_events++;
-        sample_mrc_state_counts();
-        (void)signal;
-        return true;
-    }
-    if (ev.state == MRC_PATH_FAILED)
-        return false;
-    bool cwnd_scaled_feedback =
-        _mrc_cooldown_mode == MRC_COOLDOWN_CWND_SCALED;
-    if (cwnd_scaled_feedback)
-        _mrc_cwnd_scaled_feedback_events++;
-    if (ev.state == MRC_PATH_COOLING) {
-        _mrc_duplicate_feedback_ignored++;
-        if (cwnd_scaled_feedback)
-            _mrc_cwnd_scaled_duplicate_feedback_ignored++;
+    if (ev.state != MRC_EV_GOOD) {
+        if (ev.state == MRC_EV_SKIP)
+            _mrc_duplicate_feedback_ignored++;
         return false;
     }
-    if (ev.state == MRC_PATH_PROBING)
-        _mrc_probe_fail_events++;
-    ev.awaiting_post_cooldown_feedback = false;
-
-    uint64_t base_skip = mrc_current_cooldown_skip_selections();
-    uint64_t skip = base_skip;
-    if (cwnd_scaled_feedback)
-        skip = mrcCwndScaledSkipSelections((uint32_t)_mrc_active.size());
-    if (skip == 0) {
-        if (mrc_ev_in_active(logical_ev))
-            ev.state = MRC_PATH_ACTIVE;
-        ev.retry_after = 0;
-        ev.cool_until_select_count = 0;
-        return false;
-    }
-
-    ev.state = MRC_PATH_COOLING;
-    ev.probe_successes = 0;
+    ev.state = MRC_EV_SKIP;
+    ev.skip_pending = true;
     ev.retry_after = 0;
-    ev.cool_until_select_count = _mrc_select_counter + skip;
+    ev.probe_successes = 0;
+    ev.awaiting_post_cooldown_feedback = false;
+    ev.congestion_epoch++;
     _mrc_cycle_cooling_events++;
-    _mrc_cooling_skip_selection_sum += skip;
-    _mrc_cooling_skip_selection_events++;
     sample_mrc_state_counts();
+    (void)signal;
     return true;
 }
 
 bool RoceSrc::mrc_mark_failed(uint32_t logical_ev) {
-    if (logical_ev >= _mrc_evs.size())
-        return false;
-
-    const bool canonical = mrcUsesCanonical64Profile();
-    if (canonical && !_mrc_failure_recovery_enabled)
+    if (!_mrc_failure_recovery_enabled || logical_ev >= _mrc_evs.size())
         return false;
 
     MrcEv& ev = _mrc_evs[logical_ev];
-    if (ev.state == MRC_PATH_FAILED)
+    if (ev.state == MRC_EV_ASSUMED_BAD)
         return false;
     ev.awaiting_post_cooldown_feedback = false;
     if (ev.state == MRC_PATH_PROBING)
         _mrc_probe_fail_events++;
-    if (!canonical)
-        mrc_remove_active_ev(logical_ev);
-    ev.state = MRC_PATH_FAILED;
+    ev.state = MRC_EV_ASSUMED_BAD;
     ev.probe_successes = 0;
     ev.retry_after = eventlist().now() + _mrc_failed_retry;
-    ev.cool_until_select_count = 0;
     ev.skip_pending = false;
-    ev.resume_rotation = 0;
-    if (canonical) {
-        sample_mrc_state_counts();
-        return true;
-    }
-    uint64_t replacements_before = _mrc_backup_replacement_events;
-    mrc_promote_backup(_path_entropy_size ? _path_entropy_size : 1);
-    _mrc_failure_backup_promotions +=
-        _mrc_backup_replacement_events - replacements_before;
     sample_mrc_state_counts();
     return true;
 }
@@ -3261,7 +3042,8 @@ bool RoceSrc::mrc_note_probe_result(uint32_t logical_ev, bool success) {
 }
 
 uint32_t RoceSrc::mrc_choose_probe_ev(uint32_t path_space) {
-    if (mrcUsesCanonical64Profile() && !_mrc_failure_recovery_enabled)
+    (void)path_space;
+    if (!_mrc_failure_recovery_enabled)
         return UINT32_MAX;
     if (_mrc_probe_interval_pkts == 0 || _packets_sent == 0 ||
         _packets_sent % _mrc_probe_interval_pkts != 0)
@@ -3272,34 +3054,6 @@ uint32_t RoceSrc::mrc_choose_probe_ev(uint32_t path_space) {
         if (_mrc_evs[i].state == MRC_PATH_FAILED && now >= _mrc_evs[i].retry_after) {
             _mrc_evs[i].state = MRC_PATH_PROBING;
             _mrc_evs[i].probe_successes = 0;
-            _mrc_evs[i].cool_until_select_count = 0;
-            _mrc_probe_events++;
-            sample_mrc_state_counts();
-            return i;
-        }
-    }
-
-    while (_mrc_backup_cursor < _mrc_backup.size()) {
-        uint32_t logical_ev = _mrc_backup[_mrc_backup_cursor++];
-        if (logical_ev >= _mrc_evs.size())
-            continue;
-        if (mrc_ev_in_active(logical_ev))
-            continue;
-        if (_mrc_evs[logical_ev].state == MRC_PATH_UNUSED) {
-            _mrc_evs[logical_ev].state = MRC_PATH_PROBING;
-            _mrc_evs[logical_ev].probe_successes = 0;
-            _mrc_evs[logical_ev].cool_until_select_count = 0;
-            _mrc_probe_events++;
-            sample_mrc_state_counts();
-            return logical_ev;
-        }
-    }
-
-    for (uint32_t i = 0; i < _mrc_evs.size(); i++) {
-        if (_mrc_evs[i].state == MRC_PATH_UNUSED) {
-            _mrc_evs[i].state = MRC_PATH_PROBING;
-            _mrc_evs[i].probe_successes = 0;
-            _mrc_evs[i].cool_until_select_count = 0;
             _mrc_probe_events++;
             sample_mrc_state_counts();
             return i;
@@ -3317,103 +3071,7 @@ RoceSrc::MrcChoice RoceSrc::choose_mrc_ev(uint32_t path_space) {
     init_mrc_paths(path_space);
     consume_mrc_shared();
     sample_mrc_state_counts();
-
-    if (mrcUsesCanonical64Profile())
-        return choose_mrc_skip_ev(path_space);
-
-    uint32_t probe = mrc_choose_probe_ev(path_space);
-    if (probe != UINT32_MAX)
-        return mrc_note_selected_choice(
-            MrcChoice(probe, _mrc_evs[probe].physical_path % path_space));
-
-    if (_mrc_active.empty())
-        mrc_promote_backup(path_space);
-
-    uint32_t earliest_cooling = UINT32_MAX;
-    uint32_t first_cooling = UINT32_MAX;
-    uint32_t first_cooling_index = 0;
-    simtime_picosec earliest_retry = 0;
-    uint64_t earliest_select_count = 0;
-    if (!_mrc_active.empty()) {
-        uint32_t tries = (uint32_t)_mrc_active.size();
-        for (uint32_t i = 0; i < tries; i++) {
-            uint32_t ix = _mrc_active_cursor % _mrc_active.size();
-            uint32_t logical_ev = _mrc_active[ix];
-            _mrc_active_cursor = (ix + 1) % _mrc_active.size();
-            if (mrc_ev_selectable(logical_ev))
-                return mrc_note_selected_choice(
-                    MrcChoice(logical_ev,
-                              _mrc_evs[logical_ev].physical_path % path_space));
-            if (logical_ev < _mrc_evs.size()) {
-                MrcEv& ev = _mrc_evs[logical_ev];
-                if (ev.state == MRC_PATH_COOLING) {
-                    if (first_cooling == UINT32_MAX) {
-                        first_cooling = logical_ev;
-                        first_cooling_index = ix;
-                    }
-                    bool better = earliest_cooling == UINT32_MAX;
-                    if (!better && ev.cool_until_select_count)
-                        better = earliest_select_count == 0 ||
-                            ev.cool_until_select_count < earliest_select_count ||
-                            (ev.cool_until_select_count == earliest_select_count &&
-                             logical_ev < earliest_cooling);
-                    if (!better && !ev.cool_until_select_count)
-                        better = ev.retry_after < earliest_retry ||
-                            (ev.retry_after == earliest_retry &&
-                             logical_ev < earliest_cooling);
-                    if (!better)
-                        continue;
-                    earliest_cooling = logical_ev;
-                    earliest_retry = ev.retry_after;
-                    earliest_select_count = ev.cool_until_select_count;
-                }
-            }
-        }
-    }
-
-    if (earliest_cooling != UINT32_MAX) {
-        _mrc_forced_cooling_use++;
-        uint32_t selected = earliest_cooling;
-        if (_mrc_all_cooling_fallback == MRC_ALL_COOLING_ROUND_ROBIN &&
-            first_cooling != UINT32_MAX) {
-            selected = first_cooling;
-            _mrc_active_cursor =
-                (first_cooling_index + 1) % _mrc_active.size();
-            _mrc_forced_cooling_round_robin_use++;
-        } else {
-            _mrc_forced_cooling_earliest_use++;
-        }
-        return mrc_note_selected_choice(
-            MrcChoice(selected,
-                      _mrc_evs[selected].physical_path % path_space));
-    }
-
-    for (uint32_t i = 0; i < _mrc_evs.size(); i++) {
-        if (mrc_ev_selectable(i))
-            return mrc_note_selected_choice(
-                MrcChoice(i, _mrc_evs[i].physical_path % path_space));
-    }
-
-    simtime_picosec now = eventlist().now();
-    for (uint32_t i = 0; i < _mrc_evs.size(); i++) {
-        if (_mrc_evs[i].state == MRC_PATH_FAILED && now >= _mrc_evs[i].retry_after) {
-            _mrc_evs[i].state = MRC_PATH_PROBING;
-            _mrc_evs[i].probe_successes = 0;
-            _mrc_evs[i].cool_until_select_count = 0;
-            _mrc_probe_events++;
-            sample_mrc_state_counts();
-            return mrc_note_selected_choice(
-                MrcChoice(i, _mrc_evs[i].physical_path % path_space));
-        }
-    }
-
-    if (!_mrc_evs.empty()) {
-        uint32_t logical = random() % _mrc_evs.size();
-        return mrc_note_selected_choice(
-            MrcChoice(logical, _mrc_evs[logical].physical_path % path_space));
-    }
-
-    return mrc_note_selected_choice(MrcChoice(UINT32_MAX, random() % path_space));
+    return choose_mrc_skip_ev(path_space);
 }
 
 RoceSrc::MrcChoice RoceSrc::choose_mrc_skip_ev(uint32_t path_space) {
@@ -3424,9 +3082,9 @@ RoceSrc::MrcChoice RoceSrc::choose_mrc_skip_ev(uint32_t path_space) {
         abort();
     }
 
-    const uint32_t max_visits = nominal_slots * 2;
+    bool restored_skip = false;
+    const uint32_t max_visits = nominal_slots + 1;
     for (uint32_t visits = 0; visits < max_visits; ++visits) {
-        const uint64_t slot_rotation = _mrc_rotation;
         const uint32_t slot = _mrc_rotation_slot;
         const uint32_t logical_ev = _mrc_active[slot];
         MrcEv& ev = _mrc_evs[logical_ev];
@@ -3437,18 +3095,12 @@ RoceSrc::MrcChoice RoceSrc::choose_mrc_skip_ev(uint32_t path_space) {
             _mrc_rotation++;
         }
 
-        if (_mrc_congestion_policy == MRC_POLICY_SKIP_ROTATION &&
-            ev.state == MRC_EV_SKIP &&
-            slot_rotation >= ev.resume_rotation) {
-            mrc_activate_ev(logical_ev);
-        }
-
-        if (_mrc_congestion_policy == MRC_POLICY_SKIP_TOKEN &&
-            ev.state == MRC_EV_SKIP && ev.skip_pending) {
+        if (!restored_skip && ev.state == MRC_EV_SKIP && ev.skip_pending) {
             ev.skip_pending = false;
             ev.state = MRC_EV_GOOD;
             ev.awaiting_post_cooldown_feedback = true;
             _mrc_skip_opportunities_consumed++;
+            restored_skip = true;
             continue;
         }
 
@@ -3467,50 +3119,10 @@ RoceSrc::MrcChoice RoceSrc::choose_mrc_skip_ev(uint32_t path_space) {
 
 RoceSrc::MrcChoice RoceSrc::choose_mrc_retx_ev(uint32_t path_space,
                                                uint32_t original_logical_ev) {
+    (void)original_logical_ev;
     init_mrc_paths(path_space);
     consume_mrc_shared();
-
-    if (mrcUsesCanonical64Profile())
-        return choose_mrc_skip_ev(path_space);
-
-    if (original_logical_ev == UINT32_MAX ||
-        original_logical_ev >= _mrc_evs.size())
-        return choose_mrc_ev(path_space);
-
-    MrcEv& original = _mrc_evs[original_logical_ev];
-    bool need_alternative = original.state == MRC_PATH_COOLING ||
-        original.state == MRC_PATH_FAILED;
-    if (!need_alternative)
-        return choose_mrc_ev(path_space);
-
-    uint32_t original_physical = original.physical_path % path_space;
-    uint32_t same_physical_fallback = UINT32_MAX;
-    if (!_mrc_active.empty()) {
-        uint32_t tries = (uint32_t)_mrc_active.size();
-        for (uint32_t i = 0; i < tries; i++) {
-            uint32_t ix = _mrc_active_cursor % _mrc_active.size();
-            uint32_t logical_ev = _mrc_active[ix];
-            _mrc_active_cursor = (ix + 1) % _mrc_active.size();
-            if (logical_ev == original_logical_ev ||
-                logical_ev >= _mrc_evs.size())
-                continue;
-        if (!mrc_ev_selectable(logical_ev))
-            continue;
-        uint32_t physical = _mrc_evs[logical_ev].physical_path % path_space;
-        if (physical != original_physical)
-            return mrc_note_selected_choice(MrcChoice(logical_ev, physical));
-        if (same_physical_fallback == UINT32_MAX)
-            same_physical_fallback = logical_ev;
-        }
-    }
-
-    if (same_physical_fallback != UINT32_MAX) {
-        uint32_t physical = _mrc_evs[same_physical_fallback].physical_path % path_space;
-        return mrc_note_selected_choice(MrcChoice(same_physical_fallback, physical));
-    }
-
-    _mrc_retx_fallback_events++;
-    return choose_mrc_ev(path_space);
+    return choose_mrc_skip_ev(path_space);
 }
 
 void RoceSrc::note_mrc_packet_ev(RocePacket::seq_t seqno, uint32_t logical_ev) {
@@ -3550,11 +3162,6 @@ void RoceSrc::mrc_note_clean_ack(RocePacket::seq_t ackno,
         if (ev.state == MRC_PATH_PROBING) {
             ev.probe_successes++;
             _mrc_probe_success_events++;
-            mrc_activate_ev(logical_ev);
-        } else if (ev.state == MRC_PATH_COOLING &&
-                   mrc_cooling_expired(ev)) {
-            if (ev.cool_until_select_count)
-                _mrc_cycle_cooling_expiries++;
             mrc_activate_ev(logical_ev);
         }
     }

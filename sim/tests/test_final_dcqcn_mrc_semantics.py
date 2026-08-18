@@ -70,52 +70,11 @@ def main():
             raise AssertionError(
                 "bounded transport accepted cumulative Trim recovery")
         default_diag = (
-            "MrcPolicyDiag policy=skip_token "
-            "all_skip_resolution=natural_rotation")
+            "MrcPolicyDiag policy=skip_once "
+            "all_skip_resolution=ordinary_rotation")
         if default_diag not in final.stdout:
             raise AssertionError(
                 f"missing default skip-token config: {default_diag!r}")
-
-        scaled = run(
-            traffic, temp / "scaled.dat",
-            ["-mrc_cooldown_mode", "cwnd_scaled"])
-        if scaled.returncode != 0:
-            raise AssertionError(scaled.stdout)
-        scaled_diag = (
-            "MrcCooldownDiag mrc_cooldown_mode=cwnd_scaled "
-            "mrc_cooldown_reference=topology_bdp "
-            "mrc_cooldown_reference_pkts=86 "
-            "mrc_cwnd_scaled_rotations=3 "
-            "mrc_cwnd_scaled_skip_selections=96")
-        if scaled_diag not in scaled.stdout:
-            raise AssertionError(
-                f"missing explicit cwnd-scaled config: {scaled_diag!r}")
-
-        explicit = run(
-            traffic, temp / "explicit.dat",
-            ["-mrc_cooldown_mode", "cwnd_scaled",
-             "-mrc_cooldown_reference_pkts", "100"])
-        if explicit.returncode != 0:
-            raise AssertionError(explicit.stdout)
-        explicit_diag = (
-            "MrcCooldownDiag mrc_cooldown_mode=cwnd_scaled "
-            "mrc_cooldown_reference=explicit "
-            "mrc_cooldown_reference_pkts=100 "
-            "mrc_cwnd_scaled_rotations=4 "
-            "mrc_cwnd_scaled_skip_selections=128")
-        if explicit_diag not in explicit.stdout:
-            raise AssertionError(
-                f"missing explicit cooldown reference: {explicit_diag!r}")
-
-        round_robin = run(
-            traffic, temp / "round_robin.dat",
-            ["-mrc_congestion_policy", "one_cycle",
-             "-mrc_all_cooling_fallback", "round_robin"])
-        if round_robin.returncode != 0:
-            raise AssertionError(round_robin.stdout)
-        if "MrcFallbackDiag mrc_all_cooling_fallback=round_robin" not in (
-                round_robin.stdout):
-            raise AssertionError("missing explicit round-robin fallback config")
 
         removed = [
             ["-mrc_trim_cool", "off"],

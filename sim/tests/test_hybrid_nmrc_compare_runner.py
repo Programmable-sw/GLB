@@ -123,10 +123,7 @@ def main():
         ] == expected_pairs
         runner.validate_specs(selected_specs)
 
-        for lb, forbidden in (
-                ("mrc", {"-mrc_cooldown_mode",
-                         "-mrc_all_cooling_fallback"}),
-                ("reps", {"-reps_buffer"})):
+        for lb, forbidden in (("reps", {"-reps_buffer"}),):
             original = next(
                 spec for spec in selected_specs if spec["variant"].lb == lb)
             broken = dict(original)
@@ -179,8 +176,9 @@ def main():
         assert "-lb sglb" in commands
         assert "-lb adaptive-routing" in commands
         assert "-lb netaware" in commands
-        assert ("-lb mrc -mrc_cooldown_mode one_cycle "
-                "-mrc_all_cooling_fallback earliest") in commands
+        assert "-lb mrc" in commands
+        assert "-mrc_cooldown_mode" not in commands
+        assert "-mrc_all_cooling_fallback" not in commands
         assert "-lb reps -reps_buffer 8" in commands
         assert "dry-run" in report
         assert "random32" in report

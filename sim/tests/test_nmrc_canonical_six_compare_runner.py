@@ -131,11 +131,8 @@ def main():
             elif scheme == "ar":
                 assert option_value(command, "-ar_granularity") == "packet"
             elif scheme == "mrc":
-                assert option_value(
-                    command, "-mrc_cooldown_mode") == "one_cycle"
-                assert option_value(
-                    command,
-                    "-mrc_all_cooling_fallback") == "earliest"
+                assert "-mrc_cooldown_mode" not in command
+                assert "-mrc_all_cooling_fallback" not in command
             elif scheme == "reps":
                 assert option_value(command, "-reps_buffer") == "8"
         assert len(hashes_by_block) == 18
@@ -215,8 +212,8 @@ def main():
             "sglb": "SglbRouteDiag route_calls=10\n",
             "ar": "Adaptive routing granularity packet\n",
             "mrc": (
-                "MrcCooldownDiag mrc_cooldown_mode=one_cycle\n"
-                "MrcFallbackDiag mrc_all_cooling_fallback=earliest\n"
+                "MrcPolicyDiag policy=skip_once "
+                "all_skip_resolution=ordinary_rotation\n"
                 "MrcDiag ecn_cooldown_events=0\n"),
             "reps": (
                 "reps buffer size 8\n"

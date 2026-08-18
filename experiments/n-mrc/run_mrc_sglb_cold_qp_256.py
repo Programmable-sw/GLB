@@ -140,13 +140,6 @@ def build_command(
         "-sglb_update_us", "1",
         "-sglb_gcn_update_us", str(SGLB_GCN_UPDATE_US),
     ]
-    if scheme in ("mrc", "rr"):
-        command.extend(["-mrc_active_evs", str(ACTIVE_EVS)])
-    if scheme == "mrc":
-        command.extend([
-            "-mrc_congestion_policy", "skip_token",
-            "-mrc_failure_recovery", "off",
-        ])
     if condition == "fixed_hotspot":
         command.extend([
             "-path_hotspot_spines", str(HOT_SPINES),
@@ -1117,9 +1110,9 @@ def main(argv=None):
         "spines": TOPOLOGY.spines,
         "physical_paths": TOPOLOGY.paths,
         "logical_evs": 64,
-        "initial_active_evs": ACTIVE_EVS,
-        "mrc_congestion_policy": "skip_token",
-        "mrc_failure_recovery": "off",
+        "initial_active_evs": 64,
+        "mrc_congestion_policy": "skip_once",
+        "mrc_failure_recovery": "disabled",
         "schemes": SCHEMES,
         "conditions": CONDITIONS,
         "start_anchors_us": START_ANCHORS_US,

@@ -56,20 +56,7 @@ public:
         TRIM_RECOVERY_CUMULATIVE = 0,
         TRIM_RECOVERY_EXACT_PSN = 1
     } trim_recovery_mode_t;
-    typedef enum {
-        MRC_COOLDOWN_CWND_SCALED = 0,
-        MRC_COOLDOWN_ONE_CYCLE = 1
-    } mrc_cooldown_mode_t;
-    typedef enum {
-        MRC_POLICY_SKIP_TOKEN = 0,
-        MRC_POLICY_SKIP_ROTATION = 1,
-        MRC_POLICY_ONE_CYCLE = 2,
-        MRC_POLICY_CWND_SCALED = 3
-    } mrc_congestion_policy_t;
-    typedef enum {
-        MRC_ALL_COOLING_EARLIEST = 0,
-        MRC_ALL_COOLING_ROUND_ROBIN = 1
-    } mrc_all_cooling_fallback_t;
+    enum {MRC_EV_COUNT = 64};
     typedef enum {
         MRC_CONGESTION_ECN = 0,
         MRC_CONGESTION_TRIM = 1
@@ -247,79 +234,6 @@ public:
     static const std::map<uint32_t, uint64_t>& diagSelectedEvHist() {return _diag_selected_ev_hist;}
     static const std::map<uint32_t, uint64_t>& diagSelectedPhysicalHist() {return _diag_selected_physical_hist;}
     static const std::vector<uint32_t>& diagFirstSelectedEvs() {return _diag_first_selected_evs;}
-    static void setMrcCongestionPolicy(mrc_congestion_policy_t policy) {
-        _mrc_congestion_policy = policy;
-    }
-    static mrc_congestion_policy_t mrcCongestionPolicy() {
-        return _mrc_congestion_policy;
-    }
-    static const char* mrcCongestionPolicyName() {
-        switch (_mrc_congestion_policy) {
-        case MRC_POLICY_SKIP_TOKEN: return "skip_token";
-        case MRC_POLICY_SKIP_ROTATION: return "skip_rotation";
-        case MRC_POLICY_ONE_CYCLE: return "one_cycle";
-        case MRC_POLICY_CWND_SCALED: return "cwnd_scaled";
-        }
-        return "unknown";
-    }
-    static void setMrcCooldownMode(mrc_cooldown_mode_t mode) {
-        _mrc_cooldown_mode = mode;
-    }
-    static mrc_cooldown_mode_t mrcCooldownMode() {
-        return _mrc_cooldown_mode;
-    }
-    static void setMrcCooldownReferencePkts(uint32_t pkts) {
-        _mrc_cooldown_reference_pkts = pkts ? pkts : 1;
-    }
-    static uint32_t mrcCooldownReferencePkts() {
-        return _mrc_cooldown_reference_pkts;
-    }
-    static const char* mrcCooldownModeName() {
-        if (_mrc_cooldown_mode == MRC_COOLDOWN_ONE_CYCLE)
-            return "one_cycle";
-        return "cwnd_scaled";
-    }
-    static void setMrcAllCoolingFallback(
-            mrc_all_cooling_fallback_t fallback) {
-        _mrc_all_cooling_fallback = fallback;
-    }
-    static mrc_all_cooling_fallback_t mrcAllCoolingFallback() {
-        return _mrc_all_cooling_fallback;
-    }
-    static const char* mrcAllCoolingFallbackName() {
-        return _mrc_all_cooling_fallback == MRC_ALL_COOLING_EARLIEST ?
-            "earliest" : "round_robin";
-    }
-    static uint32_t mrcCwndScaledRotations(uint32_t active_count) {
-        if (!active_count)
-            active_count = 1;
-        return (_mrc_cooldown_reference_pkts + active_count - 1) /
-            active_count;
-    }
-    static uint64_t mrcCwndScaledSkipSelections(uint32_t active_count) {
-        if (!active_count)
-            active_count = 1;
-        return (uint64_t)active_count *
-            (uint64_t)mrcCwndScaledRotations(active_count);
-    }
-    static void setMrcActiveEvs(uint32_t value) {
-        _mrc_active_evs = value;
-    }
-    static uint32_t mrcActiveEvs() {
-        return _mrc_active_evs;
-    }
-    static bool mrcUsesCanonical64Profile() {
-        return _mrc_congestion_policy == MRC_POLICY_SKIP_TOKEN ||
-            _mrc_congestion_policy == MRC_POLICY_SKIP_ROTATION;
-    }
-    static uint32_t resolvedMrcActiveEvs(uint32_t path_space) {
-        if (mrcUsesCanonical64Profile())
-            return path_space == 64 ? 64 : 0;
-        uint32_t available = path_space ? path_space : 1U;
-        if (_mrc_active_evs)
-            return std::min(_mrc_active_evs, available);
-        return std::min(available, 32U);
-    }
     static void setMrcFailedRetry(simtime_picosec retry) {_mrc_failed_retry = retry;}
     static void setMrcProbeIntervalPkts(uint32_t pkts) {_mrc_probe_interval_pkts = pkts;}
     static void setMrcFailureRecoveryEnabled(bool enabled) {
@@ -521,8 +435,6 @@ public:
     uint64_t _mrc_cooling_skip_selection_sum;
     uint64_t _mrc_cooling_skip_selection_events;
     uint64_t _mrc_duplicate_feedback_ignored;
-    uint64_t _mrc_cwnd_scaled_feedback_events;
-    uint64_t _mrc_cwnd_scaled_duplicate_feedback_ignored;
     uint64_t _mrc_probe_events;
     uint64_t _mrc_probe_success_events;
     uint64_t _mrc_probe_fail_events;
@@ -618,11 +530,6 @@ public:
     static uint32_t _reps_buffer_size;
     static uint32_t _reps_warmup_pkts;
     static uint32_t _hosts_per_tor;
-    static mrc_congestion_policy_t _mrc_congestion_policy;
-    static mrc_cooldown_mode_t _mrc_cooldown_mode;
-    static uint32_t _mrc_cooldown_reference_pkts;
-    static mrc_all_cooling_fallback_t _mrc_all_cooling_fallback;
-    static uint32_t _mrc_active_evs;
     static simtime_picosec _mrc_failed_retry;
     static uint32_t _mrc_probe_interval_pkts;
     static bool _mrc_failure_recovery_enabled;
@@ -780,20 +687,14 @@ private:
     void note_mrc_packet_ev(RocePacket::seq_t seqno, uint32_t logical_ev);
     void clean_mrc_seq_evs();
     uint32_t mrc_logical_ev_count(uint32_t path_space) const;
-    uint32_t mrc_desired_active_paths(uint32_t path_space) const;
-    bool mrc_ev_in_active(uint32_t logical_ev) const;
     bool mrc_ev_selectable(uint32_t logical_ev);
-    bool mrc_cooling_expired(const MrcEv& ev) const;
     MrcChoice mrc_note_selected_choice(const MrcChoice& choice);
-    uint64_t mrc_current_cooldown_skip_selections() const;
     void mrc_activate_ev(uint32_t logical_ev);
-    void mrc_remove_active_ev(uint32_t logical_ev);
     bool mrc_mark_congested(
         uint32_t logical_ev,
         mrc_congestion_signal_t signal = MRC_CONGESTION_ECN);
     bool mrc_mark_failed(uint32_t logical_ev);
     bool mrc_note_probe_result(uint32_t logical_ev, bool success);
-    void mrc_promote_backup(uint32_t path_space);
     uint32_t mrc_choose_probe_ev(uint32_t path_space);
     void mrc_note_clean_ack(RocePacket::seq_t ackno,
                             uint32_t explicit_ev = UINT32_MAX);
@@ -869,16 +770,13 @@ private:
         uint8_t state;
         uint8_t probe_successes;
         simtime_picosec retry_after;
-        uint64_t cool_until_select_count;
         bool skip_pending;
-        uint64_t resume_rotation;
         uint64_t congestion_epoch;
         bool awaiting_post_cooldown_feedback;
         MrcEv()
             : logical_ev(0), physical_path(0), state(MRC_PATH_UNUSED),
               probe_successes(0), retry_after(0),
-              cool_until_select_count(0), skip_pending(false),
-              resume_rotation(0), congestion_epoch(0),
+              skip_pending(false), congestion_epoch(0),
               awaiting_post_cooldown_feedback(false) {}
     };
     struct MrcFlowMetrics {
@@ -1049,9 +947,6 @@ private:
     bool _rr_paths_ready;
     std::vector<MrcEv> _mrc_evs;
     std::vector<uint32_t> _mrc_active;
-    std::vector<uint32_t> _mrc_backup;
-    uint32_t _mrc_active_cursor;
-    uint32_t _mrc_backup_cursor;
     uint32_t _mrc_path_space;
     bool _mrc_paths_ready;
     std::map<RocePacket::seq_t, uint32_t> _mrc_seq_ev;

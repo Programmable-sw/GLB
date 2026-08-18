@@ -33,9 +33,17 @@ static EventList& test_eventlist() {
     return eventlist;
 }
 
+static uint32_t count_mrc_state(const RoceSrc& src,
+                                uint8_t state) {
+    uint32_t count = 0;
+    for (uint32_t ev = 0; ev < src._mrc_evs.size(); ++ev)
+        if (src._mrc_evs[ev].state == state)
+            ++count;
+    return count;
+}
+
 static void test_canonical_profile_has_64_identity_mapped_evs() {
     RoceSrc::setLoadBalancing(RoceSrc::LB_MRC);
-    RoceSrc::setMrcCongestionPolicy(RoceSrc::MRC_POLICY_SKIP_TOKEN);
     RoceSrc::setPathEntropySize(64);
 
     RoceSrc src(NULL, NULL, test_eventlist(),
@@ -50,7 +58,7 @@ static void test_canonical_profile_has_64_identity_mapped_evs() {
            "canonical MRC profile must contain 64 EVs");
     expect(src._mrc_active.size() == 64,
            "canonical MRC profile must activate all 64 EVs");
-    expect(src._mrc_backup.empty(),
+    expect(src.mrc_backup_remaining_for_diag() == 0,
            "canonical MRC profile must not create backup EVs");
     for (uint32_t ev = 0; ev < 64; ++ev) {
         expect(src._mrc_evs[ev].logical_ev == ev,
@@ -60,30 +68,8 @@ static void test_canonical_profile_has_64_identity_mapped_evs() {
     }
 }
 
-static void test_explicit_legacy_ablation_uses_all_64_evs() {
-    RoceSrc::setLoadBalancing(RoceSrc::LB_MRC);
-    RoceSrc::setMrcCongestionPolicy(RoceSrc::MRC_POLICY_ONE_CYCLE);
-    RoceSrc::setMrcActiveEvs(64);
-    RoceSrc::setPathEntropySize(64);
-
-    RoceSrc src(NULL, NULL, test_eventlist(),
-                speedFromMbps((uint64_t)100000));
-    src.set_src(2);
-    src.set_dst(130);
-    src.set_flowid(1711);
-    src._flow_started = true;
-    src.init_mrc_paths(64);
-
-    expect(src._mrc_active.size() == 64,
-           "explicit 64-EV legacy ablation must activate all EVs");
-    expect(src._mrc_backup.empty(),
-           "explicit 64-EV legacy ablation must not create backups");
-    RoceSrc::setMrcActiveEvs(0);
-}
-
 static void test_congestion_transition_is_exact_and_non_rearming() {
     RoceSrc::setLoadBalancing(RoceSrc::LB_MRC);
-    RoceSrc::setMrcCongestionPolicy(RoceSrc::MRC_POLICY_SKIP_TOKEN);
     RoceSrc::setPathEntropySize(64);
 
     RoceSrc src(NULL, NULL, test_eventlist(),
@@ -106,19 +92,12 @@ static void test_congestion_transition_is_exact_and_non_rearming() {
     expect(src._mrc_evs[ev].congestion_epoch == 1,
            "first skip episode must increment the epoch once");
 
-    const uint64_t resume_rotation = src._mrc_evs[ev].resume_rotation;
-    const uint64_t cooldown_deadline =
-        src._mrc_evs[ev].cool_until_select_count;
     expect(!src.mrc_mark_congested(ev, RoceSrc::MRC_CONGESTION_TRIM),
            "feedback while SKIP must be ignored");
     expect(src._mrc_evs[ev].state == RoceSrc::MRC_EV_SKIP,
            "duplicate feedback must preserve SKIP");
     expect(src._mrc_evs[ev].skip_pending,
            "duplicate feedback must preserve the armed token");
-    expect(src._mrc_evs[ev].resume_rotation == resume_rotation,
-           "duplicate feedback must not refresh a rotation deadline");
-    expect(src._mrc_evs[ev].cool_until_select_count == cooldown_deadline,
-           "duplicate feedback must not refresh a legacy deadline");
     expect(src._mrc_evs[ev].congestion_epoch == 1,
            "duplicate feedback must not create a new episode");
     expect(src._mrc_duplicate_feedback_ignored == 1,
@@ -126,7 +105,6 @@ static void test_congestion_transition_is_exact_and_non_rearming() {
 }
 
 static void test_skip_token_is_consumed_only_at_its_nominal_opportunity() {
-    RoceSrc::setMrcCongestionPolicy(RoceSrc::MRC_POLICY_SKIP_TOKEN);
     RoceSrc::setPathEntropySize(64);
     RoceSrc src(NULL, NULL, test_eventlist(),
                 speedFromMbps((uint64_t)100000));
@@ -164,7 +142,6 @@ static void test_skip_token_is_consumed_only_at_its_nominal_opportunity() {
 }
 
 static void test_all_skip_tokens_resolve_by_ordinary_rotation_progress() {
-    RoceSrc::setMrcCongestionPolicy(RoceSrc::MRC_POLICY_SKIP_TOKEN);
     RoceSrc::setPathEntropySize(64);
     RoceSrc src(NULL, NULL, test_eventlist(),
                 speedFromMbps((uint64_t)100000));
@@ -182,82 +159,14 @@ static void test_all_skip_tokens_resolve_by_ordinary_rotation_progress() {
     RoceSrc::MrcChoice choice = src.choose_mrc_ev(64);
     expect(choice.logical_ev == expected,
            "all-SKIP token traversal must wrap to the first restored EV");
-    expect(src._mrc_rotation == 1,
-           "all-SKIP traversal must cross one ordinary rotation boundary");
-    expect(src._mrc_skip_opportunities_consumed == 64,
-           "all-SKIP traversal must consume all 64 nominal opportunities");
+    expect(count_mrc_state(src, RoceSrc::MRC_EV_GOOD) == 1,
+           "one packet selection may restore only one SKIP EV");
+    expect(src._mrc_skip_opportunities_consumed == 1,
+           "one packet selection may consume only one skip token");
     expect(src._mrc_evs[choice.logical_ev].state == RoceSrc::MRC_EV_GOOD,
            "selected DATA EV must be GOOD");
-    expect(src._mrc_forced_cooling_use == 0,
-           "new token policy must not enter the legacy forced-use path");
     expect(src._mrc_data_on_non_good_violations == 0,
            "all-SKIP resolution must not send DATA on a non-GOOD EV");
-}
-
-static void test_skip_rotation_restores_only_at_the_next_rotation() {
-    RoceSrc::setMrcCongestionPolicy(RoceSrc::MRC_POLICY_SKIP_ROTATION);
-    RoceSrc::setPathEntropySize(64);
-    RoceSrc src(NULL, NULL, test_eventlist(),
-                speedFromMbps((uint64_t)100000));
-    src.set_src(13);
-    src.set_dst(205);
-    src.set_flowid(1705);
-    src._flow_started = true;
-    src.init_mrc_paths(64);
-    src._mrc_rotation = 10;
-
-    const uint32_t target = src._mrc_active[10];
-    src.mrc_mark_congested(target, RoceSrc::MRC_CONGESTION_ECN);
-    expect(src._mrc_evs[target].resume_rotation == 11,
-           "rotation feedback must target the next logical rotation");
-    src.mrc_mark_congested(target, RoceSrc::MRC_CONGESTION_TRIM);
-    expect(src._mrc_evs[target].resume_rotation == 11,
-           "duplicate feedback must not extend rotation recovery");
-
-    for (uint32_t slot = 0; slot < 10; ++slot)
-        expect(src.choose_mrc_ev(64).logical_ev == src._mrc_active[slot],
-               "GOOD slots before the skipped EV must remain ordered");
-    expect(src.choose_mrc_ev(64).logical_ev == src._mrc_active[11],
-           "rotation-10 opportunity for the target must be skipped");
-    expect(src._mrc_evs[target].state == RoceSrc::MRC_EV_SKIP,
-           "target must remain SKIP for the rest of rotation 10");
-
-    for (uint32_t slot = 12; slot < 64; ++slot)
-        src.choose_mrc_ev(64);
-    expect(src._mrc_rotation == 11,
-           "ordinary slot progress must enter rotation 11");
-    for (uint32_t slot = 0; slot < 10; ++slot)
-        src.choose_mrc_ev(64);
-    RoceSrc::MrcChoice restored = src.choose_mrc_ev(64);
-    expect(restored.logical_ev == target,
-           "target must return at its nominal slot in rotation 11");
-    expect(src._mrc_evs[target].state == RoceSrc::MRC_EV_GOOD,
-           "next-rotation selection must restore target to GOOD");
-}
-
-static void test_all_skip_rotation_resolves_without_a_fallback_branch() {
-    RoceSrc::setMrcCongestionPolicy(RoceSrc::MRC_POLICY_SKIP_ROTATION);
-    RoceSrc::setPathEntropySize(64);
-    RoceSrc src(NULL, NULL, test_eventlist(),
-                speedFromMbps((uint64_t)100000));
-    src.set_src(15);
-    src.set_dst(207);
-    src.set_flowid(1706);
-    src._flow_started = true;
-    src.init_mrc_paths(64);
-    for (uint32_t ev = 0; ev < 64; ++ev)
-        src.mrc_mark_congested(ev, RoceSrc::MRC_CONGESTION_ECN);
-
-    const uint32_t expected = src._mrc_active[0];
-    RoceSrc::MrcChoice restored = src.choose_mrc_ev(64);
-    expect(restored.logical_ev == expected,
-           "all-SKIP rotation must wrap to the first naturally restored EV");
-    expect(src._mrc_rotation == 1,
-           "all-SKIP rotation must cross one ordinary boundary");
-    expect(src._mrc_forced_cooling_use == 0,
-           "skip-rotation must not use the legacy all-cooling path");
-    expect(src._mrc_data_on_non_good_violations == 0,
-           "skip-rotation must never select non-GOOD DATA paths");
 }
 
 static void configure_bounded_skip_source(RoceSrc& src,
@@ -267,7 +176,6 @@ static void configure_bounded_skip_source(RoceSrc& src,
     RoceSrc::setReceiveMode(RoceSrc::RX_SP_RETX_QUEUE);
     RoceSrc::setCongestionControl(RoceSrc::CC_NONE);
     RoceSrc::setLoadBalancing(RoceSrc::LB_MRC);
-    RoceSrc::setMrcCongestionPolicy(RoceSrc::MRC_POLICY_SKIP_TOKEN);
     RoceSrc::setPathEntropySize(64);
     src._flow_lb_mode = RoceSrc::LB_MRC;
     src._flow_started = true;
@@ -360,7 +268,6 @@ static void test_ecn_ack_reliability_and_ev_state_are_independent() {
 }
 
 static void test_failure_recovery_interface_is_disabled_by_default() {
-    RoceSrc::setMrcCongestionPolicy(RoceSrc::MRC_POLICY_SKIP_TOKEN);
     RoceSrc::setMrcFailureRecoveryEnabled(false);
     RoceSrc::setMrcProbeSuccessThreshold(3);
     RoceSrc::setPathEntropySize(64);
@@ -396,7 +303,6 @@ static void test_probe_interface_uses_independent_ids_and_threshold() {
            "EV Probe must use control priority");
     probe->free();
 
-    RoceSrc::setMrcCongestionPolicy(RoceSrc::MRC_POLICY_SKIP_TOKEN);
     RoceSrc::setMrcFailureRecoveryEnabled(true);
     RoceSrc::setMrcProbeSuccessThreshold(3);
     RoceSrc::setPathEntropySize(64);
@@ -430,12 +336,9 @@ static void test_probe_interface_uses_independent_ids_and_threshold() {
 int main() {
     Packet::set_packet_size(4096);
     test_canonical_profile_has_64_identity_mapped_evs();
-    test_explicit_legacy_ablation_uses_all_64_evs();
     test_congestion_transition_is_exact_and_non_rearming();
     test_skip_token_is_consumed_only_at_its_nominal_opportunity();
     test_all_skip_tokens_resolve_by_ordinary_rotation_progress();
-    test_skip_rotation_restores_only_at_the_next_rotation();
-    test_all_skip_rotation_resolves_without_a_fallback_branch();
     test_trim_sack_reliability_and_ev_state_are_independent();
     test_ecn_ack_reliability_and_ev_state_are_independent();
     test_failure_recovery_interface_is_disabled_by_default();

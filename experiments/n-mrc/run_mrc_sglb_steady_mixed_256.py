@@ -1404,7 +1404,7 @@ def main(argv=None):
         "long_offered_load": LONG_OFFERED_LOAD,
         "hot_spines": cold.HOT_SPINES,
         "hotspot_rate_gbps": cold.HOTSPOT_RATE_GBPS,
-        "mrc_active_evs": cold.ACTIVE_EVS,
+        "mrc_active_evs": 64,
         "mrc_policy": "skip_token",
         "sglb": {
             "scheme": "sglb",

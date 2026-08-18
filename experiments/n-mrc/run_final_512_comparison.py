@@ -39,10 +39,7 @@ SCHEME_ARGS = {
     "ecmp": (),
     "ops": (),
     "reps": ("-reps_buffer", "8"),
-    "mrc": (
-        "-mrc_cooldown_mode", "one_cycle",
-        "-mrc_all_cooling_fallback", "earliest",
-    ),
+    "mrc": (),
     "sglb": (),
     "n-mrc": (
         "-nmrc_ev_mode", "encoded",
@@ -350,7 +347,7 @@ def config_ok(text, spec, returncode, nodes):
         "ecmp": (),
         "ops": (),
         "reps": ("reps buffer size 8",),
-        "mrc": ("mrc_cooldown_mode=one_cycle",),
+        "mrc": ("MrcPolicyDiag policy=skip_once",),
         "sglb": ("SglbRouteDiag ",),
         "n-mrc": (
             "HybridNmrcConfig ev_mode=encoded ",

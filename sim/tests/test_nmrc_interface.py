@@ -209,21 +209,15 @@ def main():
     assert_contains(experiment_readme, "## `netaware`", "experiment README NetAware section")
     assert_contains(experiment_readme, "leaf uplink", "experiment README NetAware queue model")
     assert_contains(experiment_readme, "spine downlink", "experiment README NetAware queue model")
-    assert_contains(main_roce, "-mrc_active_evs", "MRC active-EV CLI")
-    assert_contains(
-        main_roce,
-        "RoceSrc::setMrcActiveEvs",
-        "MRC active-EV runtime assignment",
+    assert_absent(main_roce, "-mrc_active_evs", "removed MRC active-EV CLI")
+    assert_absent(
+        main_roce, "RoceSrc::setMrcActiveEvs",
+        "removed MRC active-EV runtime assignment",
     )
     assert_contains(
         main_roce,
-        "mrc_active_evs_user_set",
-        "MRC active-EV scheme validation",
-    )
-    assert_contains(
-        main_roce,
-        "RoceSrc::resolvedMrcActiveEvs(path_space)",
-        "MRC resolved active-EV diagnostics",
+        "mrc_active_paths = 64",
+        "fixed MRC active-EV diagnostics",
     )
     assert_contains(main_roce, '"mrc-shared"', "MRC-shared CLI preset")
     assert_contains(main_roce, "LB_MRC_SHARED", "MRC-shared load-balancing mode")

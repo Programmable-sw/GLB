@@ -55,14 +55,14 @@ def main():
     assert option(fixed, "-paths") == "64"
     assert option(fixed, "-path_hotspot_spines") == "16"
     assert option(fixed, "-path_hotspot_bg_rate_gbps") == "390"
-    assert option(fixed, "-mrc_active_evs") == "64"
-    assert option(fixed, "-mrc_congestion_policy") == "skip_token"
-    assert option(fixed, "-mrc_failure_recovery") == "off"
+    assert "-mrc_active_evs" not in fixed
+    assert "-mrc_congestion_policy" not in fixed
+    assert "-mrc_failure_recovery" not in fixed
 
     fixed_rr = runner.build_command(
         Path("sim"), "rr", Path("traffic.cm"), Path("out.dat"),
         len(flows), 13, "fixed_hotspot")
-    assert option(fixed_rr, "-mrc_active_evs") == "64"
+    assert "-mrc_active_evs" not in fixed_rr
     assert "-mrc_congestion_policy" not in fixed_rr
 
     healthy = runner.build_command(

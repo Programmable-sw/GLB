@@ -316,34 +316,19 @@ original_score - candidate_score >= delta
 
 ## `mrc`
 
-`mrc` 是 MRC 文献简要复现，使用 `-lb mrc`。MRC 论文整理稿见 `docs/papers/MRC.md`。`-lb rr` 复用 MRC 的确定性 per-QP EV 顺序和 encoded identity 映射，但不拥有或更新 MRC 路径质量状态，因此是 MRC 实验的受控无学习 baseline；严格逐包等价只适用于首次有效 MRC 状态更新之前、且候选集不超过 32 个 active EV 的情况。
+`mrc` 是 MRC 文献简要复现，唯一公开入口是 `-lb mrc`。MRC 论文整理稿见 `docs/papers/MRC.md`。`-lb rr` 使用同类的确定性 per-QP 64-path 顺序，但不拥有或更新 MRC 路径质量状态，因此是首次有效反馈前的无学习 baseline。
 
-Source 端为每个 RoCE source/QP 初始化独立 EV profile。单平面二层 Clos 中，每条远端 leaf 路径由 spine/path-id 唯一确定，因此完整 EV namespace 大小等于有效物理路径数，EV `i` 一对一直接编码 physical path-id `i`。
+Source 端为每个 RoCE QP 固定初始化 64 个独立 EV，全部从 GOOD/active 开始，没有 backup。单平面二层 Clos 中 EV `i` 一对一直接编码 physical path-id `i`；`src/dst/flow_id` 只打乱遍历顺序，不改变映射。
 
-每个 QP 先用 `src/dst/flow_id` 对全部 `path_space` 个 EV 生成一份确定性随机排列，再取排列中的前 `min(path_space, 32)` 个作为 active set。这里的“前”是 shuffled order 的前缀，不是固定选择 EV ID `0..31`。因此当 `path_space > 32` 时，每个 QP 实际使用的是 32 条随机且互不重复的物理路径，不同 QP 的 active path 子集通常不同；排列中剩余的唯一路径进入 backup set。正常发送只沿 active order 循环遍历，不遍历整个 EV namespace。
+Data packet 携带实际选择的 `mrc_ev`，receiver 在 ACK/NACK 中回显该 EV。带 `ECN_ECHO` 的 ACK 与 TRIM NACK 对精确 EV 执行 OCP SKIP_ONCE：GOOD→SKIP，并设置一个 token；SKIP 期间重复反馈只计入 ignored 诊断，不 rearm。rotation 到达该 EV 的名义槽位时恢复为 GOOD，但当前包继续找下一个原有 GOOD。一次发送最多恢复一个 SKIP；若全体 SKIP，则普通 rotation 扫描回本次恢复的 EV后发送，不使用特殊 all-cooling fallback。OOO/SACK NACK 只进入选择重传，不改变 EV 拥塞状态。
 
-当 `path_space <= 32` 时，所有 EV 都在 active set 中，backup 为空。当 `path_space > 32` 时，backup 不参与正常 packet spraying；它主要在 LOSS/RTO 把 active EV 标成 `FAILED` 后补足 active set，并可被低频 probe 使用。如果没有 failure、active 缺口或 probe，backup 不影响正常选择序列。
+### MRC 固定配置
 
-Data packet 携带实际选择的 `mrc_ev`，receiver 在 ACK/NACK 中回显该 EV。带 `ECN_ECHO` 的 ACK 与 TRIM NACK 对精确 EV 使用相同 cooldown：默认进入 one-cycle soft skip；该 EV 冷却期间的重复 ECN/TRIM 不会重新延长 deadline，反馈排空后 EV 会自然恢复。显式 `cwnd_scaled` 诊断模式使用拓扑计算的 1-BDP packet window，`rotations = ceil(bdp_pkts / active_evs)`，随后跳过 `rotations * active_evs` 次 MRC 选择，同样忽略冷却期间的重复反馈。公共 400 Gbit/s、7 us RTT、4096-byte MSS 配置解析为 `bdp_pkts=86`，16 个 active EV 对应 6 轮和 96 次选择。TRIM 仍只是 soft skip，不表示该路径已被判坏：它不会把 EV 标成 `FAILED`，也不会触发 backup replacement。普通 clean ACK 不重写健康 EV，只负责确认数据、完成 probe recovery，或在 cooldown 已到期时恢复该 EV。
+当前不再提供 active-EV 或拥塞策略消融参数。所有 MRC 拥塞实验统一使用 64 active EV、0 backup、identity mapping 和 SKIP_ONCE。
 
-### MRC 固有限制控制实验
+`-lb mrc-shared` 是 per-QP 状态隔离的历史单变量消融。它只共享真实 ECN/TRIM 已触发的 EV 更新；消费方仍按自身 SKIP_ONCE rotation 应用状态，cwnd、ACK、重传队列、在途字节、cursor 和完成状态均不共享。
 
-`-mrc_active_evs K` 只改变端点实际维护和轮询的 active EV 前缀，物理拓扑、八条物理路径及 encoded identity 映射保持不变。它可用于 `mrc`、`mrc-shared` 和 `rr`；同一个 K 下，RR 与 MRC 在首次有效反馈前使用完全相同的 EV 顺序。
-
-`-lb mrc-shared` 是 per-QP 状态隔离的单变量消融。它只把真实 ECN、TRIM、LOSS 或可归因 RTO 已经触发的 MRC 路径状态更新，按 `(source NIC, destination ToR, EV)` 发布给其他合格 QP。消费方仍用自己的 one-cycle 选择计数应用原 MRC 转移；cwnd、ACK、重传队列、在途字节、选择 cursor 和完成状态均不共享。它不是 NetAware/avail，也不读取交换机或 fabric 快照。
-
-每个 RR、MRC、MRC-shared 目标流完成时输出一条 `MrcFlowDiag`，记录反馈到达前发送量、反馈后剩余新数据选择、actionable update、EV 覆盖、同时冷却、fallback，以及共享发布、消费和重复发现。批量入口为：
-
-```bash
-python3 experiments/n-mrc/run_mrc_inherent_limitations.py smoke \
-  --out experiments/n-mrc/output/mrc_inherent_limitations_smoke
-
-python3 experiments/n-mrc/run_mrc_inherent_limitations.py run \
-  --seeds 13,29,47 --workers 3 --timeout 3600 \
-  --out experiments/n-mrc/output/mrc_inherent_limitations_128
-```
-
-runner 对每个 paired block 复用同一 traffic SHA-256，并在聚合前要求完成记录、`MrcFlowDiag`、配置和所有预期 flow ID 全部匹配。`report` 子命令只接受 `manifest.json` 已标记 complete 的结果目录。
+每个 RR、MRC、MRC-shared 目标流完成时仍输出 `MrcFlowDiag`。旧 active-EV/cooldown 对照 runner 已删除；历史结果只作为既有产物保留，不用于说明当前运行语义。
 
 128 节点、102 个正式单元、三个 seed 的机制结论、图表和数据入口见
 [`mrc_inherent_limitations_and_evidence.md`](mrc_inherent_limitations_and_evidence.md)。
@@ -353,7 +338,7 @@ runner 对每个 paired block 复用同一 traffic SHA-256，并在聚合前要�
 [`mrc_sglb_pressure_transition_example.md`](mrc_sglb_pressure_transition_example.md)。
 该轮不包含路径失效或动态故障实验。
 
-OOO/SACK NACK 只进入 SP/SACK selective retransmission queue，不冷却、不 fail EV，也不触发 Go-Back-N replay。LOSS NACK 和能够归因到首个未确认 packet 的 RTO 才把对应 EV 标为 `FAILED`，从 active set 移除，并从剩余 unique backup path 中补入一个 EV。FAILED EV 等待 retry 时间后可以通过低频 probe 回到 active；backup replacement 不会引入 duplicate physical path。
+OOO/SACK NACK 只进入 SP/SACK selective retransmission queue，不改变 EV 拥塞状态，也不触发 Go-Back-N replay。当前拥塞性能模式不启用故障恢复：正常 LOSS/RTO 不把 EV 转入故障状态，也不调度 probe；故障状态类型只作为未来接口保留。
 
 `dcqcn_variant` 独立维护 QP 级 congestion window。clean ACK 执行 `cwnd += 1/cwnd`，ECN ACK 执行 `cwnd -= 0.5`；OOO、TRIM、LOSS NACK 和 RTO 都执行 `cwnd -= 1`。默认 Exact+Bounded 传输不维护 `inflate`，发送额度为 `awnd=cwnd-inflight`，唯一 PSN 首次被 ACK/SACK 后才释放额度。MRC path state 与这个 QP 级窗口更新彼此独立。
 
@@ -367,12 +352,11 @@ cc                       = dcqcn_variant
 roce_transport_semantics = mrc_exact_bounded
 roce_trim_recovery       = exact
 ecn_thresh               = 0.8
-mrc_cooldown_mode        = one_cycle
-mrc_cooldown_reference   = topology_bdp
-mrc_cooldown_reference_pkts = 1 BDP
-mrc_all_cooling_fallback = earliest
-mrc_failed_retry_us      = 100
-mrc_probe_interval_pkts  = 256
+mrc_logical_evs          = 64
+mrc_active_evs           = 64
+mrc_backup_evs           = 0
+mrc_congestion_reaction  = skip_once
+mrc_failure_recovery     = disabled
 ```
 
 上表描述的是只写 `-lb mrc` 时的 CLI 默认值。`dcqcn_variant` 会在 MRC 根据 ECN 冷却精确 EV 的同时调整 source congestion window；显式使用 `-cc none` 时仍保留 MRC path-state 更新，但不做额外的发送窗口控制。当前 canonical MRC 性能矩阵使用 `dcqcn_variant`，`cc=none` 只作为拥塞控制 ablation。
@@ -384,7 +368,7 @@ mrc_probe_interval_pkts  = 256
 的路径选择和反馈语义。完整扫描与 ECMP 验证结果保存在
 `output/nmrc_ecmp_dcqcn_400g_calibration/`。
 
-`-mrc_cooldown_mode cwnd_scaled` 是唯一保留的固定长 cooldown 对照；默认 `one_cycle` 与显式 `cwnd_scaled` 之外不再保留其他 cooldown 入口。`-mrc_cooldown_reference_pkts N` 只覆盖 `cwnd_scaled` 使用的拓扑 BDP reference，用于诊断或复现历史 100-packet 基线。若所有 active EV 同时处于 COOLING，默认 fallback 强制选择 deadline 最早的 cooling EV，但不清除其状态或 deadline；`-mrc_all_cooling_fallback round_robin` 仅保留为诊断对照。`-mrc_failed_retry_us` 和 `-mrc_probe_interval_pkts` 仍调整故障恢复状态机。运行时 `MrcEvModelDiag` 应报告 `mrc_ev_model=encoded`、`mrc_ev_path_mapping=encoded_identity` 和 `mrc_alias_ratio=1`；公共拓扑下默认 `MrcCooldownDiag` 应报告 `mrc_cooldown_mode=one_cycle mrc_cooldown_reference=topology_bdp mrc_cooldown_reference_pkts=86 mrc_cwnd_scaled_rotations=6 mrc_cwnd_scaled_skip_selections=96`；`MrcFallbackDiag` 应报告 `mrc_all_cooling_fallback=earliest`；默认 `FinalCcMrcConfig` 应报告 `dcqcn_variant_inflate=disabled mrc_ecn_trim_penalty=mode_uniform roce_trim_recovery=exact`。
+运行时 `MrcEvModelDiag` 应报告 `mrc_active_evs=64 mrc_backup_evs=0`、identity mapping 和 alias ratio 1；`MrcPolicyDiag` 应报告 `policy=skip_once all_skip_resolution=ordinary_rotation`；`MrcFailureRecoveryDiag` 应报告 `enabled=0`。默认 `FinalCcMrcConfig` 继续报告 `dcqcn_variant_inflate=disabled mrc_ecn_trim_penalty=mode_uniform roce_trim_recovery=exact`。
 
 此前大量 Natural+Cumulative 数据使用旧传输底座。该底座暂留为显式历史复现入口：
 
