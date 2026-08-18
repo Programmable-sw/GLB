@@ -1041,6 +1041,10 @@ uint32_t FatTreeSwitch::_sglb_quality_levels = 8;
 uint32_t FatTreeSwitch::_sglb_min_choices = 3;
 FatTreeSwitch::SglbCandidatePolicy FatTreeSwitch::_sglb_candidate_policy =
     FatTreeSwitch::SGLB_CANDIDATE_EXACT_MIN;
+FatTreeSwitch::SglbCandidateDispatch FatTreeSwitch::_sglb_candidate_dispatch =
+    FatTreeSwitch::SGLB_DISPATCH_RANDOM;
+FatTreeSwitch::SglbGcnCadence FatTreeSwitch::_sglb_gcn_cadence =
+    FatTreeSwitch::SGLB_GCN_SYNCHRONIZED;
 simtime_picosec FatTreeSwitch::_sglb_gcn_update_interval = timeFromUs(15.0);
 simtime_picosec FatTreeSwitch::_sglb_gcn_aging_interval = timeFromUs(30.0);
 simtime_picosec FatTreeSwitch::_paper_sglb_sample_interval = timeFromUs(1.0);
@@ -2145,6 +2149,15 @@ void FatTreeSwitch::sglb_observe_real_gcn_export(uint32_t destination) {
             producer, observed, now, _sglb_update_interval) ||
         !producer.dirty)
         return;
+
+    if (_sglb_gcn_cadence == SGLB_GCN_SYNCHRONIZED &&
+        _sglb_gcn_update_interval > 0) {
+        const simtime_picosec phase = now % _sglb_gcn_update_interval;
+        const simtime_picosec delay = phase == 0 ?
+            _sglb_gcn_update_interval : _sglb_gcn_update_interval - phase;
+        sglb_schedule_real_gcn(destination, delay);
+        return;
+    }
 
     if (!producer.has_sent || _sglb_gcn_update_interval == 0 ||
         now < producer.last_sent ||
@@ -3500,7 +3513,8 @@ uint32_t FatTreeSwitch::sglb_route(vector<FibEntry*>* ecmp_set, uint32_t dst) {
         uint32_t min_choices = _sglb_min_choices ? _sglb_min_choices : 1;
         if (_sglb_score_mode == SGLB_SCORE_NMRC_QUANTIZED_TOPK &&
             _sglb_ofat_factor == SGLB_OFAT_REAL_GCN_RAW_LINEAR) {
-            use_shuffled_rr = true;
+            use_shuffled_rr =
+                _sglb_candidate_dispatch == SGLB_DISPATCH_SHUFFLED_RR;
             rr_dst_tor = sglb_profile_destination(dst);
             vector<uint64_t> tie_keys(ecmp_set->size(), 0);
             for (uint32_t i = 0; i < ecmp_set->size(); ++i) {
@@ -3511,21 +3525,9 @@ uint32_t FatTreeSwitch::sglb_route(vector<FibEntry*>* ecmp_set, uint32_t dst) {
                 rr_quality_signature ^= path_state;
                 rr_quality_signature *= 1099511628211ULL;
             }
-            SglbShuffledRrState& rr_state =
-                _sglb_shuffled_rr_states[rr_dst_tor];
-            const bool next_cycle = !rr_state.valid ||
-                rr_state.quality_signature != rr_quality_signature ||
-                rr_state.cursor >= rr_state.order.size();
-            const uint64_t candidate_generation =
-                rr_state.generation + (next_cycle ? 1 : 0);
             for (uint32_t i = 0; i < ecmp_set->size(); ++i) {
-                uint32_t low = freeBSDHash(
-                    _id ^ static_cast<uint32_t>(candidate_generation >> 32),
-                    rr_dst_tor ^ static_cast<uint32_t>(candidate_generation),
-                    i);
-                uint32_t high = freeBSDHash(
-                    rr_dst_tor, i, _id ^ low);
-                tie_keys[i] = (static_cast<uint64_t>(high) << 32) | low;
+                tie_keys[i] = (static_cast<uint64_t>(random()) << 32) ^
+                    static_cast<uint64_t>(random());
             }
             if (_sglb_candidate_policy == SGLB_CANDIDATE_STRICT_K) {
                 best_choices = paper_sglb_strict_k_by_level(

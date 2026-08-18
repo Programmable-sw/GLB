@@ -240,6 +240,16 @@ public:
         SGLB_CANDIDATE_EXACT_MIN = 2
     };
 
+    enum SglbCandidateDispatch {
+        SGLB_DISPATCH_RANDOM = 0,
+        SGLB_DISPATCH_SHUFFLED_RR = 1
+    };
+
+    enum SglbGcnCadence {
+        SGLB_GCN_INDEPENDENT = 0,
+        SGLB_GCN_SYNCHRONIZED = 1
+    };
+
     enum SglbOfatFactor {
         SGLB_OFAT_BASELINE = 0,
         SGLB_OFAT_TOPK8,
@@ -768,6 +778,8 @@ public:
     static uint32_t _sglb_quality_levels;
     static uint32_t _sglb_min_choices;
     static SglbCandidatePolicy _sglb_candidate_policy;
+    static SglbCandidateDispatch _sglb_candidate_dispatch;
+    static SglbGcnCadence _sglb_gcn_cadence;
     static simtime_picosec _sglb_gcn_update_interval;
     static simtime_picosec _sglb_gcn_aging_interval;
     static simtime_picosec _paper_sglb_sample_interval;

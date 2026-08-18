@@ -24,14 +24,14 @@ def test_complete_matrix(runner):
     with tempfile.TemporaryDirectory() as temporary:
         args = runner.parse_args(["--out", temporary, "--dry-run"])
         specs = runner.make_specs(args)
-        assert len(specs) == 84
+        assert len(specs) == 168
         assert {spec.scenario for spec in specs} == set(runner.SCENARIOS)
         assert {spec.policy for spec in specs} == set(runner.POLICIES)
         assert {spec.min_choices for spec in specs} == set(runner.MIN_CHOICES)
         assert {spec.connections for spec in specs} == {65280}
         assert len({spec.traffic_sha256 for spec in specs}) == 2
-        assert len({(spec.scenario, spec.policy, spec.min_choices)
-                    for spec in specs}) == 84
+        assert len({(spec.cadence, spec.scenario, spec.policy, spec.min_choices)
+                    for spec in specs}) == 168
         by_load = {}
         for spec in specs:
             by_load.setdefault(spec.load, set()).add(spec.traffic_sha256)
@@ -39,6 +39,8 @@ def test_complete_matrix(runner):
             "medium": 1, "high": 1}
         for spec in specs:
             assert option(spec.command, "-sglb_candidate_policy") == spec.policy
+            assert option(spec.command, "-sglb_candidate_dispatch") == "random"
+            assert option(spec.command, "-sglb_gcn_cadence") == spec.cadence
             assert option(spec.command, "-sglb_min_choices") == str(
                 spec.min_choices)
             assert ("-sglb_background" in spec.command) == spec.asymmetric
@@ -50,9 +52,10 @@ def test_complete_matrix(runner):
         runner.validate_specs(specs)
 
 
-def synthetic_row(runner, scenario, policy, choice, cct):
+def synthetic_row(runner, cadence, scenario, policy, choice, cct):
     row = {
-        "scenario": scenario, "policy": policy, "min_choices": choice,
+        "cadence": cadence, "scenario": scenario, "policy": policy,
+        "min_choices": choice,
         "cct_us": cct, "p99_fct_us": cct - 1,
         "trims": choice, "retransmissions": choice, "ecn_marks": choice,
     }
@@ -64,15 +67,16 @@ def synthetic_row(runner, scenario, policy, choice, cct):
 def test_each_policy_is_tuned_before_comparison(runner):
     rows = []
     optima = {"strict_k": 16, "whole_grade_min": 24, "exact_min": 32}
-    for scenario in runner.SCENARIOS:
-        for policy in runner.POLICIES:
-            for choice in runner.MIN_CHOICES:
-                base = 100 if scenario == "symmetric" else 200
-                rows.append(synthetic_row(
-                    runner, scenario, policy, choice,
-                    base + abs(choice - optima[policy])))
+    for cadence in runner.CADENCES:
+        for scenario in runner.SCENARIOS:
+            for policy in runner.POLICIES:
+                for choice in runner.MIN_CHOICES:
+                    base = 100 if scenario.startswith("healthy_") else 200
+                    rows.append(synthetic_row(
+                        runner, cadence, scenario, policy, choice,
+                        base + abs(choice - optima[policy])))
     tuned = runner.select_policy_optima(rows)
-    assert len(tuned) == 6
+    assert len(tuned) == 12
     assert {(row["policy"], row["selected_min"])
             for row in tuned} == set(optima.items())
 
@@ -92,20 +96,21 @@ def test_pressure_gate(runner):
     with tempfile.TemporaryDirectory() as temporary:
         args = runner.parse_args(["--out", temporary, "--dry-run"])
         gate = runner.make_gate_specs(args)
-        assert len(gate) == 4
+        assert len(gate) == 8
         assert {spec.policy for spec in gate} == {"exact_min"}
         assert {spec.min_choices for spec in gate} == {24}
 
     rows = []
-    for scenario in runner.SCENARIOS:
-        asymmetric = scenario.startswith("asymmetric_")
-        rows.append({
-            "scenario": scenario, "config_ok": True,
-            "all_flows_completed": True, "gcn_stale": 0,
-            "cct_us": 2000,
-            "avg_best_quality_choices": 30 if asymmetric else 60,
-            "avg_candidate_choices": 30 if asymmetric else 60,
-        })
+    for cadence in runner.CADENCES:
+        for scenario in runner.SCENARIOS:
+            asymmetric = scenario.startswith("asymmetric_")
+            rows.append({
+                "cadence": cadence, "scenario": scenario, "config_ok": True,
+                "all_flows_completed": True, "gcn_stale": 0,
+                "cct_us": 2000,
+                "avg_best_quality_choices": 30 if asymmetric else 60,
+                "avg_candidate_choices": 30 if asymmetric else 60,
+            })
     passed, _ = runner.evaluate_pressure_gate(rows)
     assert passed
     rows[-1]["avg_best_quality_choices"] = 63

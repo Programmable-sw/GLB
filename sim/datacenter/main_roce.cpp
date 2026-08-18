@@ -1987,6 +1987,32 @@ int main(int argc, char **argv) {
             }
             cout << "sglb candidate policy " << argv[i+1] << endl;
             i++;
+        } else if (!strcmp(argv[i],"-sglb_candidate_dispatch")){
+            if (!strcmp(argv[i+1], "random"))
+                FatTreeSwitch::_sglb_candidate_dispatch =
+                    FatTreeSwitch::SGLB_DISPATCH_RANDOM;
+            else if (!strcmp(argv[i+1], "shuffled_rr"))
+                FatTreeSwitch::_sglb_candidate_dispatch =
+                    FatTreeSwitch::SGLB_DISPATCH_SHUFFLED_RR;
+            else {
+                cerr << "unknown SGLB candidate dispatch " << argv[i+1] << endl;
+                exit(1);
+            }
+            cout << "sglb candidate dispatch " << argv[i+1] << endl;
+            i++;
+        } else if (!strcmp(argv[i],"-sglb_gcn_cadence")){
+            if (!strcmp(argv[i+1], "independent"))
+                FatTreeSwitch::_sglb_gcn_cadence =
+                    FatTreeSwitch::SGLB_GCN_INDEPENDENT;
+            else if (!strcmp(argv[i+1], "synchronized"))
+                FatTreeSwitch::_sglb_gcn_cadence =
+                    FatTreeSwitch::SGLB_GCN_SYNCHRONIZED;
+            else {
+                cerr << "unknown SGLB GCN cadence " << argv[i+1] << endl;
+                exit(1);
+            }
+            cout << "sglb GCN cadence " << argv[i+1] << endl;
+            i++;
         } else if (!strcmp(argv[i],"-stor_feedback_pkts")){
             stor_feedback_pkts = atoi(argv[i+1]);
             if (!stor_feedback_pkts)
@@ -3232,6 +3258,14 @@ int main(int argc, char **argv) {
                  FatTreeSwitch::_sglb_candidate_policy ==
                          FatTreeSwitch::SGLB_CANDIDATE_WHOLE_GRADE_MIN ?
                          "whole_grade_min" : "exact_min")
+             << ", candidate dispatch "
+             << (FatTreeSwitch::_sglb_candidate_dispatch ==
+                         FatTreeSwitch::SGLB_DISPATCH_RANDOM ?
+                         "random" : "shuffled_rr")
+             << ", GCN cadence "
+             << (FatTreeSwitch::_sglb_gcn_cadence ==
+                         FatTreeSwitch::SGLB_GCN_SYNCHRONIZED ?
+                         "synchronized" : "independent")
              << ", n-mrc q range " << FatTreeSwitch::_sglb_nmrc_q_min
              << "/" << FatTreeSwitch::_sglb_nmrc_q_max
              << ", netaware thresholds "

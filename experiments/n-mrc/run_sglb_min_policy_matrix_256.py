@@ -25,6 +25,7 @@ SCENARIOS = (
     "healthy_medium", "healthy_high",
     "asymmetric_medium", "asymmetric_high",
 )
+CADENCES = ("synchronized", "independent")
 RANKING_METRICS = staged.RANKING_METRICS
 SEED = 13
 WORKLOAD = staged.WORKLOAD
@@ -51,6 +52,7 @@ class CellSpec:
     asymmetric: bool
     parallel: int
     per_source_mib: int
+    cadence: str
 
 
 def _materialize_traffic(args, load):
@@ -68,7 +70,8 @@ def _materialize_traffic(args, load):
             None, parallel, per_source_mib)
 
 
-def _command(args, traffic, output, connections, choice, scenario, policy):
+def _command(args, traffic, output, connections, choice, scenario, policy,
+             cadence):
     load = "medium" if scenario.endswith("_medium") else "high"
     sample_scale = PER_SOURCE_MIB[load] / 256
     command = list(base.build_command(
@@ -82,7 +85,10 @@ def _command(args, traffic, output, connections, choice, scenario, policy):
         command[rate_index] = "300"
         command[command.index("-sglb_bg_on_us") + 1] = "200"
         command[command.index("-sglb_bg_off_us") + 1] = "200"
-    command.extend(("-sglb_candidate_policy", policy))
+    command.extend((
+        "-sglb_candidate_policy", policy,
+        "-sglb_candidate_dispatch", "random",
+        "-sglb_gcn_cadence", cadence))
     return tuple(command)
 
 
@@ -92,31 +98,33 @@ def make_specs(args):
     materials = {
         load: _materialize_traffic(args, load) for load in ("medium", "high")}
     specs = []
-    for scenario in SCENARIOS:
+    for cadence in CADENCES:
+      for scenario in SCENARIOS:
         load = "medium" if scenario.endswith("_medium") else "high"
         asymmetric = scenario.startswith("asymmetric_")
         (traffic, digest, connections, flows, parallel,
          per_source_mib) = materials[load]
         for policy in POLICIES:
-            for choice in MIN_CHOICES:
-                case_dir = args.out / "runs" / scenario / policy / f"min{choice}"
+          for choice in MIN_CHOICES:
+                case_dir = (args.out / "runs" / cadence / scenario / policy /
+                            f"min{choice}")
                 output = case_dir / "logout.dat"
                 specs.append(CellSpec(
                     WORKLOAD, scenario, policy, SEED, choice, traffic, digest,
                     connections, flows, case_dir, output,
                     _command(args, traffic, output, connections, choice,
-                             scenario, policy), load, asymmetric, parallel,
-                    per_source_mib))
+                             scenario, policy, cadence), load, asymmetric,
+                    parallel, per_source_mib, cadence))
     return specs
 
 
 def validate_specs(specs):
-    if len(specs) != 84:
-        raise ValueError("complete matrix must contain 84 cells")
+    if len(specs) != 168:
+        raise ValueError("complete matrix must contain 168 cells")
     seen = set()
     traffic_hashes_by_load = {"medium": set(), "high": set()}
     for spec in specs:
-        key = (spec.scenario, spec.policy, spec.min_choices)
+        key = (spec.cadence, spec.scenario, spec.policy, spec.min_choices)
         if key in seen:
             raise ValueError(f"duplicate cell {key}")
         seen.add(key)
@@ -127,6 +135,8 @@ def validate_specs(specs):
             "-end": "25000" if spec.load == "medium" else "100000",
             "-sglb_min_choices": str(spec.min_choices),
             "-sglb_candidate_policy": spec.policy,
+            "-sglb_candidate_dispatch": "random",
+            "-sglb_gcn_cadence": spec.cadence,
         }
         for option, value in expected.items():
             if command[command.index(option) + 1] != value:
@@ -151,21 +161,23 @@ def validate_specs(specs):
 
 def select_policy_optima(rows):
     indexed = {
-        (row["scenario"], row["policy"], int(row["min_choices"])): row
+        (row["cadence"], row["scenario"], row["policy"],
+         int(row["min_choices"])): row
         for row in rows
     }
     optima = []
-    for load in ("medium", "high"):
+    for cadence in CADENCES:
+     for load in ("medium", "high"):
       for policy in POLICIES:
         healthy_name = f"healthy_{load}"
         asymmetric_name = f"asymmetric_{load}"
         healthy_best = min(
-            indexed[(healthy_name, policy, choice)]["cct_us"]
+            indexed[(cadence, healthy_name, policy, choice)]["cct_us"]
             for choice in MIN_CHOICES)
         eligible = []
         for choice in MIN_CHOICES:
-            healthy = indexed[(healthy_name, policy, choice)]
-            asymmetric = indexed[(asymmetric_name, policy, choice)]
+            healthy = indexed[(cadence, healthy_name, policy, choice)]
+            asymmetric = indexed[(cadence, asymmetric_name, policy, choice)]
             regression = healthy["cct_us"] / healthy_best - 1.0
             if regression <= 0.01 + 1e-12:
                 eligible.append((
@@ -173,10 +185,11 @@ def select_policy_optima(rows):
                     asymmetric["trims"], asymmetric["retransmissions"],
                     asymmetric["ecn_marks"], choice))
         choice = min(eligible)[-1]
-        healthy = indexed[(healthy_name, policy, choice)]
-        asymmetric = indexed[(asymmetric_name, policy, choice)]
+        healthy = indexed[(cadence, healthy_name, policy, choice)]
+        asymmetric = indexed[(cadence, asymmetric_name, policy, choice)]
         optima.append({
-            "load": load, "policy": policy, "selected_min": choice,
+            "cadence": cadence, "load": load, "policy": policy,
+            "selected_min": choice,
             "healthy_cct_us": healthy["cct_us"],
             "healthy_regression_vs_policy_best":
                 healthy["cct_us"] / healthy_best - 1.0,
@@ -203,16 +216,16 @@ def make_gate_specs(args):
 
 def evaluate_pressure_gate(rows):
     reasons = []
-    if len(rows) != 4:
-        reasons.append(f"expected 4 gate rows, got {len(rows)}")
+    if len(rows) != 8:
+        reasons.append(f"expected 8 gate rows, got {len(rows)}")
     for row in rows:
-        scenario = row["scenario"]
+        scenario = row["cadence"] + "/" + row["scenario"]
         if (not row.get("config_ok") or not row.get("all_flows_completed")
                 or int(row.get("gcn_stale", 0)) != 0):
             reasons.append(f"{scenario}: invalid or incomplete")
         if float(row.get("cct_us", 0)) < 1000:
             reasons.append(f"{scenario}: CCT below sustained-pressure floor")
-        if scenario.startswith("asymmetric_"):
+        if row["scenario"].startswith("asymmetric_"):
             if float(row.get("avg_best_quality_choices", 64)) >= 40:
                 reasons.append(f"{scenario}: best-quality set did not fall below 40")
             if float(row.get("avg_candidate_choices", 64)) >= 48:
@@ -263,7 +276,8 @@ def main(argv=None):
     args.out.mkdir(parents=True, exist_ok=True)
     manifest = staged._manifest(args, specs)
     manifest.update({
-        "matrix_cells": 84, "parallel_per_source": [16, 32],
+        "matrix_cells": 168, "parallel_per_source": [16, 32],
+        "cadences": list(CADENCES), "candidate_dispatch": "random",
         "per_source_mib": PER_SOURCE_MIB,
         "background_rate_gbps": {"medium": 300, "high": 350},
     })
@@ -272,12 +286,13 @@ def main(argv=None):
         json.dumps(manifest, indent=2, sort_keys=True) + "\n")
     base.write_csv(args.out / "commands.tsv", [{
         "scenario": spec.scenario, "policy": spec.policy,
+        "cadence": spec.cadence,
         "min_choices": spec.min_choices,
         "traffic_sha256": spec.traffic_sha256,
         "command": shlex.join(spec.command),
     } for spec in specs])
     if args.dry_run:
-        print("validated 84 matrix cells")
+        print("validated 168 matrix cells")
         return 0
     if not args.sim.exists():
         raise FileNotFoundError(args.sim)

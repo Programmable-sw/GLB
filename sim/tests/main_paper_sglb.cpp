@@ -135,6 +135,10 @@ int main() {
 
     assert(FatTreeSwitch::_sglb_candidate_policy ==
            FatTreeSwitch::SGLB_CANDIDATE_EXACT_MIN);
+    assert(FatTreeSwitch::_sglb_candidate_dispatch ==
+           FatTreeSwitch::SGLB_DISPATCH_RANDOM);
+    assert(FatTreeSwitch::_sglb_gcn_cadence ==
+           FatTreeSwitch::SGLB_GCN_SYNCHRONIZED);
 
     vector<uint8_t> oversized_best_levels{0, 0, 0, 0, 1};
     vector<bool> oversized_best_available(oversized_best_levels.size(), true);

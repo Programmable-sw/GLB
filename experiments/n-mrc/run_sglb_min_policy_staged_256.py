@@ -178,6 +178,8 @@ def _rank(rows):
 def _run_cell(spec, args, simulator_sha):
     row = base.run_cell(spec, args, simulator_sha)
     row.update({"scenario": spec.scenario, "policy": spec.policy})
+    if hasattr(spec, "cadence"):
+        row["cadence"] = spec.cadence
     base.atomic_write_text(
         spec.case_dir / "parsed.json",
         json.dumps(row, indent=2, sort_keys=True) + "\n")
