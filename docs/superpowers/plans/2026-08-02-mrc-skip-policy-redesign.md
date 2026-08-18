@@ -1,5 +1,9 @@
 # MRC 64-Path Skip-Policy Redesign Implementation Plan
 
+> **历史记录：已被取代。** 当前实现与设计以
+> [`2026-08-18-mrc-ocp-skip-once-consolidation-design.md`](../specs/2026-08-18-mrc-ocp-skip-once-consolidation-design.md)
+> 为准；本文中的多策略、32 active EV、backup、cooldown deadline 与公开故障 CLI 不再是当前方案。
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Make plain `-lb mrc` use a 64-EV identity-mapped profile with `skip_token` as the default congestion reaction, add `skip_rotation`, preserve legacy cooldown ablations, and keep failure recovery disabled in normal congestion experiments.

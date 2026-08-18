@@ -1,5 +1,9 @@
 # MRC 64-Path Skip-Policy Redesign
 
+> **历史记录：已被取代。** 当前实现与设计以
+> [`2026-08-18-mrc-ocp-skip-once-consolidation-design.md`](2026-08-18-mrc-ocp-skip-once-consolidation-design.md)
+> 为准；本文中的多策略、32 active EV、backup、cooldown deadline 与公开故障 CLI 不再是当前方案。
+
 ## 1. Goal
 
 本设计将 `-lb mrc` 收敛为面向**拥塞反馈与负载均衡**的单平面离散事件模型。默认策略改为 `skip-token`，并保留 `skip-rotation`、现有 one-cycle deadline cooldown 和 `cwnd-scaled` cooldown 作为消融对照。
