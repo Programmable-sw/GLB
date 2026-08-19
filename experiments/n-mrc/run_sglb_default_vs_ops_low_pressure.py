@@ -86,6 +86,12 @@ def enrich(row):
         "trims": diag(row, "QueueDiag.composite_trims", 0),
         "ecn_marks": diag(row, "QueueDiag.composite_ecn_marks", 0),
     })
+    # OPS does not emit SGLB route diagnostics, but its effective spray set is
+    # the complete 64-path plane.
+    if row["scheme"] == "ops":
+        result["avg_available_choices"] = 64
+        result["avg_candidate_choices"] = 64
+        result["avg_best_quality_choices"] = 64
     return result
 
 
