@@ -39,6 +39,8 @@ class BaseQueue  : public EventSource, public PacketSink, public Drawable {
 
     virtual void setSwitch(Switch* s){assert(!_switch);_switch = s;}
     virtual Switch* getSwitch(){return _switch;}
+    void set_last_hop(bool last_hop = true) {_last_hop = last_hop;}
+    bool is_last_hop() const {return _last_hop;}
     
     void setNext(PacketSink* next_sink) {
             _next_sink = next_sink;
@@ -90,6 +92,7 @@ protected:
     uint8_t _last_qs, _last_utilization;
 
     Switch* _switch;//which switch is this queue part of?
+    bool _last_hop;
 };
 
 

@@ -791,7 +791,7 @@ const char* nmrc_network_decision_name(
 }
 
 void exit_error(char* progr) {
-    cout << "Usage " << progr << " [-nodes N] [-conns C] [-q queue_size] [-tm traffic_matrix_file]\\n\\t[-lb ecmp|ecmp_rr|adaptive-routing|sglb|sglb-old|sglb-paper|drill|reps|avail|grade|mrc|mrc-shared|netaware|n-mrc|n-mrc-fixed0.5|n-mrc-delta|rr|ops|conweave|ndp]\\n\\t[-cc none|dcqcn|dcqcn_variant|mprdma]" << endl;
+    cout << "Usage " << progr << " [-nodes N] [-conns C] [-q queue_size] [-tm traffic_matrix_file]\\n\\t[-lb ecmp|ecmp_rr|adaptive-routing|sglb|sglb-ecn-filter|sglb-ecn-clear|sglb-old|sglb-paper|drill|reps|avail|grade|mrc|netaware|n-mrc|n-mrc-fixed0.5|n-mrc-delta|rr|ops|conweave|ndp]\\n\\t[-cc none|dcqcn|dcqcn_variant|mprdma]" << endl;
     cout << "\t[-roce_sack_bitmap_bits 64|128]" << endl;
     cout << "\t[-roce_transport_semantics legacy|mrc_exact_bounded]" << endl;
     cout << "\t[-roce_trim_recovery cumulative|exact]" << endl;
@@ -834,7 +834,6 @@ void exit_error(char* progr) {
     cout << "\t[-netaware_topk k]" << endl;
     cout << "\t[-netaware_weight_adaptation off|good_share_cap]" << endl;
     cout << "\t[-netaware_trace_prefix prefix] [-netaware_trace_period_us x]" << endl;
-    cout << "\t[-nmrc_ev_mode encoded|random_matched|random32]" << endl;
     cout << "\t[-nmrc_reroute_policy any_better|better_ge3]" << endl;
     cout << "\t[-nmrc_fastcnp on|off]" << endl;
     cout << "\t[-nmrc_endpoint_policy rr_cooldown|random_stateless]" << endl;
@@ -978,7 +977,6 @@ int main(int argc, char **argv) {
         FatTreeSwitch::_netaware_score_avoid_threshold;
     string netaware_trace_prefix;
     double netaware_trace_period_us = 10.0;
-    RoceSrc::nmrc_ev_mode_t nmrc_ev_mode = RoceSrc::NMRC_EV_ENCODED;
     FatTreeSwitch::NmrcReroutePolicy nmrc_reroute_policy =
         FatTreeSwitch::NMRC_REROUTE_BETTER_GE3;
     RoceSrc::nmrc_endpoint_policy_t nmrc_endpoint_policy =
@@ -997,7 +995,6 @@ int main(int argc, char **argv) {
     double nmrc_cooldown_delta = 0.30;
     bool nmrc_fastcnp = true;
     bool nmrc_option_user_set = false;
-    bool nmrc_ev_mode_user_set = false;
     bool nmrc_reroute_policy_user_set = false;
     bool nmrc_fastcnp_user_set = false;
     bool nmrc_endpoint_policy_user_set = false;
@@ -1163,9 +1160,23 @@ int main(int argc, char **argv) {
             } else if (!strcmp(argv[i+1], "sglb")) {
                 route_strategy = ECMP_FIB;
                 FatTreeSwitch::configure_sglb_scheme_defaults(false);
+                FatTreeSwitch::set_sglb_ecn_mode(
+                    FatTreeSwitch::SGLB_ECN_OFF);
                 FatTreeSwitch::set_strategy(FatTreeSwitch::SGLB);
                 roce_lb_mode = RoceSrc::LB_ECMP;
                 lb_scheme_name = "sglb";
+            } else if (!strcmp(argv[i+1], "sglb-ecn-filter") ||
+                       !strcmp(argv[i+1], "sglb-ecn-clear")) {
+                const bool neutral =
+                    !strcmp(argv[i+1], "sglb-ecn-filter");
+                route_strategy = ECMP_FIB;
+                FatTreeSwitch::configure_sglb_scheme_defaults(false);
+                FatTreeSwitch::set_sglb_ecn_mode(
+                    neutral ? FatTreeSwitch::SGLB_ECN_NEUTRAL :
+                              FatTreeSwitch::SGLB_ECN_CLEAR);
+                FatTreeSwitch::set_strategy(FatTreeSwitch::SGLB);
+                roce_lb_mode = RoceSrc::LB_ECMP;
+                lb_scheme_name = argv[i+1];
             } else if (!strcmp(argv[i+1], "sglb-old")) {
                 route_strategy = ECMP_FIB;
                 FatTreeSwitch::configure_sglb_scheme_defaults(true);
@@ -1217,11 +1228,6 @@ int main(int argc, char **argv) {
                 FatTreeSwitch::set_strategy(FatTreeSwitch::ECMP);
                 roce_lb_mode = RoceSrc::LB_MRC;
                 lb_scheme_name = "mrc";
-            } else if (!strcmp(argv[i+1], "mrc-shared")) {
-                route_strategy = ECMP_FIB;
-                FatTreeSwitch::set_strategy(FatTreeSwitch::ECMP);
-                roce_lb_mode = RoceSrc::LB_MRC_SHARED;
-                lb_scheme_name = "mrc-shared";
             } else if (!strcmp(argv[i+1], "rr")) {
                 route_strategy = ECMP_FIB;
                 FatTreeSwitch::set_strategy(FatTreeSwitch::ECMP);
@@ -2172,24 +2178,6 @@ int main(int argc, char **argv) {
                 netaware_trace_period_us = 0.1;
             cout << "netaware path trace period " << netaware_trace_period_us << "us" << endl;
             i++;
-        } else if (!strcmp(argv[i],"-nmrc_ev_mode")) {
-            if (i + 1 >= argc) {
-                cerr << "missing value for -nmrc_ev_mode" << endl;
-                exit(1);
-            }
-            if (!strcmp(argv[i+1], "encoded"))
-                nmrc_ev_mode = RoceSrc::NMRC_EV_ENCODED;
-            else if (!strcmp(argv[i+1], "random_matched"))
-                nmrc_ev_mode = RoceSrc::NMRC_EV_RANDOM_MATCHED;
-            else if (!strcmp(argv[i+1], "random32"))
-                nmrc_ev_mode = RoceSrc::NMRC_EV_RANDOM32;
-            else {
-                cerr << "invalid n-MRC EV mode " << argv[i+1] << endl;
-                exit(1);
-            }
-            nmrc_option_user_set = true;
-            nmrc_ev_mode_user_set = true;
-            i++;
         } else if (!strcmp(argv[i],"-nmrc_reroute_policy")) {
             if (i + 1 >= argc) {
                 cerr << "missing value for -nmrc_reroute_policy" << endl;
@@ -2692,10 +2680,6 @@ int main(int argc, char **argv) {
         else if (lb_scheme_name == "n-mrc-delta")
             required_network = FatTreeSwitch::NMRC_NETWORK_DELTA;
 
-        const char* ev_mode_name =
-            nmrc_ev_mode == RoceSrc::NMRC_EV_ENCODED ? "encoded" :
-            (nmrc_ev_mode == RoceSrc::NMRC_EV_RANDOM_MATCHED ?
-                "random_matched" : "random32");
         const char* reroute_policy_name =
             nmrc_reroute_policy == FatTreeSwitch::NMRC_REROUTE_ANY_BETTER ?
                 "any_better" : "better_ge3";
@@ -2716,13 +2700,6 @@ int main(int argc, char **argv) {
         const char* required_network_name =
             nmrc_network_decision_name(required_network);
 
-        if (nmrc_ev_mode_user_set &&
-            nmrc_ev_mode != RoceSrc::NMRC_EV_ENCODED) {
-            cerr << "n-MRC preset " << lb_scheme_name
-                 << " conflicts with -nmrc_ev_mode " << ev_mode_name
-                 << "; requires encoded" << endl;
-            exit(1);
-        }
         if ((lb_scheme_name == "n-mrc-fixed0.5" ||
              lb_scheme_name == "n-mrc-delta") &&
             nmrc_reroute_policy_user_set) {
@@ -2782,7 +2759,6 @@ int main(int argc, char **argv) {
             exit(1);
         }
 
-        nmrc_ev_mode = RoceSrc::NMRC_EV_ENCODED;
         nmrc_reroute_policy = FatTreeSwitch::NMRC_REROUTE_BETTER_GE3;
         nmrc_fastcnp = required_fastcnp;
         nmrc_endpoint_policy = required_endpoint;
@@ -2797,7 +2773,6 @@ int main(int argc, char **argv) {
              << "-nmrc_fastcnp on" << endl;
         exit(1);
     }
-    RoceSrc::setNmrcEvMode(nmrc_ev_mode);
     RoceSrc::setNmrcEndpointPolicy(nmrc_endpoint_policy);
     RoceSrc::setNmrcAllCoolingPolicy(nmrc_all_cooling_policy);
     FatTreeSwitch::_stor_binary_trim_bad = !avail_ecn_only;
@@ -2838,8 +2813,7 @@ int main(int argc, char **argv) {
         sglb_bg_packet_size = packet_size;
     Packet::set_packet_size(packet_size);
 
-    if (roce_lb_mode == RoceSrc::LB_MRC ||
-        roce_lb_mode == RoceSrc::LB_MRC_SHARED) {
+    if (roce_lb_mode == RoceSrc::LB_MRC) {
         if (!queue_type_user_set) {
             qt = COMPOSITE_ECN_LB;
             cout << "MRC default queue_type composite_ecn_lb (trim + priority headers + ECN)" << endl;
@@ -2940,7 +2914,6 @@ int main(int argc, char **argv) {
                         roce_lb_mode == RoceSrc::LB_NETAWARE ||
                         roce_lb_mode == RoceSrc::LB_NMRC ||
                         roce_lb_mode == RoceSrc::LB_MRC ||
-                        roce_lb_mode == RoceSrc::LB_MRC_SHARED ||
                         roce_lb_mode == RoceSrc::LB_RR ||
                         roce_lb_mode == RoceSrc::LB_CONWEAVE ||
                         roce_lb_mode == RoceSrc::LB_NDP);
@@ -3066,9 +3039,7 @@ int main(int argc, char **argv) {
     FatTreeSwitch::_netaware_score_degraded_threshold = netaware_score_degraded_threshold;
     FatTreeSwitch::_netaware_score_bad_threshold = netaware_score_bad_threshold;
     FatTreeSwitch::_netaware_score_avoid_threshold = netaware_score_avoid_threshold;
-    FatTreeSwitch::_pathid_only_hash = source_pathid_lb &&
-        (roce_lb_mode != RoceSrc::LB_NMRC ||
-         nmrc_ev_mode == RoceSrc::NMRC_EV_ENCODED);
+    FatTreeSwitch::_pathid_only_hash = source_pathid_lb;
     FatTreeSwitch::_nmrc_hybrid_enabled =
         roce_lb_mode == RoceSrc::LB_NMRC;
     FatTreeSwitch::_nmrc_fastcnp_enabled = nmrc_fastcnp;
@@ -3147,7 +3118,6 @@ int main(int argc, char **argv) {
     }
 
     RoceSrc::setLoadBalancing(roce_lb_mode);
-    RoceSrc::resetMrcSharedState();
     RoceSrc::setPathEntropySize(path_entropy_size);
     RoceSrc::setSackBitmapBits(roce_sack_bitmap_bits);
     RoceSrc::setReceiveMode(roce_rx_mode);
@@ -3426,9 +3396,9 @@ int main(int argc, char **argv) {
 
     uint32_t path_space = path_entropy_size ? path_entropy_size : 1;
     if ((roce_lb_mode == RoceSrc::LB_MRC ||
-         roce_lb_mode == RoceSrc::LB_MRC_SHARED) &&
-        path_space != 64) {
-        cerr << "MRC requires exactly 64 physical paths; topology provides "
+         roce_lb_mode == RoceSrc::LB_NMRC) && path_space != 64) {
+        cerr << (roce_lb_mode == RoceSrc::LB_NMRC ? "N-MRC" : "MRC")
+             << " requires exactly 64 physical paths; topology provides "
              << path_space << endl;
         exit(1);
     }
@@ -3566,14 +3536,10 @@ int main(int argc, char **argv) {
              << endl;
     }
     if (roce_lb_mode == RoceSrc::LB_NMRC) {
-        const char* ev_mode_name = nmrc_ev_mode == RoceSrc::NMRC_EV_ENCODED ?
-            "encoded" : (nmrc_ev_mode == RoceSrc::NMRC_EV_RANDOM_MATCHED ?
-                "random_matched" : "random32");
         const char* reroute_policy_name =
             nmrc_reroute_policy == FatTreeSwitch::NMRC_REROUTE_ANY_BETTER ?
                 "any_better" : "better_ge3";
-        uint32_t ev_set_size = nmrc_ev_mode == RoceSrc::NMRC_EV_RANDOM32 ?
-            32 : min(path_space, 32U);
+        uint32_t ev_set_size = 64;
         const char* network_decision_name =
             nmrc_network_decision_name(nmrc_network_decision);
         const char* graded_cooldown_name =
@@ -3585,8 +3551,7 @@ int main(int argc, char **argv) {
                 "none" : "selective");
         if (lb_scheme_name == "n-mrc-fixed0.5" ||
             lb_scheme_name == "n-mrc-delta") {
-            cout << "HybridNmrcConfig ev_mode=" << ev_mode_name
-                 << " preset=" << lb_scheme_name
+            cout << "HybridNmrcConfig preset=" << lb_scheme_name
                  << " endpoint_policy=" << RoceSrc::nmrcEndpointPolicyName()
                  << " all_cooling_policy="
                  << RoceSrc::nmrcAllCoolingPolicyName()
@@ -3598,20 +3563,15 @@ int main(int argc, char **argv) {
                  << " trim_cooldown=actual_path"
                  << " paths=" << path_space
                  << " ev_set_size=" << ev_set_size
-                 << " ev_mapping="
-                 << (nmrc_ev_mode == RoceSrc::NMRC_EV_ENCODED ?
-                        "path_unique" : "flow_ev_hash")
+                 << " ev_mapping=identity"
                  << endl;
         } else {
-            cout << "HybridNmrcConfig ev_mode=" << ev_mode_name
-                 << " reroute_policy=" << reroute_policy_name
+            cout << "HybridNmrcConfig reroute_policy=" << reroute_policy_name
                  << " fastcnp=" << (nmrc_fastcnp ? "on" : "off")
                  << " trim_cooldown=actual_path"
                  << " paths=" << path_space
                  << " ev_set_size=" << ev_set_size
-                 << " ev_mapping="
-                 << (nmrc_ev_mode == RoceSrc::NMRC_EV_ENCODED ?
-                        "path_unique" : "flow_ev_hash")
+                 << " ev_mapping=identity"
                  << " preset=" << lb_scheme_name
                  << " endpoint_policy=" << RoceSrc::nmrcEndpointPolicyName()
                  << " all_cooling_policy="
@@ -3624,8 +3584,7 @@ int main(int argc, char **argv) {
                  << endl;
         }
     }
-    if (roce_lb_mode == RoceSrc::LB_MRC ||
-        roce_lb_mode == RoceSrc::LB_MRC_SHARED) {
+    if (roce_lb_mode == RoceSrc::LB_MRC) {
         mrc_logical_evs = 64;
         mrc_active_paths = 64;
         mrc_backup_paths = 0;
@@ -3666,9 +3625,6 @@ int main(int argc, char **argv) {
              << " all_skip_resolution=ordinary_rotation" << endl;
         cout << "MrcFailureRecoveryDiag enabled=0"
              << " assumed_bad=0 probe_packets=0" << endl;
-        if (roce_lb_mode == RoceSrc::LB_MRC_SHARED)
-            cout << "MrcSharedConfig enabled=1 key=source_nic,destination_tor,ev"
-                 << endl;
     }
     if (roce_lb_mode == RoceSrc::LB_RR) {
         cout << "RR: stateless_mrc true"
@@ -3971,7 +3927,8 @@ int main(int argc, char **argv) {
     cout << "Done" << endl;
     int new_pkts = 0, rtx_pkts = 0;
     uint64_t ack_pkts = 0, nack_pkts = 0;
-    uint64_t ooo_nacks = 0, trim_nacks = 0, loss_nacks = 0;
+    uint64_t ooo_nacks = 0, trim_nacks = 0, trim_lh_nacks = 0;
+    uint64_t loss_nacks = 0;
     uint64_t ecn_echo_acks = 0, feedback_acks = 0, feedback_nacks = 0;
     uint64_t duplicate_acks = 0, duplicate_inflate_suppressed = 0;
     uint64_t bounded_inflight_final = 0, bounded_unique_acks = 0;
@@ -4073,6 +4030,7 @@ int main(int argc, char **argv) {
         nack_pkts += roce_srcs[ix]->_nacks_received;
         ooo_nacks += roce_srcs[ix]->_ooo_nacks_received;
         trim_nacks += roce_srcs[ix]->_trim_nacks_received;
+        trim_lh_nacks += roce_srcs[ix]->_trim_lh_nacks_received;
         loss_nacks += roce_srcs[ix]->_loss_nacks_received;
         ecn_echo_acks += roce_srcs[ix]->_ecn_echo_acks_received;
         duplicate_acks += roce_srcs[ix]->_duplicate_acks_received;
@@ -4274,6 +4232,8 @@ int main(int argc, char **argv) {
          << " nacks=" << nack_pkts
          << " nacks_ooo=" << ooo_nacks
          << " nacks_trim=" << trim_nacks
+         << " nacks_trim_lh=" << trim_lh_nacks
+         << " nacks_trim_non_lh=" << (trim_nacks - trim_lh_nacks)
          << " nacks_loss=" << loss_nacks
          << " rtos=" << RoceSrc::_global_rto_count
          << " ecn_echo_acks=" << ecn_echo_acks
@@ -4723,6 +4683,17 @@ int main(int argc, char **argv) {
          << endl;
     const double paper_calls =
         static_cast<double>(FatTreeSwitch::_paper_sglb_diag_route_calls);
+    cout << "SglbEcnFilterSummary mode="
+         << (FatTreeSwitch::_sglb_ecn_mode == FatTreeSwitch::SGLB_ECN_NEUTRAL ?
+             "neutral" :
+             FatTreeSwitch::_sglb_ecn_mode == FatTreeSwitch::SGLB_ECN_CLEAR ?
+             "clear" : "off")
+         << " total_ecn=" << FatTreeSwitch::_sglb_ecn_total
+         << " stale_ecn=" << FatTreeSwitch::_sglb_ecn_stale
+         << " neutralized=" << FatTreeSwitch::_sglb_ecn_neutralized
+         << " cleared=" << FatTreeSwitch::_sglb_ecn_cleared
+         << " missing_metadata=" << FatTreeSwitch::_sglb_ecn_missing_metadata
+         << endl;
     cout << "PaperSglbDiag "
          << "route_calls=" << FatTreeSwitch::_paper_sglb_diag_route_calls
          << " avg_candidates=" << (paper_calls ?

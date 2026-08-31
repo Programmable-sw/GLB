@@ -61,6 +61,8 @@ ecn_thresh                = 0.8
 
 SP/SACK 负责可靠性，MRC 只负责 EV 选择和拥塞状态。Exact+Bounded 传输按唯一 PSN 的 ACK/SACK 释放额度；TRIM 精确重传缺失 PSN。`dcqcn_variant` 的 QP 级窗口更新与 MRC 的逐 EV SKIP 状态相互独立。
 
+TRIM 按发生位置区分。ToR 到接收端 host 的下行队列产生的裁剪标记为 last-hop（LH），该属性由裁剪头携带并在 TRIM NACK 中回传。LH TRIM 与非 LH TRIM 使用相同的精确 PSN 恢复、拥塞控制和正常重传 EV rotation；只有非 LH TRIM 才让回显 EV 进入 SKIP。重传不绑定原 EV，也不显式排除原 EV。
+
 ## 运行时诊断
 
 64-path canonical topology 上应包含：

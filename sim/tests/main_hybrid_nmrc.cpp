@@ -71,118 +71,50 @@ static RoceSrc* make_src(uint32_t flow_id) {
     return src;
 }
 
-static std::vector<uint32_t> values_for(RoceSrc::nmrc_ev_mode_t mode,
-                                        uint32_t paths,
+static std::vector<uint32_t> values_for(uint32_t paths,
                                         uint32_t flow_id) {
-    RoceSrc::setNmrcEvMode(mode);
     RoceSrc* src = make_src(flow_id);
     src->init_nmrc_evs_for_test(paths);
     return src->nmrc_ev_values_for_test();
 }
 
-static std::vector<uint32_t> mappings_for(RoceSrc::nmrc_ev_mode_t mode,
-                                          uint32_t paths,
+static std::vector<uint32_t> mappings_for(uint32_t paths,
                                           uint32_t flow_id) {
-    RoceSrc::setNmrcEvMode(mode);
     RoceSrc* src = make_src(flow_id);
     src->init_nmrc_evs_for_test(paths);
     return src->nmrc_physical_paths_for_test();
 }
 
 static void test_set_sizes_and_uniqueness() {
-    const uint32_t path_counts[] = {1, 8, 32, 64};
-    const RoceSrc::nmrc_ev_mode_t modes[] = {
-        RoceSrc::NMRC_EV_ENCODED,
-        RoceSrc::NMRC_EV_RANDOM_MATCHED,
-        RoceSrc::NMRC_EV_RANDOM32
-    };
-
-    for (uint32_t mode_ix = 0; mode_ix < 3; mode_ix++) {
-        for (uint32_t path_ix = 0; path_ix < 4; path_ix++) {
-            uint32_t paths = path_counts[path_ix];
-            std::vector<uint32_t> values = values_for(
-                modes[mode_ix], paths, 700 + path_ix);
-            uint32_t expected = modes[mode_ix] == RoceSrc::NMRC_EV_RANDOM32 ?
-                32 : std::min(paths, 32U);
-            expect(values.size() == expected,
-                   "hybrid n-MRC EV set size does not match its mode");
-            std::set<uint32_t> unique(values.begin(), values.end());
-            expect(unique.size() == values.size(),
-                   "EV values must be unique within one QP");
-            expect(values.empty() ||
-                       *std::max_element(values.begin(), values.end()) <= 65535,
-                   "logical EV values must fit the 16-bit EV space");
-
-            std::vector<uint32_t> physical = mappings_for(
-                modes[mode_ix], paths, 700 + path_ix);
-            expect(physical.size() == values.size(),
-                   "each logical EV needs one diagnostic physical mapping");
-            for (uint32_t i = 0; i < physical.size(); i++)
-                expect(physical[i] < paths,
-                       "diagnostic physical mappings must stay in path space");
-            if (modes[mode_ix] == RoceSrc::NMRC_EV_ENCODED) {
-                std::set<uint32_t> unique_paths(
-                    physical.begin(), physical.end());
-                expect(unique_paths.size() == physical.size(),
-                       "encoded EVs must map one-to-one to physical paths");
-            }
-        }
-    }
-
-    std::vector<uint32_t> aliased = mappings_for(
-        RoceSrc::NMRC_EV_RANDOM32, 8, 811);
-    std::set<uint32_t> unique_paths(aliased.begin(), aliased.end());
-    expect(unique_paths.size() < aliased.size(),
-           "random 32-EV mode must permit physical aliases");
+    std::vector<uint32_t> values = values_for(64, 700);
+    std::vector<uint32_t> physical = mappings_for(64, 700);
+    expect(values.size() == 64 && physical.size() == 64,
+           "canonical n-MRC must initialize all 64 EVs");
+    std::set<uint32_t> unique_values(values.begin(), values.end());
+    std::set<uint32_t> unique_paths(physical.begin(), physical.end());
+    expect(unique_values.size() == 64 && unique_paths.size() == 64,
+           "canonical n-MRC EVs and physical paths must be unique");
+    for (uint32_t i = 0; i < values.size(); i++)
+        expect(values[i] == physical[i],
+               "canonical n-MRC EV mapping must be identity");
 }
 
 static void test_per_qp_determinism_and_dephasing() {
     RoceSrc::setNmrcEvSeed(0x12345678);
 
-    std::vector<uint32_t> small_a = values_for(
-        RoceSrc::NMRC_EV_ENCODED, 8, 901);
-    std::vector<uint32_t> small_replay = values_for(
-        RoceSrc::NMRC_EV_ENCODED, 8, 901);
-    std::vector<uint32_t> small_b = values_for(
-        RoceSrc::NMRC_EV_ENCODED, 8, 902);
-    expect(small_a == small_replay,
-           "the same seed and QP must recreate the same encoded order");
-    expect(small_a != small_b,
-           "small-topology encoded QPs must use different permutations");
-    expect(std::set<uint32_t>(small_a.begin(), small_a.end()) ==
-               std::set<uint32_t>(small_b.begin(), small_b.end()),
-           "small-topology encoded QPs must retain the same path members");
-
-    std::vector<uint32_t> large_a = values_for(
-        RoceSrc::NMRC_EV_ENCODED, 64, 903);
-    std::vector<uint32_t> large_b = values_for(
-        RoceSrc::NMRC_EV_ENCODED, 64, 904);
-    expect(std::set<uint32_t>(large_a.begin(), large_a.end()) !=
-               std::set<uint32_t>(large_b.begin(), large_b.end()),
-           "large-topology encoded QPs must sample independent subsets");
-
-    std::vector<uint32_t> random_a = values_for(
-        RoceSrc::NMRC_EV_RANDOM_MATCHED, 8, 905);
-    std::vector<uint32_t> random_replay = values_for(
-        RoceSrc::NMRC_EV_RANDOM_MATCHED, 8, 905);
-    std::vector<uint32_t> random_b = values_for(
-        RoceSrc::NMRC_EV_RANDOM_MATCHED, 8, 906);
-    expect(random_a == random_replay,
-           "the same seed and QP must recreate the same random EV set");
-    expect(random_a != random_b,
-           "random EV sets must be independent across QPs");
-
-    std::vector<uint32_t> matched_64 = values_for(
-        RoceSrc::NMRC_EV_RANDOM_MATCHED, 64, 907);
-    std::vector<uint32_t> random32_64 = values_for(
-        RoceSrc::NMRC_EV_RANDOM32, 64, 907);
-    expect(matched_64 == random32_64,
-           "random-matched and random32 must be equivalent when P >= 32");
+    std::vector<uint32_t> a = values_for(64, 901);
+    std::vector<uint32_t> replay = values_for(64, 901);
+    std::vector<uint32_t> b = values_for(64, 902);
+    expect(a == replay,
+           "the same seed and QP must recreate the same 64-EV order");
+    expect(a != b, "different QPs must use different 64-EV permutations");
+    expect(std::set<uint32_t>(a.begin(), a.end()) ==
+               std::set<uint32_t>(b.begin(), b.end()),
+           "all QPs must retain all 64 EV members");
 }
 
 static void test_ev_initialization_does_not_consume_global_random() {
     RoceSrc* src = make_src(1001);
-    RoceSrc::setNmrcEvMode(RoceSrc::NMRC_EV_RANDOM32);
     RoceSrc::setNmrcEvSeed(0xabcdef01);
 
     srandom(417);
@@ -191,7 +123,7 @@ static void test_ev_initialization_does_not_consume_global_random() {
 
     srandom(417);
     long actual_before = random();
-    src->init_nmrc_evs_for_test(8);
+    src->init_nmrc_evs_for_test(64);
     long actual_after = random();
 
     expect(actual_before == expected_before && actual_after == expected_after,
@@ -199,7 +131,6 @@ static void test_ev_initialization_does_not_consume_global_random() {
 }
 
 static void test_one_round_cooling_and_idempotence() {
-    RoceSrc::setNmrcEvMode(RoceSrc::NMRC_EV_ENCODED);
     RoceSrc::setNmrcEvSeed(0x1234);
     RoceSrc* src = make_src(1101);
     src->init_nmrc_evs_for_test(4);
@@ -233,7 +164,6 @@ static void test_one_round_cooling_and_idempotence() {
 }
 
 static void test_all_cooling_uses_earliest_expiry_fallback() {
-    RoceSrc::setNmrcEvMode(RoceSrc::NMRC_EV_ENCODED);
     RoceSrc::setNmrcEndpointPolicy(RoceSrc::NMRC_ENDPOINT_RR_COOLDOWN);
     RoceSrc::setNmrcAllCoolingPolicy(RoceSrc::NMRC_ALL_COOLING_EARLIEST);
     RoceSrc* src = make_src(1201);
@@ -326,7 +256,6 @@ static std::vector<uint32_t> run_all_cooling_rr_episode(
 }
 
 static void test_all_cooling_rr_reset_episode() {
-    RoceSrc::setNmrcEvMode(RoceSrc::NMRC_EV_ENCODED);
     RoceSrc::setNmrcEvSeed(0x22334455);
     RoceSrc::setNmrcEndpointPolicy(RoceSrc::NMRC_ENDPOINT_RR_COOLDOWN);
     RoceSrc::setNmrcAllCoolingPolicy(RoceSrc::NMRC_ALL_COOLING_RR_RESET);
@@ -346,7 +275,6 @@ static void test_all_cooling_rr_reset_episode() {
 }
 
 static void test_all_cooling_rr_reset_is_per_qp() {
-    RoceSrc::setNmrcEvMode(RoceSrc::NMRC_EV_ENCODED);
     RoceSrc::setNmrcEvSeed(0x33445566);
     RoceSrc::setNmrcEndpointPolicy(RoceSrc::NMRC_ENDPOINT_RR_COOLDOWN);
     RoceSrc::setNmrcAllCoolingPolicy(RoceSrc::NMRC_ALL_COOLING_RR_RESET);
@@ -368,7 +296,6 @@ static void test_all_cooling_rr_reset_is_per_qp() {
 }
 
 static void test_ev_rebuild_abandons_unfinished_rr_reset() {
-    RoceSrc::setNmrcEvMode(RoceSrc::NMRC_EV_ENCODED);
     RoceSrc::setNmrcEndpointPolicy(RoceSrc::NMRC_ENDPOINT_RR_COOLDOWN);
     RoceSrc::setNmrcAllCoolingPolicy(RoceSrc::NMRC_ALL_COOLING_RR_RESET);
     RoceSrc* src = make_src(1208);
@@ -406,7 +333,6 @@ static std::vector<uint32_t> stateless_sequence(uint32_t flow_id,
 }
 
 static void test_nmrc_stateless_random_selection() {
-    RoceSrc::setNmrcEvMode(RoceSrc::NMRC_EV_ENCODED);
     RoceSrc::setNmrcEvSeed(0x44556677);
     RoceSrc::setNmrcEndpointPolicy(RoceSrc::NMRC_ENDPOINT_RANDOM_STATELESS);
     RoceSrc::setNmrcAllCoolingPolicy(RoceSrc::NMRC_ALL_COOLING_EARLIEST);
@@ -450,7 +376,6 @@ static void test_data_packet_carries_exact_ev_and_retransmission_reselects_it() 
 
     RoceSrc::setLoadBalancing(RoceSrc::LB_NMRC);
     RoceSrc::setPathEntropySize(8);
-    RoceSrc::setNmrcEvMode(RoceSrc::NMRC_EV_RANDOM_MATCHED);
     RoceSrc::setCongestionControl(RoceSrc::CC_NONE);
     RoceSrc::setTransportSemantics(RoceSrc::TRANSPORT_LEGACY);
     RoceSrc::setReceiveMode(RoceSrc::RX_SP_RETX_QUEUE);
@@ -584,7 +509,6 @@ static void test_fast_cnp_only_cools_ev_without_transport_or_cc_changes() {
 
     RoceSrc::setLoadBalancing(RoceSrc::LB_NMRC);
     RoceSrc::setPathEntropySize(8);
-    RoceSrc::setNmrcEvMode(RoceSrc::NMRC_EV_ENCODED);
     RoceSrc::setCongestionControl(RoceSrc::CC_DCQCN_VARIANT);
     RoceSrc* src = make_src(1501);
     src->_flow_started = true;
@@ -908,7 +832,6 @@ static void test_actual_path_trim_is_default_nmrc_feedback() {
     route.push_back(&sink);
 
     RoceSrc::setLoadBalancing(RoceSrc::LB_NMRC);
-    RoceSrc::setNmrcEvMode(RoceSrc::NMRC_EV_ENCODED);
     RoceSrc* src = make_src(1701);
     src->init_nmrc_evs_for_test(8);
     std::vector<uint32_t> evs = src->nmrc_ev_values_for_test();
@@ -940,36 +863,12 @@ static void test_actual_path_trim_is_default_nmrc_feedback() {
     rejected->free();
 }
 
-static void test_actual_path_trim_requires_unique_mapping() {
-    DataCaptureSink sink;
-    Route route;
-    route.push_back(&sink);
-
-    RoceSrc::setLoadBalancing(RoceSrc::LB_NMRC);
-    RoceSrc::setNmrcEvMode(RoceSrc::NMRC_EV_RANDOM32);
-    RoceSrc* src = make_src(1801);
-    src->init_nmrc_evs_for_test(8);
-    std::vector<uint32_t> evs = src->nmrc_ev_values_for_test();
-    std::vector<uint32_t> paths = src->nmrc_physical_paths_for_test();
-
-    RoceNack* ambiguous =
-        make_trim_nack(src->_flow, route, evs[0], true, paths[0]);
-    src->process_nmrc_trim_feedback(*ambiguous, true);
-    expect(src->_nmrc_trim_actual_unresolved == 1,
-           "aliased actual paths must be counted as unresolved");
-    for (uint32_t i = 0; i < evs.size(); i++)
-        expect(!src->nmrc_ev_cooling_for_test(evs[i]),
-               "an ambiguous actual path must not cool any EV");
-    ambiguous->free();
-}
-
 static void test_stateless_random_ignores_endpoint_feedback() {
     DataCaptureSink sink;
     Route route;
     route.push_back(&sink);
 
     RoceSrc::setLoadBalancing(RoceSrc::LB_NMRC);
-    RoceSrc::setNmrcEvMode(RoceSrc::NMRC_EV_ENCODED);
     RoceSrc::setNmrcEndpointPolicy(RoceSrc::NMRC_ENDPOINT_RANDOM_STATELESS);
     RoceSrc::setNmrcAllCoolingPolicy(RoceSrc::NMRC_ALL_COOLING_EARLIEST);
     RoceSrc* src = make_src(1802);
@@ -1013,7 +912,6 @@ int main() {
     test_receiver_counts_only_natural_ce_on_full_data();
     test_trim_path_metadata_resets_on_packet_reuse();
     test_actual_path_trim_is_default_nmrc_feedback();
-    test_actual_path_trim_requires_unique_mapping();
     test_stateless_random_ignores_endpoint_feedback();
     std::cout << "Hybrid n-MRC EV-state tests passed" << std::endl;
     return 0;

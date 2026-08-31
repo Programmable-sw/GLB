@@ -62,10 +62,10 @@ VARIANTS = {
     "avail_hybrid": ("avail", ("-stor_aging", "hybrid")),
     "avail_time": ("avail", ("-stor_aging", "time_ewma")),
     "nmrc_better_ge3": (
-        "n-mrc", ("-nmrc_ev_mode", "encoded", "-nmrc_reroute_policy",
+        "n-mrc", ("-nmrc_reroute_policy",
                   "better_ge3", "-nmrc_fastcnp", "on")),
     "nmrc_any_better": (
-        "n-mrc", ("-nmrc_ev_mode", "encoded", "-nmrc_reroute_policy",
+        "n-mrc", ("-nmrc_reroute_policy",
                   "any_better", "-nmrc_fastcnp", "on")),
 }
 

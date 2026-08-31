@@ -53,6 +53,11 @@ class RocePacket : public Packet {
                 p->_attempt_id = 0;
                 p->_nmrc_detour = false;
                 p->_nmrc_actual_egress = UINT32_MAX;
+                p->_has_sglb_tx_metadata = false;
+                p->_sglb_selected_path = UINT32_MAX;
+                p->_sglb_tx_candidate_epoch = 0;
+                p->_sglb_source_leaf = UINT32_MAX;
+                p->_sglb_destination_leaf = UINT32_MAX;
                 p->set_dst(destination);
                 return p;
     }
@@ -79,6 +84,11 @@ class RocePacket : public Packet {
                 p->_attempt_id = 0;
                 p->_nmrc_detour = false;
                 p->_nmrc_actual_egress = UINT32_MAX;
+                p->_has_sglb_tx_metadata = false;
+                p->_sglb_selected_path = UINT32_MAX;
+                p->_sglb_tx_candidate_epoch = 0;
+                p->_sglb_source_leaf = UINT32_MAX;
+                p->_sglb_destination_leaf = UINT32_MAX;
                 p->set_dst(destination);
                 return p;
     }
@@ -122,6 +132,24 @@ class RocePacket : public Packet {
     inline uint32_t nmrc_actual_egress() const {
         return _nmrc_actual_egress;
     }
+    inline void set_sglb_tx_metadata(uint32_t selected_path, uint64_t epoch,
+                                     uint32_t source_leaf,
+                                     uint32_t destination_leaf) {
+        _has_sglb_tx_metadata = true;
+        _sglb_selected_path = selected_path;
+        _sglb_tx_candidate_epoch = epoch;
+        _sglb_source_leaf = source_leaf;
+        _sglb_destination_leaf = destination_leaf;
+    }
+    inline bool has_sglb_tx_metadata() const {return _has_sglb_tx_metadata;}
+    inline uint32_t sglb_selected_path() const {return _sglb_selected_path;}
+    inline uint64_t sglb_tx_candidate_epoch() const {
+        return _sglb_tx_candidate_epoch;
+    }
+    inline uint32_t sglb_source_leaf() const {return _sglb_source_leaf;}
+    inline uint32_t sglb_destination_leaf() const {
+        return _sglb_destination_leaf;
+    }
     virtual PktPriority priority() const {return Packet::PRIO_LO;}
     const static int ACKSIZE=64;
  protected:
@@ -137,6 +165,11 @@ class RocePacket : public Packet {
     uint8_t _attempt_id;
     bool _nmrc_detour;
     uint32_t _nmrc_actual_egress;
+    bool _has_sglb_tx_metadata;
+    uint32_t _sglb_selected_path;
+    uint64_t _sglb_tx_candidate_epoch;
+    uint32_t _sglb_source_leaf;
+    uint32_t _sglb_destination_leaf;
     static PacketDB<RocePacket> _packetdb;
 };
 
@@ -165,6 +198,12 @@ class RoceAck : public Packet {
                 p->_old_duplicate_ack = false;
                 p->_has_delivered_psn = false;
                 p->_delivered_psn = 0;
+                p->_has_sglb_tx_metadata = false;
+                p->_sglb_selected_path = UINT32_MAX;
+                p->_sglb_tx_candidate_epoch = 0;
+                p->_sglb_source_leaf = UINT32_MAX;
+                p->_sglb_destination_leaf = UINT32_MAX;
+                p->_neutral_ecn = false;
                 p->set_dst(destination);
                 return p;
     }
@@ -208,6 +247,26 @@ class RoceAck : public Packet {
     }
     inline bool has_delivered_psn() const {return _has_delivered_psn;}
     inline seq_t delivered_psn() const {return _delivered_psn;}
+    inline void copy_sglb_tx_metadata(const RocePacket& packet) {
+        if (!packet.has_sglb_tx_metadata())
+            return;
+        _has_sglb_tx_metadata = true;
+        _sglb_selected_path = packet.sglb_selected_path();
+        _sglb_tx_candidate_epoch = packet.sglb_tx_candidate_epoch();
+        _sglb_source_leaf = packet.sglb_source_leaf();
+        _sglb_destination_leaf = packet.sglb_destination_leaf();
+    }
+    inline bool has_sglb_tx_metadata() const {return _has_sglb_tx_metadata;}
+    inline uint32_t sglb_selected_path() const {return _sglb_selected_path;}
+    inline uint64_t sglb_tx_candidate_epoch() const {
+        return _sglb_tx_candidate_epoch;
+    }
+    inline uint32_t sglb_source_leaf() const {return _sglb_source_leaf;}
+    inline uint32_t sglb_destination_leaf() const {
+        return _sglb_destination_leaf;
+    }
+    inline void set_neutral_ecn(bool neutral) {_neutral_ecn = neutral;}
+    inline bool neutral_ecn() const {return _neutral_ecn;}
     virtual PktPriority priority() const {return Packet::PRIO_HI;}
 
     virtual ~RoceAck(){}
@@ -226,6 +285,12 @@ class RoceAck : public Packet {
     bool _old_duplicate_ack;
     bool _has_delivered_psn;
     seq_t _delivered_psn;
+    bool _has_sglb_tx_metadata;
+    uint32_t _sglb_selected_path;
+    uint64_t _sglb_tx_candidate_epoch;
+    uint32_t _sglb_source_leaf;
+    uint32_t _sglb_destination_leaf;
+    bool _neutral_ecn;
     static PacketDB<RoceAck> _packetdb;
 };
 

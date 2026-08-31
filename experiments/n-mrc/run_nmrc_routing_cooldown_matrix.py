@@ -37,7 +37,6 @@ class MatrixCase(NamedTuple):
 
 
 GRADED_COMMON = (
-    "-nmrc_ev_mode", "encoded",
     "-nmrc_reroute_policy", "better_ge3",
     "-nmrc_fastcnp", "on",
 )
@@ -89,7 +88,6 @@ VARIANTS = (
     Variant(
         "fixed05", "n-mrc-fixed0.5",
         (
-            "-nmrc_ev_mode", "encoded",
             "-nmrc_fastcnp", "on",
             "-nmrc_absolute_threshold", "0.5",
             "-nmrc_relative_delta", "0.25",
@@ -102,7 +100,6 @@ VARIANTS = (
     Variant(
         "delta025", "n-mrc-delta",
         (
-            "-nmrc_ev_mode", "encoded",
             "-nmrc_fastcnp", "on",
             "-nmrc_relative_delta", "0.25",
         ),

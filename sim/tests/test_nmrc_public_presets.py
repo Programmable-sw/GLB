@@ -22,6 +22,7 @@ def forbid(haystack, needle, context):
 
 def main():
     main_roce = text("sim/datacenter/main_roce.cpp")
+    roce_h = text("sim/roce.h")
     switch_h = text("sim/datacenter/fat_tree_switch.h")
     switch_cpp = text("sim/datacenter/fat_tree_switch.cpp")
     readme = text("experiments/n-mrc/README.md")
@@ -32,10 +33,12 @@ def main():
         require(main_roce, preset, "public preset parser")
     for removed in (
         "n-mrc-allcool-rr-reset", "n-mrc1", "n-mrc2", "n-mrc4",
-        "n-mrc5", "n-mrc6", "n-mrc7",
+        "n-mrc5", "n-mrc6", "n-mrc7", "random32", "random_matched",
     ):
         forbid(usage, removed, "usage")
         forbid(main_roce, 'lb_scheme_name = "%s"' % removed, "preset parser")
+    forbid(main_roce, "-nmrc_ev_mode", "removed EV-mode CLI")
+    forbid(roce_h, "NMRC_EV_", "removed EV-mode implementation")
 
     require(main_roce, "double nmrc_absolute_threshold = 0.50",
             "fixed threshold default")

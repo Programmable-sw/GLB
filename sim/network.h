@@ -76,7 +76,7 @@ class Packet {
     
     /* empty constructor; Packet::set must always be called as
        well. It's a separate method, for convenient reuse */
-    Packet() {_is_header = false; _bounced = false; _type = IP; _flags = 0; _refcount = 0; _dst = UINT32_MAX; _pathid = UINT32_MAX; _direction = NONE; _ingressqueue = NULL;} 
+    Packet() {_is_header = false; _trim_is_lh = false; _bounced = false; _type = IP; _flags = 0; _refcount = 0; _dst = UINT32_MAX; _pathid = UINT32_MAX; _direction = NONE; _ingressqueue = NULL;}
 
     /* say "this packet is no longer wanted". (doesn't necessarily
        destroy it, so it can be reused) */
@@ -110,6 +110,8 @@ class Packet {
     void set_size(int i) {_size = i;}
     packet_type type() const {return _type;};
     bool header_only() const {return _is_header;}
+    bool trim_is_lh() const {return _trim_is_lh;}
+    void set_trim_is_lh(bool is_lh) {_trim_is_lh = is_lh;}
     bool bounced() const {return _bounced;}
     PacketFlow& flow() const {return *_flow;}
     virtual ~Packet() {};
@@ -178,6 +180,7 @@ class Packet {
     
     
     bool _is_header;
+    bool _trim_is_lh;
     bool _bounced; // packet has hit a full queue, and is being bounced back to the sender
     uint32_t _flags; // used for ECN & friends
 

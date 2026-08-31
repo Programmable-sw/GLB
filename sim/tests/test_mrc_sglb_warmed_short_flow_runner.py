@@ -59,9 +59,7 @@ def test_parsers_extract_mrc_and_sglb_mechanism_diagnostics():
         "actionable_feedback=0 feedback_age_sum_us=2 feedback_age_max_us=2 "
         "cooldown_starts=1 failure_starts=0 forced_cooling_uses=0 "
         "max_simultaneous_cooling=1 replacement_congestion=0 "
-        "post_cooldown_first_clean=0 shared_updates_published=0 "
-        "shared_updates_consumed=0 shared_updates_from_other_qps=0 "
-        "redundant_discoveries=0 post_shared_bad_ev_sends=0\n"
+        "post_cooldown_first_clean=0\n"
     )
     sglb_text = (
         "SglbRouteDiag route_calls=100 avg_available_choices=8 "

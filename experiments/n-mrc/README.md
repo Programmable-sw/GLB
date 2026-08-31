@@ -326,12 +326,7 @@ Data packet 携带实际选择的 `mrc_ev`，receiver 在 ACK/NACK 中回显该 
 
 当前不再提供 active-EV 或拥塞策略消融参数。所有 MRC 拥塞实验统一使用 64 active EV、0 backup、identity mapping 和 SKIP_ONCE。
 
-`-lb mrc-shared` 是 per-QP 状态隔离的历史单变量消融。它只共享真实 ECN/TRIM 已触发的 EV 更新；消费方仍按自身 SKIP_ONCE rotation 应用状态，cwnd、ACK、重传队列、在途字节、cursor 和完成状态均不共享。
-
-每个 RR、MRC、MRC-shared 目标流完成时仍输出 `MrcFlowDiag`。旧 active-EV/cooldown 对照 runner 已删除；历史结果只作为既有产物保留，不用于说明当前运行语义。
-
-128 节点、102 个正式单元、三个 seed 的机制结论、图表和数据入口见
-[`mrc_inherent_limitations_and_evidence.md`](mrc_inherent_limitations_and_evidence.md)。
+每个 RR、MRC 目标流完成时仍输出 `MrcFlowDiag`。旧 active-EV/cooldown 对照 runner 已删除；历史结果只作为既有产物保留，不用于说明当前运行语义。
 高压力下从短流无收益到长流开始受益的聚焦复跑见
 [`mrc_pressure_transition_example.md`](mrc_pressure_transition_example.md)。
 相同 5 ms 输入下 MRC 与默认 SGLB 的逐流严格配对结果见

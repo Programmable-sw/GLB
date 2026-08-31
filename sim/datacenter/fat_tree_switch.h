@@ -6,6 +6,7 @@
 #include "callback_pipe.h"
 #include "rocepacket.h"
 #include <set>
+#include <map>
 #include <unordered_map>
 #include <vector>
 #include <limits>
@@ -101,6 +102,30 @@ public:
         PAPER_SGLB = 8
     };
 
+    enum SglbEcnMode {
+        SGLB_ECN_OFF = 0,
+        SGLB_ECN_NEUTRAL = 1,
+        SGLB_ECN_CLEAR = 2
+    };
+
+    struct SglbCandidateState {
+        bool valid;
+        uint64_t epoch;
+        vector<uint32_t> members;
+        std::map<uint32_t, simtime_picosec> excluded_at;
+
+        SglbCandidateState() : valid(false), epoch(0) {}
+    };
+
+    static bool sglb_update_candidate_state(
+        SglbCandidateState& state, const vector<uint32_t>& candidates,
+        simtime_picosec now);
+    static bool sglb_stale_excluded(
+        const SglbCandidateState& state, uint64_t tx_epoch,
+        uint32_t selected_path);
+    static void set_sglb_ecn_mode(SglbEcnMode mode) {_sglb_ecn_mode = mode;}
+    static SglbEcnMode sglb_ecn_mode() {return _sglb_ecn_mode;}
+
     enum sticky_choices {
         PER_PACKET = 0, PER_FLOWLET = 1
     };
@@ -114,7 +139,8 @@ public:
     uint32_t adaptive_route(vector<FibEntry*>* ecmp_set, int8_t (*cmp)(FibEntry*,FibEntry*));
     uint32_t replace_worst_choice(vector<FibEntry*>* ecmp_set, int8_t (*cmp)(FibEntry*,FibEntry*),uint32_t my_choice);
     uint32_t adaptive_route_p2c(vector<FibEntry*>* ecmp_set, int8_t (*cmp)(FibEntry*,FibEntry*));
-    uint32_t sglb_route(vector<FibEntry*>* ecmp_set, uint32_t dst);
+    uint32_t sglb_route(vector<FibEntry*>* ecmp_set, uint32_t dst,
+                        vector<uint32_t>* candidates_out = NULL);
     uint32_t sglb_best_score(uint32_t dst, uint32_t depth);
     uint32_t drill_route(vector<FibEntry*>* ecmp_set, uint32_t dst);
 
@@ -964,7 +990,14 @@ public:
     static uint32_t _stor_hybrid_probe_interval_pkts;
     static uint32_t _stor_hybrid_probe_clean_promote;
     static bool _pathid_only_hash;
+    static SglbEcnMode _sglb_ecn_mode;
+    static uint64_t _sglb_ecn_total;
+    static uint64_t _sglb_ecn_stale;
+    static uint64_t _sglb_ecn_neutralized;
+    static uint64_t _sglb_ecn_cleared;
+    static uint64_t _sglb_ecn_missing_metadata;
 private:
+    std::map<uint32_t, SglbCandidateState> _sglb_candidate_states;
     struct NetawareState {
         StorFeedbackLevels levels;
         bool levels_valid;

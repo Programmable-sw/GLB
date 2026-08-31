@@ -39,7 +39,7 @@ class Switch;
 class RoceSrc : public BaseQueue, public TriggerTarget {
     friend class RoceSink;
 public:
-    typedef enum {LB_ECMP = 0, LB_REPS = 1, LB_CONWEAVE = 2, LB_NDP = 3, LB_RR = 4, LB_OPS = 5, LB_MRC = 6, LB_STOR = 7, LB_NETAWARE = 8, LB_NMRC = 9, LB_MRC_SHARED = 10} lb_mode_t;
+    typedef enum {LB_ECMP = 0, LB_REPS = 1, LB_CONWEAVE = 2, LB_NDP = 3, LB_RR = 4, LB_OPS = 5, LB_MRC = 6, LB_STOR = 7, LB_NETAWARE = 8, LB_NMRC = 9} lb_mode_t;
     typedef enum {
         CC_NONE = 0,
         CC_DCQCN_VARIANT = 1,
@@ -62,21 +62,6 @@ public:
         MRC_CONGESTION_TRIM = 1
     } mrc_congestion_signal_t;
     typedef enum {
-        MRC_SHARED_ECN = 0,
-        MRC_SHARED_TRIM = 1,
-        MRC_SHARED_FAILURE = 2
-    } mrc_shared_signal_t;
-    struct MrcSharedEvent {
-        uint64_t generation;
-        mrc_shared_signal_t signal;
-        simtime_picosec published_at;
-        flowid_t publisher_flow;
-        MrcSharedEvent()
-            : generation(0), signal(MRC_SHARED_ECN), published_at(0),
-              publisher_flow(0) {}
-    };
-    typedef std::tuple<uint32_t, uint32_t, uint32_t> MrcSharedKey;
-    typedef enum {
         NETAWARE_WRR_BUCKET = 0,
         NETAWARE_WRR_DIRECT = 1,
         NETAWARE_WRR_SHUFFLED_BUCKET = 2,
@@ -86,11 +71,6 @@ public:
         NETAWARE_WEIGHT_ADAPTATION_OFF = 0,
         NETAWARE_WEIGHT_ADAPTATION_GOOD_SHARE_CAP = 1
     } netaware_weight_adaptation_t;
-    typedef enum {
-        NMRC_EV_ENCODED = 0,
-        NMRC_EV_RANDOM_MATCHED = 1,
-        NMRC_EV_RANDOM32 = 2
-    } nmrc_ev_mode_t;
     typedef enum {
         NMRC_ENDPOINT_RR_COOLDOWN = 0,
         NMRC_ENDPOINT_RANDOM_STATELESS = 1
@@ -153,8 +133,6 @@ public:
     static void setNackInterval(simtime_picosec interval) {_nack_interval = interval;}
     static void setLoadBalancing(lb_mode_t mode) {_lb_mode = mode;}
     static void setPathEntropySize(uint32_t paths) {_path_entropy_size = paths ? paths : 1;}
-    static void setNmrcEvMode(nmrc_ev_mode_t mode);
-    static nmrc_ev_mode_t nmrcEvMode();
     static void setNmrcEvSeed(uint32_t seed);
     static uint32_t nmrcEvSeed();
     static void setNmrcEndpointPolicy(nmrc_endpoint_policy_t policy);
@@ -181,7 +159,6 @@ public:
     static uint64_t netawareAllZeroProfiles() {return _netaware_all_zero_profiles;}
     static uint64_t storAllZeroSelections() {return _stor_all_zero_selections;}
     static uint64_t netawareAllZeroSelections() {return _netaware_all_zero_selections;}
-    static void resetMrcSharedState();
     static void setStorBinarySelector(bool enabled) {_stor_binary_selector = enabled;}
     static bool storBinarySelector() {return _stor_binary_selector;}
     static void setStorLevelWeights(uint32_t good, uint32_t degraded,
@@ -380,6 +357,7 @@ public:
     uint32_t _nacks_received;
     uint32_t _ooo_nacks_received;
     uint32_t _trim_nacks_received;
+    uint32_t _trim_lh_nacks_received;
     uint32_t _loss_nacks_received;
     uint32_t _ecn_echo_acks_received;
     uint32_t _duplicate_acks_received;
@@ -523,7 +501,6 @@ public:
     static lb_mode_t _lb_mode;
     lb_mode_t _flow_lb_mode;
     static uint32_t _path_entropy_size;
-    static nmrc_ev_mode_t _nmrc_ev_mode;
     static uint32_t _nmrc_ev_seed;
     static nmrc_endpoint_policy_t _nmrc_endpoint_policy;
     static nmrc_all_cooling_policy_t _nmrc_all_cooling_policy;
@@ -641,14 +618,7 @@ private:
     std::array<uint64_t, 64> fast_cnp_isolation_snapshot() const;
     void update_stor(const RoceAck& ack);
     void update_stor(const RoceNack& nack);
-    bool mrc_path_state_enabled() const {
-        return _flow_lb_mode == LB_MRC ||
-               _flow_lb_mode == LB_MRC_SHARED;
-    }
-    bool mrc_shared_feedback_enabled() const {
-        return _flow_lb_mode == LB_MRC_SHARED;
-    }
-    MrcSharedKey mrc_shared_key(uint32_t ev) const;
+    bool mrc_path_state_enabled() const { return _flow_lb_mode == LB_MRC; }
     std::vector<uint32_t> build_mrc_ev_order(uint32_t path_space) const;
     void reset_rr_paths();
     void init_rr_paths(uint32_t path_space);
@@ -668,16 +638,12 @@ private:
     MrcChoice choose_mrc_skip_ev(uint32_t path_space);
     MrcChoice choose_mrc_retx_ev(uint32_t path_space,
                                  uint32_t original_logical_ev);
-    void publish_mrc_shared(uint32_t ev, mrc_shared_signal_t signal);
-    void consume_mrc_shared();
     void reset_mrc_flow_metrics();
     void mrc_flow_note_new_selection(uint32_t ev);
     void mrc_flow_note_quality_feedback();
     void mrc_flow_note_effective_update(
         uint32_t ev, RocePacket::seq_t sequence,
         bool failure, bool replacement_congestion);
-    void mrc_flow_note_local_signal(
-        uint32_t ev, mrc_shared_signal_t signal);
     simtime_picosec mrc_feedback_send_time(
         RocePacket::seq_t sequence, uint32_t ev) const;
     void emit_mrc_flow_diag();
@@ -798,11 +764,6 @@ private:
         uint64_t max_simultaneous_cooling;
         uint64_t replacement_congestion;
         uint64_t post_cooldown_first_clean;
-        uint64_t shared_updates_published;
-        uint64_t shared_updates_consumed;
-        uint64_t shared_updates_from_other_qps;
-        uint64_t redundant_discoveries;
-        uint64_t post_shared_bad_ev_sends;
         uint32_t active_evs;
         bool first_full_sweep_set;
         bool first_state_update_set;
@@ -830,11 +791,6 @@ private:
             max_simultaneous_cooling = 0;
             replacement_congestion = 0;
             post_cooldown_first_clean = 0;
-            shared_updates_published = 0;
-            shared_updates_consumed = 0;
-            shared_updates_from_other_qps = 0;
-            redundant_discoveries = 0;
-            post_shared_bad_ev_sends = 0;
             active_evs = 0;
             first_full_sweep_set = false;
             first_state_update_set = false;
@@ -910,7 +866,6 @@ private:
     uint32_t _reps_explore_remaining;
     static std::map<std::pair<uint32_t, uint32_t>, SharedWeightedProfile> _stor_shared_profiles;
     static std::map<std::pair<uint32_t, uint32_t>, SharedWeightedProfile> _netaware_shared_profiles;
-    static std::map<MrcSharedKey, MrcSharedEvent> _mrc_shared_events;
     static std::array<uint32_t, 4> _stor_level_weights;
     static std::array<uint32_t, 4> _netaware_level_weights;
     static uint64_t _stor_level_transitions[4][4];
@@ -951,12 +906,10 @@ private:
     bool _mrc_paths_ready;
     std::map<RocePacket::seq_t, uint32_t> _mrc_seq_ev;
     std::map<RocePacket::seq_t, simtime_picosec> _mrc_seq_sent_at;
-    std::map<uint32_t, uint64_t> _mrc_shared_consumed;
     MrcFlowMetrics _mrc_flow_metrics;
     std::vector<NmrcEv> _nmrc_evs;
     uint32_t _nmrc_cursor;
     uint32_t _nmrc_path_space;
-    nmrc_ev_mode_t _nmrc_initialized_mode;
     bool _nmrc_evs_ready;
     uint64_t _nmrc_select_ordinal;
     bool _nmrc_all_cooling_rr_active;
@@ -1080,7 +1033,8 @@ private:
                         RocePacket::seq_t missing_psn = 0,
                         uint8_t missing_attempt_id = 0,
                         bool nmrc_detour = false,
-                        uint32_t nmrc_actual_egress = UINT32_MAX);
+                        uint32_t nmrc_actual_egress = UINT32_MAX,
+                        bool trim_is_lh = false);
     void build_sack_bitmap(RocePacket::seq_t ackno, uint64_t& sack_bitmap_low,
                            uint64_t& sack_bitmap_high,
                            RocePacket::seq_t& sack_bitmap_start_psn,

@@ -128,6 +128,3 @@ The validation report will include:
 - completion and FCT checks;
 - the existing-workload smoke-test result;
 - a clear conclusion on whether RR is now a valid stateless MRC control.
-
-This stage does not implement MRC-shared and does not run the full limitation
-experiment matrix.

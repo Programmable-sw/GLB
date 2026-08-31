@@ -988,7 +988,6 @@ def write_report(summary, paired, out, sample_scale):
         "",
         "## 后续建议",
         "",
-        "- 若要严格量化‘共享状态’本身的因果贡献，下一步应实现只共享 `(source NIC, destination ToR, EV)` 质量状态、其他 MRC 机制完全不变的 MRC-shared 消融；不能直接用 SGLB 差值替代。",
         "- 用带 barrier 的真实 collective workload 复现实验后，才能报告 straggler 和 CCT；当前结果只回答单 flow FCT 与 QP 冷启动。",
         "- 可增加 300、350、375 Gbit/s 三档背景压力，估计冷启动代价随剩余 headroom 的响应曲线，而不是只报告 390 Gbit/s 单点。",
         "",

@@ -19,6 +19,7 @@ Packet::set_attrs(PacketFlow& flow, int pkt_size, packetid_t id){
     //_detour = NULL;
     _route = 0;
     _is_header = 0;
+    _trim_is_lh = false;
     _flags = 0;
     _next_routed_hop = 0;
 }
@@ -35,6 +36,7 @@ Packet::set_route(PacketFlow& flow, const Route &route, int pkt_size,
     //_detour = NULL;
     _route = &route;
     _is_header = 0;
+    _trim_is_lh = false;
     _flags = 0;
 }
 

@@ -907,6 +907,7 @@ void FatTreeTopology::init_network(){
                 }
             
                 queues_nlp_ns[tor][srv][b] = alloc_queue(queueLogger, _queue_down[TOR_TIER], DOWNLINK, TOR_TIER, true);
+                queues_nlp_ns[tor][srv][b]->set_last_hop();
                 queues_nlp_ns[tor][srv][b]->setName("LS" + ntoa(tor) + "->DST" +ntoa(srv) + "(" + ntoa(b) + ")");
                 //if (logfile) logfile->writeName(*(queues_nlp_ns[tor][srv]));
                 simtime_picosec hop_latency = (_hop_latency == 0) ? _link_latencies[TOR_TIER] : _hop_latency;

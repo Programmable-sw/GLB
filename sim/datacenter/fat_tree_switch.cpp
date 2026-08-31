@@ -1235,6 +1235,13 @@ simtime_picosec FatTreeSwitch::_stor_hybrid_avoid_hold = timeFromUs(20.0);
 uint32_t FatTreeSwitch::_stor_hybrid_probe_interval_pkts = 64;
 uint32_t FatTreeSwitch::_stor_hybrid_probe_clean_promote = 2;
 bool FatTreeSwitch::_pathid_only_hash = false;
+FatTreeSwitch::SglbEcnMode FatTreeSwitch::_sglb_ecn_mode =
+    FatTreeSwitch::SGLB_ECN_OFF;
+uint64_t FatTreeSwitch::_sglb_ecn_total = 0;
+uint64_t FatTreeSwitch::_sglb_ecn_stale = 0;
+uint64_t FatTreeSwitch::_sglb_ecn_neutralized = 0;
+uint64_t FatTreeSwitch::_sglb_ecn_cleared = 0;
+uint64_t FatTreeSwitch::_sglb_ecn_missing_metadata = 0;
 
 void FatTreeSwitch::set_stor_score_profile(StorScoreProfile profile) {
     _stor_score_profile = profile;
@@ -1666,6 +1673,11 @@ void FatTreeSwitch::reset_sglb_route_diag() {
         _sglb_diag_selected_levels[level] = 0;
     }
     _sglb_diag_score_spread_sum = 0.0;
+    _sglb_ecn_total = 0;
+    _sglb_ecn_stale = 0;
+    _sglb_ecn_neutralized = 0;
+    _sglb_ecn_cleared = 0;
+    _sglb_ecn_missing_metadata = 0;
 }
 
 void FatTreeSwitch::reset_nmrc_hybrid_diag() {
@@ -3457,7 +3469,38 @@ uint32_t FatTreeSwitch::sglb_best_score(uint32_t dst, uint32_t depth) {
     return best == std::numeric_limits<double>::max() ? 0 : (uint32_t)best;
 }
 
-uint32_t FatTreeSwitch::sglb_route(vector<FibEntry*>* ecmp_set, uint32_t dst) {
+bool FatTreeSwitch::sglb_update_candidate_state(
+        SglbCandidateState& state, const vector<uint32_t>& candidates,
+        simtime_picosec now) {
+    vector<uint32_t> members = candidates;
+    std::sort(members.begin(), members.end());
+    members.erase(std::unique(members.begin(), members.end()), members.end());
+    if (!state.valid) {
+        state.valid = true;
+        state.members = members;
+        return false;
+    }
+    if (state.members == members)
+        return false;
+    for (size_t i = 0; i < state.members.size(); ++i) {
+        if (!std::binary_search(members.begin(), members.end(), state.members[i]))
+            state.excluded_at[state.members[i]] = now;
+    }
+    state.members = members;
+    state.epoch++;
+    return true;
+}
+
+bool FatTreeSwitch::sglb_stale_excluded(
+        const SglbCandidateState& state, uint64_t tx_epoch,
+        uint32_t selected_path) {
+    return state.valid && tx_epoch < state.epoch &&
+        !std::binary_search(
+            state.members.begin(), state.members.end(), selected_path);
+}
+
+uint32_t FatTreeSwitch::sglb_route(vector<FibEntry*>* ecmp_set, uint32_t dst,
+                                   vector<uint32_t>* candidates_out) {
     vector<uint8_t> qualities(ecmp_set->size(), 255);
     vector<double> scores(ecmp_set->size(), 0.0);
     vector<bool> available(ecmp_set->size(), false);
@@ -3558,8 +3601,16 @@ uint32_t FatTreeSwitch::sglb_route(vector<FibEntry*>* ecmp_set, uint32_t dst) {
         }
     }
 
-    if (best_choices.empty())
+    if (best_choices.empty()) {
+        if (candidates_out) {
+            candidates_out->resize(ecmp_set->size());
+            for (uint32_t i = 0; i < ecmp_set->size(); ++i)
+                (*candidates_out)[i] = i;
+        }
         return random() % ecmp_set->size();
+    }
+    if (candidates_out)
+        *candidates_out = best_choices;
     uint32_t selected = use_shuffled_rr ?
         sglb_shuffled_rr_select(
             best_choices, _id, rr_dst_tor, rr_quality_signature,
@@ -4502,6 +4553,35 @@ Route* FatTreeSwitch::getNextHop(Packet& pkt, BaseQueue* ingress_port){
         leaf_routing ? _ft->HOST_POD_SWITCH(pkt.dst()) : 0;
     const bool directly_connected =
         leaf_routing && _type == TOR && destination_leaf == _id;
+    if (_sglb_ecn_mode != SGLB_ECN_OFF && directly_connected &&
+        pkt.type() == ROCEACK) {
+        RoceAck& ack = (RoceAck&)pkt;
+        if (ack.flags() & ECN_ECHO) {
+            if (!ack.has_sglb_tx_metadata() ||
+                ack.sglb_source_leaf() != _id) {
+                _sglb_ecn_missing_metadata++;
+            } else {
+                _sglb_ecn_total++;
+                std::map<uint32_t, SglbCandidateState>::iterator state_it =
+                    _sglb_candidate_states.find(
+                        ack.sglb_destination_leaf());
+                if (state_it != _sglb_candidate_states.end() &&
+                    sglb_stale_excluded(
+                        state_it->second,
+                        ack.sglb_tx_candidate_epoch(),
+                        ack.sglb_selected_path())) {
+                    _sglb_ecn_stale++;
+                    if (_sglb_ecn_mode == SGLB_ECN_NEUTRAL) {
+                        ack.set_neutral_ecn(true);
+                        _sglb_ecn_neutralized++;
+                    } else if (_sglb_ecn_mode == SGLB_ECN_CLEAR) {
+                        ack.set_flags(ack.flags() & ~ECN_ECHO);
+                        _sglb_ecn_cleared++;
+                    }
+                }
+            }
+        }
+    }
     vector<FibEntry*> * available_hops =
         leaf_routing && !directly_connected ?
             _fib->getLeafRoutes(destination_leaf) :
@@ -4518,6 +4598,8 @@ Route* FatTreeSwitch::getNextHop(Packet& pkt, BaseQueue* ingress_port){
                 _ft->HOST_POD_SWITCH(pkt.dst()));
         //implement a form of ECMP hashing; might need to revisit based on measured performance.
         uint32_t ecmp_choice = 0;
+        vector<uint32_t> sglb_candidates;
+        bool used_sglb_candidates = false;
         if (available_hops->size()>1)
             switch(_strategy){
             case NIX:
@@ -4599,8 +4681,11 @@ Route* FatTreeSwitch::getNextHop(Packet& pkt, BaseQueue* ingress_port){
                     ecmp_choice = pathid_ecmp_choice(
                         pkt, available_hops->size(),
                         (*available_hops)[0]->getDirection());
-                else
-                    ecmp_choice = sglb_route(available_hops, pkt.dst());
+                else {
+                    ecmp_choice = sglb_route(
+                        available_hops, pkt.dst(), &sglb_candidates);
+                    used_sglb_candidates = true;
+                }
                 break;
             case PAPER_SGLB:
                 if (pkt.flow().background_traffic() &&
@@ -4628,6 +4713,15 @@ Route* FatTreeSwitch::getNextHop(Packet& pkt, BaseQueue* ingress_port){
         
         FibEntry* e = (*available_hops)[ecmp_choice];
         pkt.set_direction(e->getDirection());
+        if (used_sglb_candidates && _type == TOR &&
+            e->getDirection() == UP && pkt.type() == ROCE) {
+            SglbCandidateState& state =
+                _sglb_candidate_states[destination_leaf];
+            sglb_update_candidate_state(
+                state, sglb_candidates, eventlist().now());
+            ((RocePacket&)pkt).set_sglb_tx_metadata(
+                ecmp_choice, state.epoch, _id, destination_leaf);
+        }
         
         return e->getEgressPort();
     }

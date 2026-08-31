@@ -96,9 +96,7 @@ def test_phase_parser_requires_selection_timing_fields():
         "actionable_feedback=1 feedback_age_sum_us=2 feedback_age_max_us=2 "
         "cooldown_starts=1 failure_starts=0 forced_cooling_uses=0 "
         "max_simultaneous_cooling=1 replacement_congestion=0 "
-        "post_cooldown_first_clean=0 shared_updates_published=0 "
-        "shared_updates_consumed=0 shared_updates_from_other_qps=0 "
-        "redundant_discoveries=0 post_shared_bad_ev_sends=0\n"
+        "post_cooldown_first_clean=0\n"
     )
 
     parsed = runner.parse_mrc_phase_diags(text)

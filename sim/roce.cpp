@@ -85,7 +85,6 @@ uint32_t RoceSrc::_ooo_window_pkts = 32;
 simtime_picosec RoceSrc::_nack_interval = timeFromUs(4.0);
 RoceSrc::lb_mode_t RoceSrc::_lb_mode = RoceSrc::LB_ECMP;
 uint32_t RoceSrc::_path_entropy_size = 256;
-RoceSrc::nmrc_ev_mode_t RoceSrc::_nmrc_ev_mode = RoceSrc::NMRC_EV_ENCODED;
 uint32_t RoceSrc::_nmrc_ev_seed = 1;
 RoceSrc::nmrc_endpoint_policy_t RoceSrc::_nmrc_endpoint_policy =
     RoceSrc::NMRC_ENDPOINT_RR_COOLDOWN;
@@ -121,8 +120,6 @@ std::map<std::pair<uint32_t, uint32_t>, RoceSrc::SharedWeightedProfile>
     RoceSrc::_stor_shared_profiles;
 std::map<std::pair<uint32_t, uint32_t>, RoceSrc::SharedWeightedProfile>
     RoceSrc::_netaware_shared_profiles;
-std::map<RoceSrc::MrcSharedKey, RoceSrc::MrcSharedEvent>
-    RoceSrc::_mrc_shared_events;
 std::array<uint32_t, 4> RoceSrc::_stor_level_weights = {{4, 2, 1, 0}};
 std::array<uint32_t, 4> RoceSrc::_netaware_level_weights = {{4, 2, 1, 0}};
 uint64_t RoceSrc::_stor_level_transitions[4][4] = {{0}};
@@ -196,14 +193,6 @@ const char* RoceSrc::netawareWeightAdaptationName() {
     if (_netaware_weight_adaptation == NETAWARE_WEIGHT_ADAPTATION_GOOD_SHARE_CAP)
         return "good_share_cap";
     return "off";
-}
-
-void RoceSrc::setNmrcEvMode(nmrc_ev_mode_t mode) {
-    _nmrc_ev_mode = mode;
-}
-
-RoceSrc::nmrc_ev_mode_t RoceSrc::nmrcEvMode() {
-    return _nmrc_ev_mode;
 }
 
 void RoceSrc::setNmrcEvSeed(uint32_t seed) {
@@ -317,6 +306,7 @@ RoceSrc::RoceSrc(RoceLogger* logger, TrafficLogger* pktlogger, EventList &eventl
     _nacks_received = 0;
     _ooo_nacks_received = 0;
     _trim_nacks_received = 0;
+    _trim_lh_nacks_received = 0;
     _loss_nacks_received = 0;
     _ecn_echo_acks_received = 0;
     _duplicate_acks_received = 0;
@@ -460,7 +450,6 @@ RoceSrc::RoceSrc(RoceLogger* logger, TrafficLogger* pktlogger, EventList &eventl
     _mrc_paths_ready = false;
     _nmrc_cursor = 0;
     _nmrc_path_space = 0;
-    _nmrc_initialized_mode = _nmrc_ev_mode;
     _nmrc_evs_ready = false;
     _nmrc_select_ordinal = 0;
     _nmrc_all_cooling_rr_active = false;
@@ -1155,6 +1144,8 @@ void RoceSrc::processNack(const RoceNack& nack){
         break;
     case RoceNack::TRIM:
         _trim_nacks_received++;
+        if (nack.trim_is_lh())
+            _trim_lh_nacks_received++;
         break;
     case RoceNack::LOSS:
         _loss_nacks_received++;
@@ -1422,7 +1413,8 @@ void RoceSrc::processAck(const RoceAck& ack) {
         }
     }
 
-    update_congestion_control_on_ack(ack, newly_acked_pkts);
+    if (!ack.neutral_ecn())
+        update_congestion_control_on_ack(ack, newly_acked_pkts);
     trace_cc_state("ack_post", ackno, -1, ack.is_duplicate_ack(),
                    ack.is_old_duplicate_ack(), ack.flags() & ECN_ECHO,
                    newly_acked_pkts);
@@ -1527,78 +1519,6 @@ static bool all_profile_weights_zero(
     return true;
 }
 
-void RoceSrc::resetMrcSharedState() {
-    _mrc_shared_events.clear();
-}
-
-RoceSrc::MrcSharedKey RoceSrc::mrc_shared_key(uint32_t ev) const {
-    uint32_t hosts_per_tor = _hosts_per_tor ? _hosts_per_tor : 1;
-    uint32_t source_nic =
-        _srcaddr == UINT32_MAX ? _node_num : _srcaddr;
-    uint32_t destination =
-        _dstaddr == UINT32_MAX ? 0 : _dstaddr;
-    return std::make_tuple(source_nic, destination / hosts_per_tor, ev);
-}
-
-void RoceSrc::publish_mrc_shared(uint32_t ev,
-                                 mrc_shared_signal_t signal) {
-    if (!mrc_path_state_enabled())
-        return;
-    MrcSharedEvent& shared = _mrc_shared_events[mrc_shared_key(ev)];
-    shared.generation++;
-    shared.signal = signal;
-    shared.published_at = eventlist().now();
-    shared.publisher_flow = flow_id();
-    _mrc_shared_consumed[ev] = shared.generation;
-    _mrc_flow_metrics.shared_updates_published++;
-    cout << "MrcSharedEventDiag"
-         << " time_us=" << timeAsUs(shared.published_at)
-         << " flow_id=" << flow_id()
-         << " src=" << (_srcaddr == UINT32_MAX ? _node_num : _srcaddr)
-         << " dst_tor="
-         << ((_dstaddr == UINT32_MAX ? 0 : _dstaddr) /
-             (_hosts_per_tor ? _hosts_per_tor : 1))
-         << " ev=" << ev
-         << " signal=" << (uint32_t)signal
-         << " generation=" << shared.generation
-         << endl;
-}
-
-void RoceSrc::consume_mrc_shared() {
-    if (!mrc_shared_feedback_enabled())
-        return;
-    for (uint32_t ev = 0; ev < _mrc_evs.size(); ev++) {
-        std::map<MrcSharedKey, MrcSharedEvent>::const_iterator it =
-            _mrc_shared_events.find(mrc_shared_key(ev));
-        if (it == _mrc_shared_events.end())
-            continue;
-        const MrcSharedEvent& shared = it->second;
-        uint64_t consumed = _mrc_shared_consumed[ev];
-        if (shared.generation <= consumed)
-            continue;
-        _mrc_shared_consumed[ev] = shared.generation;
-        _mrc_flow_metrics.shared_updates_consumed++;
-        if (shared.publisher_flow != flow_id())
-            _mrc_flow_metrics.shared_updates_from_other_qps++;
-        bool replacement = false;
-        for (uint32_t i = 0; i < _mrc_evs.size(); i++)
-            replacement = replacement ||
-                (i != ev &&
-                 _mrc_evs[i].state == MRC_PATH_COOLING);
-        bool changed = false;
-        if (shared.signal == MRC_SHARED_FAILURE)
-            changed = mrc_mark_failed(ev);
-        else
-            changed = mrc_mark_congested(
-                ev, shared.signal == MRC_SHARED_TRIM ?
-                    MRC_CONGESTION_TRIM : MRC_CONGESTION_ECN);
-        if (changed)
-            mrc_flow_note_effective_update(
-                ev, 0, shared.signal == MRC_SHARED_FAILURE,
-                replacement);
-    }
-}
-
 void RoceSrc::reset_mrc_flow_metrics() {
     _mrc_flow_metrics.reset();
     _mrc_flow_metrics.start_time = eventlist().now();
@@ -1629,12 +1549,6 @@ void RoceSrc::mrc_flow_note_new_selection(uint32_t ev) {
         }
     }
 
-    std::map<MrcSharedKey, MrcSharedEvent>::const_iterator it =
-        _mrc_shared_events.find(mrc_shared_key(ev));
-    if (it != _mrc_shared_events.end() &&
-        it->second.publisher_flow != flow_id() &&
-        it->second.generation > _mrc_shared_consumed[ev])
-        metrics.post_shared_bad_ev_sends++;
 }
 
 void RoceSrc::mrc_flow_note_quality_feedback() {
@@ -1688,16 +1602,6 @@ void RoceSrc::mrc_flow_note_effective_update(
         std::max(metrics.max_simultaneous_cooling, cooling);
 }
 
-void RoceSrc::mrc_flow_note_local_signal(
-        uint32_t ev, mrc_shared_signal_t signal) {
-    std::map<MrcSharedKey, MrcSharedEvent>::const_iterator it =
-        _mrc_shared_events.find(mrc_shared_key(ev));
-    if (it != _mrc_shared_events.end() &&
-        it->second.publisher_flow != flow_id() &&
-        it->second.signal >= signal)
-        _mrc_flow_metrics.redundant_discoveries++;
-}
-
 void RoceSrc::emit_mrc_flow_diag() {
     if (_mrc_flow_metrics.emitted || background_traffic() ||
         (_flow_lb_mode != LB_RR && !mrc_path_state_enabled()))
@@ -1745,15 +1649,6 @@ void RoceSrc::emit_mrc_flow_diag() {
          << " replacement_congestion=" << metrics.replacement_congestion
          << " post_cooldown_first_clean="
          << metrics.post_cooldown_first_clean
-         << " shared_updates_published="
-         << metrics.shared_updates_published
-         << " shared_updates_consumed="
-         << metrics.shared_updates_consumed
-         << " shared_updates_from_other_qps="
-         << metrics.shared_updates_from_other_qps
-         << " redundant_discoveries=" << metrics.redundant_discoveries
-         << " post_shared_bad_ev_sends="
-         << metrics.post_shared_bad_ev_sends
          << endl;
 }
 
@@ -2543,7 +2438,6 @@ void RoceSrc::reset_nmrc_evs() {
     _nmrc_evs.clear();
     _nmrc_cursor = 0;
     _nmrc_path_space = 0;
-    _nmrc_initialized_mode = _nmrc_ev_mode;
     _nmrc_evs_ready = false;
     _nmrc_select_ordinal = 0;
     reset_nmrc_all_cooling_rr_episode();
@@ -2552,55 +2446,26 @@ void RoceSrc::reset_nmrc_evs() {
 void RoceSrc::init_nmrc_evs(uint32_t path_space) {
     if (path_space == 0)
         path_space = 1;
-    if (_nmrc_evs_ready && _nmrc_path_space == path_space &&
-        _nmrc_initialized_mode == _nmrc_ev_mode)
+    if (_nmrc_evs_ready && _nmrc_path_space == path_space)
         return;
 
     reset_nmrc_evs();
     _nmrc_path_space = path_space;
-    _nmrc_initialized_mode = _nmrc_ev_mode;
-
-    uint32_t set_size = _nmrc_ev_mode == NMRC_EV_RANDOM32 ?
-        32 : std::min(path_space, 32U);
+    uint32_t set_size = std::min(path_space, 64U);
     uint32_t src = _srcaddr == UINT32_MAX ? _node_num : _srcaddr;
     uint32_t dst = _dstaddr == UINT32_MAX ?
         (_node_num ^ 0x5bd1e995) : _dstaddr;
     uint32_t qp_key = selector_mix(src, dst, _flow.flow_id());
-    uint32_t mode_tag = _nmrc_ev_mode == NMRC_EV_ENCODED ?
-        0x454e4300 : 0x524e4400;
     uint32_t seed = selector_mix(_nmrc_ev_seed, qp_key,
-                                 mode_tag ^ set_size ^ path_space);
+                                 0x454e4300 ^ set_size ^ path_space);
     uint32_t counter = 0;
 
-    if (_nmrc_ev_mode == NMRC_EV_ENCODED) {
-        uint32_t encodable_paths = std::min(path_space, 65536U);
-        std::vector<uint32_t> candidates(encodable_paths);
-        for (uint32_t i = 0; i < encodable_paths; i++)
-            candidates[i] = i;
-        set_size = std::min(set_size, encodable_paths);
-        for (uint32_t i = 0; i < set_size; i++) {
-            uint32_t remaining = encodable_paths - i;
-            uint32_t ix = i + (nmrc_local_next(seed, counter) % remaining);
-            std::swap(candidates[i], candidates[ix]);
-        }
-        for (uint32_t i = 0; i < set_size; i++)
-            _nmrc_evs.push_back(NmrcEv(candidates[i], candidates[i]));
-    } else {
-        std::set<uint32_t> used;
-        while (_nmrc_evs.size() < set_size) {
-            uint32_t ev = nmrc_local_next(seed, counter) & 0xffffU;
-            if (!used.insert(ev).second)
-                continue;
-            uint32_t physical = selector_mix(
-                ev, src ^ _nmrc_ev_seed,
-                dst ^ _flow.flow_id() ^ 0x70617468) % path_space;
-            _nmrc_evs.push_back(NmrcEv(ev, physical));
-        }
-        for (uint32_t i = 0; i < _nmrc_evs.size(); i++) {
-            uint32_t remaining = (uint32_t)_nmrc_evs.size() - i;
-            uint32_t ix = i + (nmrc_local_next(seed, counter) % remaining);
-            std::swap(_nmrc_evs[i], _nmrc_evs[ix]);
-        }
+    for (uint32_t i = 0; i < set_size; i++)
+        _nmrc_evs.push_back(NmrcEv(i, i));
+    for (uint32_t i = 0; i < _nmrc_evs.size(); i++) {
+        uint32_t remaining = (uint32_t)_nmrc_evs.size() - i;
+        uint32_t ix = i + (nmrc_local_next(seed, counter) % remaining);
+        std::swap(_nmrc_evs[i], _nmrc_evs[ix]);
     }
 
     _nmrc_evs_ready = true;
@@ -2904,7 +2769,6 @@ void RoceSrc::reset_mrc_paths() {
     _mrc_paths_ready = false;
     _mrc_seq_ev.clear();
     _mrc_seq_sent_at.clear();
-    _mrc_shared_consumed.clear();
     _mrc_select_counter = 0;
     _mrc_rotation = 0;
     _mrc_rotation_slot = 0;
@@ -3069,7 +2933,6 @@ uint32_t RoceSrc::choose_mrc_path(uint32_t path_space) {
 
 RoceSrc::MrcChoice RoceSrc::choose_mrc_ev(uint32_t path_space) {
     init_mrc_paths(path_space);
-    consume_mrc_shared();
     sample_mrc_state_counts();
     return choose_mrc_skip_ev(path_space);
 }
@@ -3121,7 +2984,6 @@ RoceSrc::MrcChoice RoceSrc::choose_mrc_retx_ev(uint32_t path_space,
                                                uint32_t original_logical_ev) {
     (void)original_logical_ev;
     init_mrc_paths(path_space);
-    consume_mrc_shared();
     return choose_mrc_skip_ev(path_space);
 }
 
@@ -3222,7 +3084,6 @@ void RoceSrc::update_mrc_on_ack(const RoceAck& ack) {
             ack.ackno(), ack.pathid());
         if (ev != UINT32_MAX) {
             mrc_flow_note_quality_feedback();
-            mrc_flow_note_local_signal(ev, MRC_SHARED_ECN);
             bool replacement = false;
             for (uint32_t i = 0; i < _mrc_evs.size(); i++)
                 replacement = replacement ||
@@ -3231,7 +3092,6 @@ void RoceSrc::update_mrc_on_ack(const RoceAck& ack) {
             if (mrc_mark_congested(ev, MRC_CONGESTION_ECN)) {
                 mrc_flow_note_effective_update(
                     ev, ack.ackno(), false, replacement);
-                publish_mrc_shared(ev, MRC_SHARED_ECN);
             }
         }
     } else {
@@ -3254,13 +3114,16 @@ void RoceSrc::update_mrc_on_nack(const RoceNack& nack) {
         _mrc_trim_events++;
         _mrc_trim_physical_hist[nack.pathid() % path_space]++;
         _mrc_nack_physical_hist[nack.pathid() % path_space]++;
+        if (nack.trim_is_lh()) {
+            sample_mrc_state_counts();
+            return;
+        }
         _mrc_trim_cooling_events++;
         uint32_t ev = mrc_resolve_encoded_feedback_ev(
             nack.has_mrc_ev() ? nack.mrc_ev() : UINT32_MAX,
             first_missing, nack.pathid());
         if (ev != UINT32_MAX) {
             mrc_flow_note_quality_feedback();
-            mrc_flow_note_local_signal(ev, MRC_SHARED_TRIM);
             bool replacement = false;
             for (uint32_t i = 0; i < _mrc_evs.size(); i++)
                 replacement = replacement ||
@@ -3269,7 +3132,6 @@ void RoceSrc::update_mrc_on_nack(const RoceNack& nack) {
             if (mrc_mark_congested(ev, MRC_CONGESTION_TRIM)) {
                 mrc_flow_note_effective_update(
                     ev, first_missing, false, replacement);
-                publish_mrc_shared(ev, MRC_SHARED_TRIM);
             }
         }
         sample_mrc_state_counts();
@@ -3299,11 +3161,9 @@ void RoceSrc::update_mrc_on_nack(const RoceNack& nack) {
         first_missing, nack.pathid());
     if (ev != UINT32_MAX) {
         mrc_flow_note_quality_feedback();
-        mrc_flow_note_local_signal(ev, MRC_SHARED_FAILURE);
         if (mrc_mark_failed(ev)) {
             mrc_flow_note_effective_update(
                 ev, first_missing, true, false);
-            publish_mrc_shared(ev, MRC_SHARED_FAILURE);
         }
     }
     sample_mrc_state_counts();
@@ -3322,12 +3182,9 @@ void RoceSrc::update_mrc_on_rto() {
         if (it != _mrc_seq_ev.end() && it->second < _mrc_evs.size()) {
             _mrc_rto_fail_events++;
             mrc_flow_note_quality_feedback();
-            mrc_flow_note_local_signal(
-                it->second, MRC_SHARED_FAILURE);
             if (mrc_mark_failed(it->second)) {
                 mrc_flow_note_effective_update(
                     it->second, first_missing, true, false);
-                publish_mrc_shared(it->second, MRC_SHARED_FAILURE);
             }
         }
         sample_mrc_state_counts();
@@ -4191,7 +4048,7 @@ void RoceSink::receivePacket(Packet& pkt) {
                   has_sack, RoceNack::TRIM, bitmap_high, sack_start_psn,
                   sack_valid_length, p->mrc_ev(), p->seqno(),
                   p->attempt_id(), p->nmrc_detour(),
-                  p->nmrc_actual_egress());
+                  p->nmrc_actual_egress(), p->trim_is_lh());
         pkt.flow().logTraffic(pkt,*this,TrafficLogger::PKT_RCVDESTROY);
         pkt.free();
         return;
@@ -4307,6 +4164,7 @@ void RoceSink::send_ack(const RocePacket& pkt, simtime_picosec ts,
     if (_log_me)
         cout << "Sink " << get_id() << " sending ack " << _cumulative_ack << endl;
     ack->set_pathid(pkt.path_id());
+    ack->copy_sglb_tx_metadata(pkt);
     if (pkt.has_mrc_ev())
         ack->set_mrc_ev(pkt.mrc_ev());
     ack->set_duplicate_ack(duplicate_ack);
@@ -4392,7 +4250,8 @@ RoceNack* RoceSink::send_nack(simtime_picosec ts, RocePacket::seq_t ackno, uint3
                               RocePacket::seq_t missing_psn,
                               uint8_t missing_attempt_id,
                               bool nmrc_detour,
-                              uint32_t nmrc_actual_egress) {
+                              uint32_t nmrc_actual_egress,
+                              bool trim_is_lh) {
     RoceNack *nack = NULL;
     nack = RoceNack::newpkt(_src->_flow, *_route, ackno,_srcaddr,sack_bitmap,
                             sack_offset, has_sack, sack_bitmap_high,
@@ -4420,6 +4279,7 @@ RoceNack* RoceSink::send_nack(simtime_picosec ts, RocePacket::seq_t ackno, uint3
     if (nmrc_actual_egress != UINT32_MAX)
         nack->set_nmrc_actual_egress(nmrc_actual_egress);
     nack->set_reason(reason);
+    nack->set_trim_is_lh(trim_is_lh);
     nack->set_stor_peer(_src->_dstaddr);
     assert(nack);
     nack->flow().logTraffic(*nack,*this,TrafficLogger::PKT_CREATE);

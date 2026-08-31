@@ -42,7 +42,6 @@ SCHEME_ARGS = {
     "mrc": (),
     "sglb": (),
     "n-mrc": (
-        "-nmrc_ev_mode", "encoded",
         "-nmrc_reroute_policy", "better_ge3",
         "-nmrc_fastcnp", "on",
     ),

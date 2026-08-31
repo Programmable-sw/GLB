@@ -234,6 +234,36 @@ static void test_trim_sack_reliability_and_ev_state_are_independent() {
            "duplicate NACK must not create a second LB episode");
 }
 
+static void test_last_hop_trim_recovers_without_skipping_ev() {
+    DropSink drop;
+    Route route;
+    route.push_back(&drop);
+    RoceSrc src(NULL, NULL, test_eventlist(),
+                speedFromMbps((uint64_t)100000));
+    configure_bounded_skip_source(src, 1);
+
+    RoceNack* nack = RoceNack::newpkt(
+        src._flow, route, 0, 7, 0, 0, true, 0, 1, 1, 64);
+    nack->set_reason(RoceNack::TRIM);
+    nack->set_missing_psn(1);
+    nack->set_attempt_id(0);
+    nack->set_mrc_ev(17);
+    nack->set_trim_is_lh(true);
+    src.processNack(*nack);
+    nack->free();
+
+    expect(src._rtx_queue.size() == 1 &&
+               *src._rtx_queue._seqs.begin() == 1,
+           "last-hop TRIM must retain exact-PSN reliability recovery");
+    expect(src._mrc_evs[17].state == RoceSrc::MRC_EV_GOOD &&
+               src._mrc_evs[17].congestion_epoch == 0,
+           "last-hop TRIM must not create an EV skip episode");
+    expect(src._trim_lh_nacks_received == 1,
+           "last-hop TRIM NACK must be classified for diagnostics");
+    expect(src._mrc_trim_cooling_events == 0,
+           "last-hop TRIM must not be counted as an EV cooling event");
+}
+
 static void test_ecn_ack_reliability_and_ev_state_are_independent() {
     DropSink drop;
     Route route;
@@ -340,6 +370,7 @@ int main() {
     test_skip_token_is_consumed_only_at_its_nominal_opportunity();
     test_all_skip_tokens_resolve_by_ordinary_rotation_progress();
     test_trim_sack_reliability_and_ev_state_are_independent();
+    test_last_hop_trim_recovers_without_skipping_ev();
     test_ecn_ack_reliability_and_ev_state_are_independent();
     test_failure_recovery_interface_is_disabled_by_default();
     test_probe_interface_uses_independent_ids_and_threshold();

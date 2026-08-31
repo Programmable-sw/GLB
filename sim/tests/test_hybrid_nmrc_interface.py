@@ -26,11 +26,7 @@ def main():
     switch_h = read("sim/datacenter/fat_tree_switch.h")
     packet_h = read("sim/rocepacket.h")
 
-    require(
-        main_roce,
-        "mrc|netaware|n-mrc|n-mrc-fixed0.5|n-mrc-delta",
-        "load-balancing usage",
-    )
+    require(main_roce, "|mrc|netaware|", "load-balancing usage")
     for preset in ("n-mrc", "n-mrc-fixed0.5", "n-mrc-delta"):
         require(main_roce, f'argv[i+1], "{preset}"', f"{preset} parser")
     usage_start = main_roce.index("Usage ")
@@ -44,18 +40,20 @@ def main():
 
     require(roce_h, "LB_NETAWARE", "separate NetAware endpoint mode")
     require(roce_h, "LB_NMRC", "separate N-MRC endpoint mode")
-    require(roce_h, "NMRC_EV_ENCODED", "encoded EV mode")
+    reject(roce_h, "NMRC_EV_", "removed EV modes")
     require(switch_h, "NMRC_NETWORK_GRADED", "canonical four-level mode")
     require(switch_h, "NMRC_NETWORK_FIXED_THRESHOLD", "fixed preset mode")
     require(switch_h, "NMRC_NETWORK_DELTA", "delta preset mode")
     require(packet_h, "class RoceFastCnp", "path notification packet")
     require(packet_h, "need_endpoint_cooldown", "FastCNP cooldown flag")
 
-    require(
-        main_roce,
-        "-nmrc_ev_mode encoded|random_matched|random32",
-        "N-MRC EV CLI",
-    )
+    reject(main_roce, "-nmrc_ev_mode", "removed N-MRC EV CLI")
+    reject(main_roce, "random_matched", "removed random EV mode")
+    reject(main_roce, "random32", "removed 32-EV mode")
+    require(main_roce, '" requires exactly 64 physical paths',
+            "64-path topology guard")
+    require(main_roce, '" ev_set_size=" << ev_set_size', "64-EV diagnostic")
+    require(main_roce, '" ev_mapping=identity"', "identity mapping diagnostic")
     require(main_roce, "-nmrc_absolute_threshold VALUE",
             "fixed threshold CLI")
     require(main_roce, "-nmrc_relative_delta VALUE", "relative delta CLI")

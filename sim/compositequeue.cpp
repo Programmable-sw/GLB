@@ -164,6 +164,7 @@ CompositeQueue::receivePacket(Packet& pkt)
 
                 //cout << "A [ " << _enqueued_low.size() << " " << _enqueued_high.size() << " ] STRIP" << endl;
                 //cout << "booted_pkt->size(): " << booted_pkt->size();
+                booted_pkt->set_trim_is_lh(is_last_hop());
                 booted_pkt->strip_payload();
                 _num_stripped++;
                 booted_pkt->flow().logTraffic(*booted_pkt,*this,TrafficLogger::PKT_TRIM);
@@ -219,6 +220,7 @@ CompositeQueue::receivePacket(Packet& pkt)
         } else {
             //strip packet the arriving packet - low priority queue is full
             //cout << "B [ " << _enqueued_low.size() << " " << _enqueued_high.size() << " ] STRIP" << endl;
+            pkt.set_trim_is_lh(is_last_hop());
             pkt.strip_payload();
             _num_stripped++;
             pkt.flow().logTraffic(pkt,*this,TrafficLogger::PKT_TRIM);
